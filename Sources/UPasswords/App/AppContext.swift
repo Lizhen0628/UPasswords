@@ -657,3 +657,9 @@ enum AppSheet: Identifiable, Hashable {
         }
     }
 }
+
+extension AppContext {
+    var selectedCard: Card? {
+        selectedCardId.flatMap { database.card(id: $0) }
+    }
+}
