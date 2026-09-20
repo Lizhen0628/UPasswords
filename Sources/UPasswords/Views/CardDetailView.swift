@@ -128,7 +128,7 @@ struct CardDetailView: View {
         }
     }
 
-    private func addMissingFields(from spec: Templates.Spec, to card: Card) {
+    @MainActor private func addMissingFields(from spec: Templates.Spec, to card: Card) {
         guard let i = ctx.database.cards.firstIndex(where: { $0.id == card.id }) else { return }
         var c = ctx.database.cards[i]
         for f in spec.fields {
@@ -198,7 +198,7 @@ struct CardDetailView: View {
         }
     }
 
-    private func saveAttachment(_ file: Attachment) {
+    @MainActor private func saveAttachment(_ file: Attachment) {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = file.name
         if panel.runModal() == .OK, let url = panel.url {

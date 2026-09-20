@@ -443,7 +443,7 @@ private struct ImagesTab: View {
         }
     }
 
-    private func pickImage() {
+    @MainActor private func pickImage() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = true
@@ -504,7 +504,7 @@ private struct FilesTab: View {
         }
     }
 
-    private func pickFile() {
+    @MainActor private func pickFile() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         if panel.runModal() == .OK {

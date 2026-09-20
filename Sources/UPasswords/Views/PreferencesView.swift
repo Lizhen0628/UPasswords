@@ -176,12 +176,12 @@ struct AutoBackupPane: View {
         ctx.store.backups(name: ctx.databaseName)
     }
 
-    private func restore() {
+    @MainActor private func restore() {
         guard !backups.isEmpty else { return }
         restoreFrom(backups[0])
     }
 
-    private func restoreFrom(_ url: URL) {
+    @MainActor private func restoreFrom(_ url: URL) {
         let alert = NSAlert()
         alert.messageText = L10n.t("confirm_restore_query")
         alert.addButton(withTitle: L10n.t("restore_button"))

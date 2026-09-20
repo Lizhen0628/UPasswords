@@ -243,7 +243,7 @@ struct GeneratorSheet: View {
             okTitle: L10n.t("close_button"),
             onAppearBody: { regenerate() },
             onCancel: { dismiss() },
-            onOk: { dismiss() },
+            onOk: { dismiss() }
         ) {
             VStack(spacing: 14) {
                 DisclosureGroup(isExpanded: $showOptions) {
@@ -321,7 +321,7 @@ struct GeneratorSheet: View {
         }
     }
 
-    private func regenerate() {
+    @MainActor private func regenerate() {
         generated = PasswordGenerator.instance.password(length: pwd.passwordLength, type: pwd.passwordType)
         PasswordGenerator.instance.addPasswordToHistory(generated)
     }
@@ -389,7 +389,7 @@ struct SetLabelsSheet: View {
         )
     }
 
-    private func addNew() {
+    @MainActor private func addNew() {
         guard !newLabelName.isEmpty else { return }
         ctx.addLabelAndAssign(name: newLabelName, color: nil, to: cardId)
         if let c = ctx.database.card(id: cardId) {

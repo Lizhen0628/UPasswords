@@ -30,7 +30,7 @@ struct ExportAsSheet: View {
         )
     }
 
-    private func export() {
+    @MainActor private func export() {
         let cards = ctx.database.cards.filter { !$0.template }
         let text = ExportCardsTask.export(cards, labels: ctx.database.labels, format: format)
         let panel = NSSavePanel()
@@ -513,7 +513,7 @@ struct ManageDatabasesSheet: View {
         )
     }
 
-    private func create() {
+    @MainActor private func create() {
         let pwd = ctx.password.isEmpty ? randomPassword() : ctx.password
         do {
             try ctx.store.create(name: newName, password: pwd)
