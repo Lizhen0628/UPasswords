@@ -18,8 +18,8 @@ struct UPasswordsApp: App {
                 .environmentObject(pwdSettings)
                 .environmentObject(ctx.settings)
         }
-        .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unified(showsTitle: true))
+        .defaultSize(CGSize(width: 970, height: 640))
         .commands { UPasswordsCommands() }
 
         Settings {

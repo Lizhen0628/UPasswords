@@ -27,13 +27,13 @@ swift run            # 运行
 | `StrengthIndicator.crackTimeWithSeconds:` | `PasswordStrength.crackTime`（原版单位字符串） |
 | TOTP（`one_time_password` 字段） | `Services/TOTP.swift`（RFC 6238，SHA1/256/512，otpauth:// URI） |
 | `PasswordStore`（钥匙串） | `Services/PasswordStore.swift`（GenericPassword + `.userPresence` 快速解锁） |
-| `MainWindowController` + 三 ViewController | `Views/MainWindow.swift`（NavigationSplitView 三栏：侧栏/列表/详情） |
-| `LabelListViewController` + 18 个 `*Label` 特殊侧栏项 | `Models/SidebarModels.swift`（全部项目/收藏/历史/密码/一次性代码/笔记/文件/图片/密钥/信用卡/弱密码/相同密码/已泄露/即将到期/已过期/已归档/回收站/模板） |
+| `MainWindowController` + 三 ViewController | `Views/MainWindow.swift` — 按 nib 反解规格复刻：970×640 窗口、三栏 213/355/余量、`main_toolbar` 8 个纯图标按钮（add/sync ‖ sorting/generator/置顶/delete/lock/preferences）+ 弹性空隙 |
+| `LabelListViewController`（源列表式可折叠分组行 + 计数徽章，nib: LabelListGroupCell/LabelListCell 25pt）+ 18 个 `*Label` 特殊侧栏项 | `Views/MainWindow.swift` SidebarView + `Models/SidebarModels.swift`（全部项目/收藏/历史/密码/一次性代码/笔记/文件/图片/密钥/信用卡/弱密码/相同密码/已泄露/即将到期/已过期/已归档/回收站/模板） |
 | `EditCardWindowController` + 4 个 `EditCard*Tab` + 5 种 Cell | `Views/EditCardSheet.swift`（条目/笔记/图片/文件 4 选项卡 + 字段编辑器） |
 | `SetLabelsSheetController` 等 40+ `*SheetController` | `Views/CardSheets.swift` / `Views/DataSheets.swift`（逐个对应） |
 | `SelectSymbolViewController` / `SymbolModel`（46 TIFF） | `Models/SymbolModel.swift`（同名词表 + SF Symbol 自绘渲染 + IIN 卡组织识别） |
 | `SelectTextureSheetController`（texture_1..17.jpg） | `LockTextures`（17 种程序化渐变，不复制原图） |
-| `LockWindowController` / `LockedState` | `Views/SetupAndLock.swift` + 自动锁定计时/后台锁定 |
+| `LockWindowController`（nib: 500×350 窗口、代码构建内容） / `LockedState` | `Views/SetupAndLock.swift`（500×350 纹理窗口）+ 自动锁定计时/后台锁定 |
 | `SetupWindowController` / `SetupPlanViewController`（8 项任务） | `SetupWindowView` / `SetupPlanSheet`（侧栏“初始化 n/8”） |
 | `ImportFormat` 族（64 适配器） | `Services/ImportExport.swift` — 18 种：SafeInCloud XML、Chrome/Brave/Edge/Opera/Firefox、LastPass、Bitwarden CSV+JSON、Dashlane、1Password、Safari、NordPass、Proton Pass、KeePass、Keeper、RoboForm、通用 CSV |
 | `ExportCardsTask` / `ExportAsSheetController` | XML / CSV / TXT 导出（含明文警告） |
@@ -64,8 +64,9 @@ swift run            # 运行
    设置页保留说明界面。
 5. **高级功能（Premium/Adapty）**：无商店集成，界面仅作信息展示。
 6. **Passkey**：按原版行为，密钥只能在移动端创建（空状态提示）。
-7. **UI 框架**：原版为 AppKit + nib；复刻用 SwiftUI（Swift 原生等价），窗口/Sheet/菜单
-   结构与 nib 清单一一对应。
+7. **UI 框架**：原版为 AppKit + nib；复刻用 SwiftUI（Swift 原生等价）。主窗口/侧栏/列表/
+   锁定窗的几何与控件规格从原版 nib（NIBArchive 格式）直接反解得出并逐项对齐；图标使用
+   SF Symbol 等价物而非原版 TIFF 素材。
 
 ## 目录结构
 

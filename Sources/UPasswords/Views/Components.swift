@@ -115,12 +115,10 @@ extension View {
 }
 
 private struct ToastActivityModifier: ViewModifier {
-    @EnvironmentObject var toast: AppToast
     @EnvironmentObject var ctx: AppContext
 
     func body(content: Content) -> some View {
         content
-            .overlay(alignment: .bottom) { ToastOverlay() }
             .onTapGesture { ctx.touch() }
             .onMoveCommand { _ in ctx.touch() }
     }
@@ -171,4 +169,18 @@ struct SheetShell<Content: View>: View {
         .background(.regularMaterial)
         .onAppear { onAppearBody?() }
     }
+}
+
+
+/// NSVisualEffectView with the sidebar material — the authentic source-list
+/// backdrop (replaces iOS-only `ShapeStyle.sidebar`).
+struct SidebarMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = .sidebar
+        v.blendingMode = .behindWindow
+        v.state = .active
+        return v
+    }
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }

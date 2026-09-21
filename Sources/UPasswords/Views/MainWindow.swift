@@ -25,26 +25,28 @@ struct RootView: View {
     }
 }
 
-/// MainWindowController: 3-pane split — LabelListViewController /
-/// CardListViewController / ViewCardViewController.
+/// MainWindowController — per the original nib: 970×640 window, NSSplitView
+/// (213 / 355 / rest), `main_toolbar` with 8 icon-only buttons + flexible space.
 struct MainWindowView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
+    @Environment(\.openSettings) private var openSettings
 
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var floating = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView()
-                .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 300)
+                .navigationSplitViewColumnWidth(min: 180, ideal: 213, max: 280)
         } content: {
             CardListView()
-                .navigationSplitViewColumnWidth(min: 260, ideal: 320, max: 480)
+                .navigationSplitViewColumnWidth(min: 300, ideal: 355, max: 520)
         } detail: {
             CardDetailView()
         }
-        .frame(minWidth: 980, minHeight: 560)
-        .toolbar { MainWindowToolbar() }
+        .frame(minWidth: 760, minHeight: 460)
+        .toolbar { MainToolbar(floating: $floating, openSettings: openSettings) }
         .navigationTitle(L10n.tBranded("app_title"))
         .sheet(item: $ctx.editDraft) { draft in
             EditCardSheet(draft: Binding(
@@ -57,163 +59,191 @@ struct MainWindowView: View {
     }
 }
 
-// MARK: - Toolbar (46 toolbar icons in the original; condensed equivalents)
+// MARK: - Toolbar (main_toolbar: 8 icon-only items + flexible space)
 
-struct MainWindowToolbar: ToolbarContent {
+struct MainToolbar: ToolbarContent {
     @EnvironmentObject var ctx: AppContext
+    @Binding var floating: Bool
+    let openSettings: OpenSettingsAction
 
     var body: some ToolbarContent {
-        ToolbarItemGroup {
-            Button {
+        ToolbarItemGroup(placement: .navigation) {
+            button("add_button_Template", L10n.t("add_card_command"), "plus") {
                 ctx.activeSheet = .addCard
-            } label: {
-                Label(L10n.t("add_card_button"), systemImage: "plus")
             }
-            .help(L10n.t("add_card_command"))
-
-            Button {
-                ctx.activeSheet = .addNote
-            } label: {
-                Label(L10n.t("add_note_button"), systemImage: "note.text.badge.plus")
-            }
-            .help(L10n.t("add_note_command"))
-
-            Button {
-                ctx.activeSheet = .addLabel
-            } label: {
-                Label(L10n.t("add_label_button"), systemImage: "tag.badge.plus")
-            }
-            .help(L10n.t("add_label_command"))
-
-            Divider()
-
-            Button {
-                ctx.activeSheet = .generator
-            } label: {
-                Label(L10n.t("generator_button"), systemImage: "wand.and.stars")
-            }
-            .help(L10n.t("generator_command"))
-
-            Button {
+            button("sync_button_Template", L10n.t("sync_command"), "arrow.triangle.2.circlepath") {
                 Task { await ctx.sync() }
-            } label: {
-                Label(L10n.t("sync_button"), systemImage: "arrow.triangle.2.circlepath")
             }
-            .help(L10n.t("sync_command"))
-
-            Spacer()
-
-            Button {
-                ctx.lock()
-            } label: {
-                Label(L10n.t("lock_button"), systemImage: "lock.fill")
-            }
-            .help(L10n.t("lock_command"))
         }
+        ToolbarItemGroup(placement: .primaryAction) {
+            button("sorting_button_Template", L10n.t("sorting_command"), "arrow.up.arrow.down") {
+                ctx.activeSheet = .sorting
+            }
+            button("generator_button_Template", L10n.t("generator_command"), "wand.and.stars") {
+                ctx.activeSheet = .generator
+            }
+            button("above_all_button_Template", L10n.t("above_all_button"), "pin.fill", isActive: floating) {
+                floating.toggle()
+                NSApp.keyWindow?.level = floating ? .floating : .normal
+            }
+            button("delete_button_Template", L10n.t("delete_command"), "trash") {
+                if let id = ctx.selectedCardId { ctx.trashCard(id) }
+            }
+            .disabled(ctx.selectedCardId == nil)
+            button("lock_button_Template", L10n.t("lock_command"), "lock.fill") {
+                ctx.lock()
+            }
+            button("preferences_button_Template", L10n.t("preferences_command"), "gearshape") {
+                openSettings()
+            }
+        }
+    }
+
+    private func button(_ image: String, _ help: String, _ system: String,
+                        isActive: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: system)
+                .foregroundStyle(isActive ? Color.accentColor : .primary)
+        }
+        .help(help)
     }
 }
 
-// MARK: - Sidebar (LabelListViewController + LabelListCell/GroupCell)
+// MARK: - Sidebar (LabelListViewController: source list with collapsible group
+// rows — LabelListGroupCell 25pt with chevron + group icon, LabelListCell with
+// 16pt icon, name and right-aligned semibold count)
 
 struct SidebarView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
 
+    @State private var expanded: Set<String> = ["labels_group", "categories_group", "security_group"]
+
+    private var groups: [(key: String, labels: [SpecialLabel])] {
+        [
+            ("labels_group", []), // user labels below
+            ("categories_group", SpecialLabel.allCases.filter { $0.section == .views }),
+            ("security_group", SpecialLabel.allCases.filter { $0.section == .security }),
+        ]
+    }
+
     var body: some View {
-        List(selection: $ctx.selection) {
-            ForEach(SpecialLabel.allCases.filter { $0.section == .top }) { sp in
-                SidebarRow(sp: sp)
-                    .tag(SidebarSelection.special(sp))
-            }
-
-            Section(L10n.t("labels_text")) {
-                ForEach(pinnedLabels) { label in
-                    SidebarLabelRow(label: label)
-                        .tag(SidebarSelection.label(label.id))
-                }
-                ForEach(otherLabels) { label in
-                    SidebarLabelRow(label: label)
-                        .tag(SidebarSelection.label(label.id))
-                }
-                if ctx.database.labels.isEmpty {
-                    Text(L10n.t("user_empty_state"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section(L10n.db("categories_group")) {
-                ForEach(SpecialLabel.allCases.filter { $0.section == .views }) { sp in
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(SpecialLabel.allCases.filter { $0.section == .top }) { sp in
                     SidebarRow(sp: sp)
                         .tag(SidebarSelection.special(sp))
                 }
-            }
 
-            Section(L10n.db("security_group")) {
-                ForEach(SpecialLabel.allCases.filter { $0.section == .security }) { sp in
+                ForEach(groups, id: \.key) { group in
+                    groupRow(key: group.key)
+                    if expanded.contains(group.key) {
+                        if group.key == "labels_group" {
+                            ForEach(ctx.database.labels.sorted { a, b in
+                                a.pinToTop == b.pinToTop
+                                    ? a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+                                    : a.pinToTop && !b.pinToTop
+                            }) { label in
+                                SidebarLabelRow(label: label)
+                            }
+                        } else {
+                            ForEach(group.labels) { sp in
+                                SidebarRow(sp: sp)
+                            }
+                        }
+                    }
+                }
+
+                Divider().padding(.vertical, 4)
+
+                ForEach(SpecialLabel.allCases.filter { $0.section == .bottom }) { sp in
                     SidebarRow(sp: sp)
-                        .tag(SidebarSelection.special(sp))
                 }
-            }
 
-            ForEach(SpecialLabel.allCases.filter { $0.section == .bottom }) { sp in
-                SidebarRow(sp: sp)
-                    .tag(SidebarSelection.special(sp))
-            }
-
-            // 初始化 n/8 — setup plan entry pinned at sidebar bottom
-            Button {
-                ctx.activeSheet = .setupPlan
-            } label: {
-                HStack {
-                    Image(systemName: "checklist")
-                    Text("\(L10n.t("setup_text")) \(ctx.setupCompletedCount)/8")
+                // 侧栏底部 "初始化 n/8" (SetupPlanViewController entry)
+                Button {
+                    ctx.activeSheet = .setupPlan
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checklist")
+                        Text("\(L10n.t("setup_text")) \(ctx.setupCompletedCount)/8")
+                        Spacer()
+                    }
                 }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .padding(.vertical, 6)
         }
-        .listStyle(.sidebar)
+        .background(SidebarMaterial())
         .safeAreaInset(edge: .bottom) {
             if settings.showCardCount {
-                Text("\(ctx.database.activeCards.count) \(L10n.t("cards_title")) · \(ctx.databaseName)")
+                Text("\(ctx.database.activeCards.count) \(L10n.t("cards_title"))")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 5)
                     .background(.bar)
             }
         }
-        .contextMenu(forSelectionType: SidebarSelection.self) { selection in
-            if let sel = selection.first, case .label(let id) = sel {
-                Button(L10n.t("rename_command")) { ctx.activeSheet = .editCardLabel(id: id) }
-                Button(L10n.t("pin_to_top_command")) { ctx.toggleLabelPinned(id: id) }
-                Button(L10n.t("select_color_command")) { ctx.activeSheet = .selectColorCardLabel(id: id) }
-                Button(L10n.t("delete_button"), role: .destructive) { ctx.deleteCardLabel(id: id) }
-            }
-        } primaryAction: { _ in }
     }
 
-    private var pinnedLabels: [CardLabel] { ctx.database.labels.filter(\.pinToTop) }
-    private var otherLabels: [CardLabel] { ctx.database.labels.filter { !$0.pinToTop } }
+    private func groupRow(key: String) -> some View {
+        let isOpen = expanded.contains(key)
+        return Button {
+            if isOpen { expanded.remove(key) } else { expanded.insert(key) }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .rotationEffect(.degrees(isOpen ? 90 : 0))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                Image(systemName: "folder")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Text(L10n.db(key))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.primary)
+                Spacer()
+            }
+            .frame(height: 25)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 6)
+    }
 }
 
+/// LabelListCell — 16pt icon, name, right-aligned count (weight 1000 in nib).
 struct SidebarRow: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
     let sp: SpecialLabel
 
     var body: some View {
-        HStack {
-            Label(sp.name, systemImage: sp.systemImage)
-                .foregroundStyle(.primary)
-            Spacer()
-            if settings.showCardCount {
-                let n = ctx.count(for: .special(sp))
-                if n > 0 {
-                    Text("\(n)").font(.caption).foregroundStyle(.secondary)
-                }
-            }
+        SidebarRowButton(title: sp.name, system: sp.systemImage, indent: 35,
+                         count: settings.showCardCount ? ctx.count(for: .special(sp)) : 0,
+                         selected: ctx.selection == .special(sp)) {
+            ctx.selection = .special(sp)
+        }
+        .contextMenu {
+            sidebarExtras(sp)
+        }
+    }
+
+    @ViewBuilder
+    private func sidebarExtras(_ sp: SpecialLabel) -> some View {
+        if sp == .recent {
+            Button(L10n.t("clear_recent_command")) { ctx.clearRecent() }
+        }
+        if sp == .trash {
+            Button(L10n.t("empty_trash_command")) { ctx.emptyTrash() }
+        }
+        if sp == .templates {
+            Button(L10n.t("restore_templates_command")) { ctx.activeSheet = .restoreTemplates }
         }
     }
 }
@@ -224,35 +254,79 @@ struct SidebarLabelRow: View {
     let label: CardLabel
 
     var body: some View {
-        HStack {
-            Label(label.name, systemImage: "tag")
-                .foregroundStyle(.primary)
-            Spacer()
-            if settings.showCardCount {
-                let n = ctx.count(for: .label(label.id))
-                if n > 0 {
-                    Text("\(n)").font(.caption).foregroundStyle(.secondary)
-                }
-            }
+        SidebarRowButton(title: label.name, system: "tag", indent: 35,
+                         count: settings.showCardCount ? ctx.count(for: .label(label.id)) : 0,
+                         color: CardColor.color(named: label.color),
+                         selected: ctx.selection == .label(label.id)) {
+            ctx.selection = .label(label.id)
+        }
+        .contextMenu {
+            Button(L10n.t("rename_command")) { ctx.activeSheet = .editCardLabel(id: label.id) }
+            Button(L10n.t("pin_to_top_command")) { ctx.toggleLabelPinned(id: label.id) }
+            Button(L10n.t("select_color_command")) { ctx.activeSheet = .selectColorCardLabel(id: label.id) }
+            Divider()
+            Button(L10n.t("export_command")) { ctx.activeSheet = .exportAs }
+            Button(L10n.t("delete_button"), role: .destructive) { ctx.deleteCardLabel(id: label.id) }
         }
     }
 }
 
-// MARK: - Card list (CardListViewController + CardListCell)
+private struct SidebarRowButton: View {
+    let title: String
+    let system: String
+    var indent: CGFloat = 0
+    var count: Int = 0
+    var color: Color? = nil
+    var selected: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: system)
+                    .font(.system(size: 12))
+                    .foregroundStyle(color ?? .secondary)
+                    .frame(width: 16)
+                Text(title)
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+                Spacer()
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.leading, indent == 0 ? 10 : indent)
+            .padding(.trailing, 8)
+            .frame(height: 25)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(selected ? Color.accentColor.opacity(0.18) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Card list (CardListViewController: search field inside the pane top,
+// database icon button, clipboard toast bar, 48pt rows — CardListCell)
 
 struct CardListView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var toast: AppToast
 
     var body: some View {
         VStack(spacing: 0) {
-            searchField
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+            header
             Divider()
+            if toast.message != nil {
+                toastBar
+            }
             list
         }
-        .navigationSubtitle(currentTitle)
         .overlay {
             if cards.isEmpty {
                 emptyState
@@ -264,30 +338,60 @@ struct CardListView: View {
         ctx.cards(for: ctx.selection, search: ctx.searchText)
     }
 
-    private var currentTitle: String {
-        switch ctx.selection {
-        case .special(let sp): return sp.name
-        case .label(let id): return ctx.database.label(id: id)?.name ?? ""
+    /// Search row: NSSearchField at left, DatabaseIcon button (60×28) at right.
+    private var header: some View {
+        HStack(spacing: 8) {
+            HStack {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField(L10n.t("search_text"), text: $ctx.searchText)
+                    .textFieldStyle(.plain)
+                if !ctx.searchText.isEmpty {
+                    Button {
+                        ctx.searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 7)
+            .frame(height: 22)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor)))
+
+            Spacer(minLength: 8)
+
+            Button {
+                ctx.activeSheet = .manageDatabases
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "cylinder")
+                    Text(ctx.databaseName).lineLimit(1)
+                }
+                .font(.system(size: 11))
+                .padding(.horizontal, 8)
+                .frame(height: 24)
+            }
+            .buttonStyle(.bordered)
+            .help(L10n.t("manage_databases_command"))
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
-    private var searchField: some View {
+    /// clipboardToast — "Text copied to clipboard" bar at the top of the pane.
+    private var toastBar: some View {
         HStack {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField(L10n.t("search_text"), text: $ctx.searchText)
-                .textFieldStyle(.plain)
-            if !ctx.searchText.isEmpty {
-                Button {
-                    ctx.searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
+            Spacer()
+            Label(toast.message ?? "", systemImage: "doc.on.doc")
+                .font(.system(size: 11))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
+            Spacer()
         }
-        .padding(6)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .padding(.vertical, 4)
     }
 
     private var list: some View {
@@ -295,12 +399,15 @@ struct CardListView: View {
             ForEach(cards) { card in
                 CardListCellView(card: card, preview: ctx.searchText.isEmpty ? nil : ctx.searchPreview(for: card, word: String(ctx.searchText.lowercased().split(separator: " ").first ?? "")))
                     .tag(card.id)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                    .frame(height: 48)
                     .contextMenu {
                         cardContextMenu(card)
                     }
             }
         }
         .listStyle(.plain)
+        .scrollContentBackground(.hidden)
         .onChange(of: ctx.selectedCardId) { _, id in
             if let id {
                 ctx.pushRecent(id)
@@ -309,40 +416,58 @@ struct CardListView: View {
         }
     }
 
+    /// CardListViewController contextMenu — exact item list from the nib.
     @ViewBuilder
     private func cardContextMenu(_ card: Card) -> some View {
-        Button(L10n.t("edit_button")) { ctx.editDraft = EditCardModel(card: card) }
-        Button(card.favorite ? L10n.t("hide_button") : L10n.t("show_button")) { ctx.toggleFavorite(card.id) }
-        Button(L10n.t("duplicate_command")) { ctx.duplicateCard(card.id) }
-        if card.labelIds.isEmpty == false || true {
-            Button(L10n.t("set_labels_button")) { ctx.activeSheet = .labels(cardId: card.id) }
-        }
+        Button(L10n.t("add_card_command")) { ctx.activeSheet = .addCard }
+        Button(L10n.t("add_note_command")) { ctx.activeSheet = .addNote }
+        Button(L10n.t("add_template_command")) { ctx.activeSheet = .addCard }
         Divider()
-        if card.trashed {
-            Button(L10n.t("restore_card_command")) { ctx.restoreCard(card.id) }
-            Button(L10n.t("delete_button"), role: .destructive) { ctx.deleteCardPermanently(card.id) }
-        } else if card.archived {
+        Button(L10n.t("edit_command")) { ctx.editDraft = EditCardModel(card: card) }
+        Button(L10n.t("delete_command")) { ctx.trashCard(card.id) }
+        Button(L10n.t("move_command")) { ctx.activeSheet = .labels(cardId: card.id) }
+        Button(L10n.t("duplicate_command")) { ctx.duplicateCard(card.id) }
+        Button(L10n.t("merge_command")) {}
+        Button(L10n.t("save_as_template_command")) {
+            var t = card
+            t.template = true
+            t.id = ctx.newCardId()
+            ctx.database.cards.append(t)
+        }
+        if card.archived {
             Button(L10n.t("unarchive_command")) { ctx.unarchiveCard(card.id) }
-            Button(L10n.t("delete_button")) { ctx.trashCard(card.id) }
         } else {
             Button(L10n.t("archive_command")) { ctx.archiveCard(card.id) }
-            Button(L10n.t("delete_button")) { ctx.trashCard(card.id) }
         }
+        if card.trashed {
+            Button(L10n.t("restore_card_command")) { ctx.restoreCard(card.id) }
+        }
+        Divider()
+        Button(L10n.t("copy_as_text_command")) {
+            ClipboardModel.shared.copy(card.asPlainText())
+        }
+        Menu(L10n.t("share_menu")) {
+            Button(L10n.t("export_command")) { ctx.activeSheet = .exportAs }
+        }
+        Divider()
+        Button(L10n.t("set_labels_command")) { ctx.activeSheet = .labels(cardId: card.id) }
+        Button(L10n.t("use_website_icon_command")) {
+            if let i = ctx.database.cards.firstIndex(where: { $0.id == card.id }) {
+                ctx.database.cards[i].useWebsiteIcon.toggle()
+                ctx.saveDebounced()
+            }
+        }
+        Button(L10n.t("select_symbol_command")) { ctx.activeSheet = .selectSymbol }
+        Button(L10n.t("select_color_command")) { ctx.activeSheet = .selectColor }
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "tray")
-                .font(.system(size: 34))
+        VStack(spacing: 10) {
+            Text(emptyStateText)
+                .font(.system(size: 13))
                 .foregroundStyle(.secondary)
-            if ctx.searchText.isEmpty {
-                Text(emptyStateText)
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: 320)
-            } else {
-                Text(L10n.t("search_empty_text")).foregroundStyle(.secondary)
-            }
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 300)
         }
         .padding()
     }
@@ -355,7 +480,8 @@ struct CardListView: View {
     }
 }
 
-/// CardListCell — icon + title + login preview + favorite star + warning marks.
+/// CardListCell — 35×35 icon at (7,7); title over subtitle at x=52;
+/// 32×32 blue one-time-password icon and 32×32 star button at the right edge.
 struct CardListCellView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
@@ -363,45 +489,59 @@ struct CardListCellView: View {
     let preview: String?
 
     var body: some View {
-        HStack(spacing: 10) {
-            CardIconView(symbol: card.symbol, color: card.color, size: 34,
+        HStack(spacing: 0) {
+            CardIconView(symbol: card.symbol, color: card.color, size: 35,
                          creditCardNumber: card.fields.first { $0.type == .number }?.value)
-            VStack(alignment: .leading, spacing: 2) {
+                .padding(.leading, 7)
+            VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     Text(card.title.isEmpty ? "—" : card.title)
+                        .font(.system(size: 13, weight: .semibold))
                         .lineLimit(1)
-                    if card.favorite {
-                        Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow)
-                    }
                     if card.isExpired {
                         Image(systemName: "clock.badge.exclamationmark").font(.caption2).foregroundStyle(.red)
                     } else if card.isExpiring {
                         Image(systemName: "hourglass").font(.caption2).foregroundStyle(.orange)
                     }
-                    if weakMark { Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.red) }
+                    if card.hasWeakPasswords {
+                        Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.red)
+                    }
                 }
-                if let preview {
-                    Text(preview).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                } else {
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            Spacer()
+            .padding(.leading, 10)
+            Spacer(minLength: 8)
+            if card.fields.contains(where: { $0.type == .oneTimePassword }) {
+                Image(systemName: "timer")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.blue)
+                    .frame(width: 32, height: 32)
+            }
+            Button {
+                ctx.toggleFavorite(card.id)
+            } label: {
+                Image(systemName: card.favorite ? "star.fill" : "star")
+                    .font(.system(size: 14))
+                    .foregroundStyle(card.favorite ? .yellow : .secondary.opacity(0.4))
+                    .frame(width: 32, height: 32)
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 4)
         }
-        .padding(.vertical, 2)
+        .frame(height: 48)
+        .contentShape(Rectangle())
     }
 
     private var subtitle: String {
+        if let preview { return preview }
         if card.login.isEmpty {
-            return card.fields.first(where: { $0.hasValue })?.value ?? card.title
+            return card.fields.first(where: { $0.hasValue })?.value ?? ""
         }
         return card.login
     }
-
-    private var weakMark: Bool { card.hasWeakPasswords }
 }
 
 extension Card {

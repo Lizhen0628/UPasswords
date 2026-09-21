@@ -72,7 +72,7 @@ struct LockWindowView: View {
             .offset(x: shake ? -8 : 0)
             .animation(.default.repeatCount(3, autoreverses: true), value: shake)
         }
-        .frame(minWidth: 640, minHeight: 480)
+        .frame(width: 500, height: 350)
         .preferredColorScheme(nil)
     }
 
