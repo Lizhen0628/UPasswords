@@ -30,7 +30,6 @@ struct RootView: View {
 struct MainWindowView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
-    @Environment(\.openSettings) private var openSettings
 
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var floating = false
@@ -46,7 +45,7 @@ struct MainWindowView: View {
             CardDetailView()
         }
         .frame(minWidth: 760, minHeight: 460)
-        .toolbar { MainToolbar(floating: $floating, openSettings: openSettings) }
+        .toolbar { MainToolbar(floating: $floating) }
         .navigationTitle(L10n.tBranded("app_title"))
         .sheet(item: $ctx.editDraft) { draft in
             EditCardSheet(draft: Binding(
@@ -63,8 +62,8 @@ struct MainWindowView: View {
 
 struct MainToolbar: ToolbarContent {
     @EnvironmentObject var ctx: AppContext
+    @Environment(\.openSettings) private var openSettings
     @Binding var floating: Bool
-    let openSettings: OpenSettingsAction
 
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
@@ -119,13 +118,16 @@ struct SidebarView: View {
 
     @State private var expanded: Set<String> = ["labels_group", "categories_group", "security_group"]
 
-    private var groups: [(key: String, labels: [SpecialLabel])] {
-        [
-            ("labels_group", []), // user labels below
-            ("categories_group", SpecialLabel.allCases.filter { $0.section == .views }),
-            ("security_group", SpecialLabel.allCases.filter { $0.section == .security }),
-        ]
+    private struct SidebarGroup: Identifiable {
+        let key: String
+        var id: String { key }
     }
+
+    private let groups: [SidebarGroup] = [
+        SidebarGroup(key: "labels_group"),        // user labels render below
+        SidebarGroup(key: "categories_group"),
+        SidebarGroup(key: "security_group"),
+    ]
 
     var body: some View {
         ScrollView {
@@ -135,7 +137,7 @@ struct SidebarView: View {
                         .tag(SidebarSelection.special(sp))
                 }
 
-                ForEach(groups, id: \.key) { group in
+                ForEach(groups) { group in
                     groupRow(key: group.key)
                     if expanded.contains(group.key) {
                         if group.key == "labels_group" {
@@ -147,7 +149,7 @@ struct SidebarView: View {
                                 SidebarLabelRow(label: label)
                             }
                         } else {
-                            ForEach(group.labels) { sp in
+                            ForEach(SpecialLabel.allCases.filter { $0.section == sectionOf(group.key) }) { sp in
                                 SidebarRow(sp: sp)
                             }
                         }
@@ -188,6 +190,10 @@ struct SidebarView: View {
                     .background(.bar)
             }
         }
+    }
+
+    private func sectionOf(_ groupKey: String) -> SidebarSection {
+        groupKey == "categories_group" ? .views : .security
     }
 
     private func groupRow(key: String) -> some View {
