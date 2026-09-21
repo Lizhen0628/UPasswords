@@ -62,7 +62,6 @@ struct MainWindowView: View {
 
 struct MainToolbar: ToolbarContent {
     @EnvironmentObject var ctx: AppContext
-    @Environment(\.openSettings) private var openSettings
     @Binding var floating: Bool
 
     var body: some ToolbarContent {
@@ -93,7 +92,7 @@ struct MainToolbar: ToolbarContent {
                 ctx.lock()
             }
             button("preferences_button_Template", L10n.t("preferences_command"), "gearshape") {
-                openSettings()
+                ctx.activeSheet = .preferences
             }
         }
     }
