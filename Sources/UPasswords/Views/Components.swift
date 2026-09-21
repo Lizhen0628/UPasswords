@@ -19,8 +19,9 @@ extension CardColor {
         }
     }
 
+    /// 无颜色时的默认卡片图标色:Safe 使用中性灰,而不是主题蓝。
     static func color(named name: String?) -> Color {
-        guard let name, let c = CardColor(rawValue: name) else { return .accentColor }
+        guard let name, let c = CardColor(rawValue: name) else { return Color(nsColor: .systemGray) }
         return c.color
     }
 }
@@ -167,18 +168,18 @@ struct SheetShell<Content: View>: View {
             .padding(10)
         }
         .frame(minWidth: minWidth, minHeight: 120)
-        .background(.regularMaterial)
+        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { onAppearBody?() }
     }
 }
 
 
-/// NSVisualEffectView with the sidebar material — the authentic source-list
-/// backdrop (replaces iOS-only `ShapeStyle.sidebar`).
+/// NSVisualEffectView matching the window background — the original sidebar
+/// is the same flat dark tone as the content panes (no translucent material).
 struct SidebarMaterial: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let v = NSVisualEffectView()
-        v.material = .sidebar
+        v.material = .windowBackground
         v.blendingMode = .behindWindow
         v.state = .active
         return v

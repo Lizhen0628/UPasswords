@@ -172,7 +172,7 @@ extension PasswordStrength {
         let month = day * 30, year = day * 365, century = year * 100
         switch seconds {
         case ..<1: return L10n.t("instant_text")
-        case ..<minute: return "\(Int(seconds)) s"
+        case ..<minute: return "\(Int(seconds))\(L10n.t("seconds_abbr_text"))"
         case ..<hour: return "\(Int(seconds / minute))\(L10n.t("minutes_abbr_text"))"
         case ..<day: return "\(Int(seconds / hour))\(L10n.t("hours_text"))"
         case ..<month: return "\(Int(seconds / day))\(L10n.t("days_text"))"

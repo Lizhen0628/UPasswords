@@ -3,6 +3,7 @@ import SwiftUI
 /// Phase router: SetupWindowController / LockWindowController / MainWindowController.
 struct RootView: View {
     @EnvironmentObject var ctx: AppContext
+    @EnvironmentObject var settings: AppSettings
 
     var body: some View {
         ZStack {
@@ -15,6 +16,8 @@ struct RootView: View {
                 MainWindowView()
             }
         }
+        // 切换语言时强制重建整棵视图树 → 界面语言立即生效
+        .id(settings.languageOverride)
         .withToastAndActivity()
         .sheet(item: $ctx.activeSheet) { sheet in
             SheetFactory.view(for: sheet)
@@ -32,20 +35,25 @@ struct MainWindowView: View {
     @EnvironmentObject var settings: AppSettings
 
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var floating = false
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView()
-                .navigationSplitViewColumnWidth(min: 180, ideal: 213, max: 280)
-        } content: {
-            CardListView()
-                .navigationSplitViewColumnWidth(min: 300, ideal: 355, max: 520)
-        } detail: {
-            CardDetailView()
+        VStack(spacing: 0) {
+            // 自绘 66pt 工具栏条带(系统 NSToolbar 在 macOS 26 必然附加玻璃胶囊,见 AppKitToolbar.swift)
+            SafeTitleBarView(columnVisibility: $columnVisibility)
+            Divider()
+            NavigationSplitView(columnVisibility: $columnVisibility) {
+                SidebarView()
+                    .navigationSplitViewColumnWidth(min: 180, ideal: 213, max: 280)
+            } content: {
+                CardListView()
+                    .navigationSplitViewColumnWidth(min: 300, ideal: 355, max: 520)
+            } detail: {
+                CardDetailView()
+            }
         }
         .frame(minWidth: 760, minHeight: 460)
-        .toolbar { MainToolbar(floating: $floating) }
+        .ignoresSafeArea(.all, edges: .top)   // 隐藏标题栏后仍有 ~8pt 残留安全区,条带需贴顶
+        .background(WindowChromeConfigurator(mode: .main))
         .navigationTitle(ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName)
         .sheet(item: $ctx.editDraft) { draft in
             EditCardSheet(draft: Binding(
@@ -55,66 +63,6 @@ struct MainWindowView: View {
             .environmentObject(ctx)
             .environmentObject(ctx.settings)
         }
-    }
-}
-
-// MARK: - Toolbar (main_toolbar: icon + caption label items, original order)
-
-struct MainToolbar: ToolbarContent {
-    @EnvironmentObject var ctx: AppContext
-    @Binding var floating: Bool
-
-    var body: some ToolbarContent {
-        ToolbarItemGroup(placement: .navigation) {
-            button("add_button", "plus.circle", L10n.t("add_card_command")) {
-                ctx.activeSheet = .addCard
-            }
-            button("delete_button", "trash", L10n.t("delete_command")) {
-                if let id = ctx.selectedCardId { ctx.trashCard(id) }
-            }
-            .disabled(ctx.selectedCardId == nil)
-            button("lock_button", "lock.fill", L10n.t("lock_command")) {
-                ctx.lock()
-            }
-            button("sync_button", "arrow.triangle.2.circlepath", L10n.t("sync_command")) {
-                Task { await ctx.sync() }
-            }
-            button("generator_button", "key", L10n.t("generator_command")) {
-                ctx.activeSheet = .generator
-            }
-            button("sorting_button", "arrow.up.arrow.down", L10n.t("sorting_command")) {
-                ctx.activeSheet = .sorting
-            }
-            button("above_all_button", floating ? "pin.fill" : "pin", L10n.t("above_all_button"),
-                   isActive: floating) {
-                floating.toggle()
-                NSApp.keyWindow?.level = floating ? .floating : .normal
-            }
-            button("preferences_button", "gearshape", L10n.t("preferences_command")) {
-                ctx.activeSheet = .preferences
-            }
-        }
-    }
-
-    /// Toolbar item matching the original: glyph on top, small caption below.
-    private func button(_ labelKey: String, _ system: String, _ help: String,
-                        isActive: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 1) {
-                Image(systemName: system)
-                    .font(.system(size: 15))
-                    .foregroundStyle(isActive ? Color.accentColor : Color.primary)
-                Text(L10n.t(labelKey))
-                    .font(.system(size: 9))
-                    .foregroundStyle(isActive ? Color.accentColor : .secondary)
-                    .lineLimit(1)
-                    .fixedSize()
-            }
-            .frame(width: 44)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(help)
     }
 }
 
@@ -158,42 +106,48 @@ struct SidebarView: View {
                         rows(for: group)
                     }
                 }
-
-                Spacer(minLength: 8)
-
-                // 侧栏底部 "初始化 n/8" (SetupPlanViewController entry) + 「显示」
-                HStack(spacing: 6) {
-                    Button {
-                        ctx.activeSheet = .setupPlan
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "checklist")
-                            Text("\(L10n.t("setup_text")) \(ctx.setupCompletedCount)/8")
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .font(.system(size: 12))
-
-                    Spacer(minLength: 4)
-
-                    showMenu
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, 4)
         }
         .background(SidebarMaterial())
         .safeAreaInset(edge: .bottom) {
-            if settings.showCardCount {
-                Text("\(ctx.database.activeCards.count) \(L10n.t("cards_title"))")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            setupCard
+        }
+    }
+
+    /// 侧栏底部圆角卡片 —「初始化 n/8」(SetupPlanViewController 入口) + 居中
+    /// 的「显示」胶囊按钮,与原应用一致独立于滚动内容、上方有分隔线。
+    private var setupCard: some View {
+        VStack(spacing: 0) {
+            Divider()
+            VStack(spacing: 8) {
+                Button {
+                    ctx.activeSheet = .setupPlan
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "wrench.and.screwdriver")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                        Text("\(L10n.t("setup_text")) \(ctx.setupCompletedCount)/8")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.primary)
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                showMenu
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 5)
-                    .background(.bar)
             }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.white.opacity(0.045))
+            )
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color(nsColor: .windowBackgroundColor))
         }
     }
 
@@ -218,9 +172,9 @@ struct SidebarView: View {
         } label: {
             Text(L10n.t("show_button"))
                 .font(.system(size: 11))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(Capsule().fill(Color.primary.opacity(0.08)))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.white.opacity(0.10)))
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -232,7 +186,7 @@ struct SidebarView: View {
     private func rows(for group: SidebarGroup) -> some View {
         switch group.style {
         case .safe:
-            ForEach(Self.safeOrder) { sp in
+            ForEach(safeRows) { sp in
                 SidebarRow(sp: sp)
                     .tag(SidebarSelection.special(sp))
             }
@@ -255,33 +209,55 @@ struct SidebarView: View {
         }
     }
 
+    /// Safe 分组行:固定顺序 + 通过「显示」菜单开启的可选行(密码插入
+    /// 在全部项目之后,文件/图片插入在笔记之后)。
+    private var safeRows: [SpecialLabel] {
+        var rows: [SpecialLabel] = []
+        for sp in Self.safeOrder {
+            rows.append(sp)
+            if sp == .allCards,
+               settings.sidebarOptionalItems.contains(SpecialLabel.passwords.rawValue) {
+                rows.append(.passwords)
+            }
+            if sp == .notes {
+                if settings.sidebarOptionalItems.contains(SpecialLabel.files.rawValue) {
+                    rows.append(.files)
+                }
+                if settings.sidebarOptionalItems.contains(SpecialLabel.images.rawValue) {
+                    rows.append(.images)
+                }
+            }
+        }
+        return rows
+    }
+
     private func groupRow(_ group: SidebarGroup) -> some View {
         let isOpen = expanded.contains(group.key)
         return Button {
             if isOpen { expanded.remove(group.key) } else { expanded.insert(group.key) }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 5) {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: 9, weight: .bold))
                     .rotationEffect(.degrees(isOpen ? 90 : 0))
                     .foregroundStyle(.secondary)
-                    .frame(width: 16)
+                    .frame(width: 14)
                 Image(systemName: group.style.icon)
-                    .font(.system(size: 12))
+                    .font(.system(size: 12.5))
                     .foregroundStyle(group.style.tint)
                 Text(group.key == "safe_group" && !ctx.databaseName.isEmpty
                      ? ctx.databaseName
                      : L10n.db(group.key))
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer()
             }
-            .frame(height: 26)
+            .frame(height: 28)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 8)
     }
 }
 
@@ -292,8 +268,8 @@ struct SidebarRow: View {
     let sp: SpecialLabel
 
     var body: some View {
-        SidebarRowButton(title: sp.name, system: sp.systemImage, indent: 35,
-                         count: settings.showCardCount ? ctx.count(for: .special(sp)) : 0,
+        SidebarRowButton(title: sp.name, system: sp.systemImage, indent: 27,
+                         count: settings.showCardCount ? ctx.count(for: .special(sp)) : nil,
                          tint: tint,
                          selected: ctx.selection == .special(sp)) {
             ctx.selection = .special(sp)
@@ -333,8 +309,8 @@ struct SidebarLabelRow: View {
     let label: CardLabel
 
     var body: some View {
-        SidebarRowButton(title: label.name, system: "tag", indent: 35,
-                         count: settings.showCardCount ? ctx.count(for: .label(label.id)) : 0,
+        SidebarRowButton(title: label.name, system: "tag", indent: 27,
+                         count: settings.showCardCount ? ctx.count(for: .label(label.id)) : nil,
                          tint: CardColor.color(named: label.color),
                          selected: ctx.selection == .label(label.id)) {
             ctx.selection = .label(label.id)
@@ -354,37 +330,38 @@ private struct SidebarRowButton: View {
     let title: String
     let system: String
     var indent: CGFloat = 0
-    var count: Int = 0
+    var count: Int? = nil
     var tint: Color? = nil
     var selected: Bool
     var action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
+            HStack(spacing: 7) {
                 Image(systemName: system)
-                    .font(.system(size: 12))
-                    .foregroundStyle(tint ?? .secondary)
-                    .frame(width: 16)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(selected ? Color.white : (tint ?? Color.primary))
+                    .frame(width: 17)
                 Text(title)
-                    .font(.system(size: 13))
-                    .foregroundStyle(selected ? .primary : .primary)
+                    .font(.system(size: 13, weight: selected ? .medium : .regular))
+                    .foregroundStyle(selected ? .white : .primary)
                     .lineLimit(1)
                 Spacer()
-                if count > 0 {
+                if let count {
                     Text("\(count)")
-                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(selected ? Color.white.opacity(0.85) : .secondary)
                 }
             }
             .padding(.leading, indent == 0 ? 10 : indent)
-            .padding(.trailing, 8)
-            .frame(height: 26)
+            .padding(.trailing, 10)
+            .frame(height: 27)
             .contentShape(Rectangle())
             .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(selected ? Color.primary.opacity(0.10) : Color.clear)
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(selected ? Color.accentColor : Color.clear)
             )
+            .padding(.horizontal, 6)
         }
         .buttonStyle(.plain)
     }
@@ -418,14 +395,17 @@ struct CardListView: View {
         ctx.cards(for: ctx.selection, search: ctx.searchText)
     }
 
-    /// Search row: NSSearchField at left; generator key (yellow circle) and
-    /// cloud status (white circle) buttons at the right.
+    /// Search row: NSSearchField 风格深色圆角框在左;右侧是原应用的
+    /// 「黄钥匙 + 云朵」双段连体胶囊(生成器 / 云同步)。
     private var header: some View {
         HStack(spacing: 10) {
-            HStack {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            HStack(spacing: 5) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
                 TextField(L10n.t("search_text"), text: $ctx.searchText)
                     .textFieldStyle(.plain)
+                    .font(.system(size: 13))
                 if !ctx.searchText.isEmpty {
                     Button {
                         ctx.searchText = ""
@@ -435,26 +415,35 @@ struct CardListView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 7)
-            .frame(height: 22)
-            .background(Color(nsColor: .controlBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor)))
+            .padding(.horizontal, 8)
+            .frame(height: 26)
+            .frame(maxWidth: .infinity)
+            .background(Color.white.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.white.opacity(0.12), lineWidth: 1))
 
-            // Yellow key circle — opens the password generator.
+            syncCapsule
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+    }
+
+    /// 双段胶囊:左半纯黄底白钥匙(密码生成器),右半深底白云(同步状态)。
+    private var syncCapsule: some View {
+        HStack(spacing: 0) {
             Button {
                 ctx.activeSheet = .generator
             } label: {
                 Image(systemName: "key.fill")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(.white)
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(Color(nsColor: .systemYellow)))
+                    .frame(width: 28, height: 26)
+                    .background(Color(nsColor: .systemYellow))
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help(L10n.t("generator_command"))
 
-            // Cloud circle — sync status / actions.
             Menu {
                 Button(L10n.t("sync_command")) { Task { await ctx.sync() } }
                 Divider()
@@ -463,19 +452,19 @@ struct CardListView: View {
                     ctx.activeSheet = .configureCloud
                 }
             } label: {
-                Image(systemName: cloudConfigured ? "icloud.fill" : "icloud")
-                    .font(.system(size: 12))
-                    .foregroundStyle(cloudConfigured ? Color.accentColor : Color.secondary)
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(Color.primary.opacity(0.06)))
+                Image(systemName: "icloud.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 26)
+                    .background(Color.white.opacity(cloudConfigured ? 0.30 : 0.14))
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .frame(width: 24, height: 24)
+            .help(L10n.t("sync_command"))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 1))
     }
 
     private var cloudConfigured: Bool {
@@ -510,6 +499,10 @@ struct CardListView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .onAppear {
+            // 与 Safe 一致:进入主界面后始终有选中项
+            if ctx.selectedCardId == nil { ctx.selectedCardId = cards.first?.id }
+        }
         .onChange(of: ctx.selectedCardId) { _, id in
             if let id {
                 ctx.pushRecent(id)

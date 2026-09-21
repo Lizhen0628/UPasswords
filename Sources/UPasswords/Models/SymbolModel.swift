@@ -32,7 +32,7 @@ final class SymbolModel {
             ("insurance", "umbrella"), ("stock", "chart.bar"), ("tax", "percent"),
             ("loan", "arrow.left.arrow.right"), ("piggy_bank", "banknote"),
             ("visa", "creditcard.fill"), ("mastercard", "creditcard.circle"), ("amex", "creditcard.and.123"),
-            ("discover", "creditcard.trianglebadge.exclamationmark"), ("jcb", "creditcard.square"), ("rupay", "creditcard.fill"),
+            ("discover", "creditcard.trianglebadge.exclamationmark"), ("jcb", "creditcard"), ("rupay", "creditcard.fill"),
         ]),
         ("personal_group", [
             ("id", "person.crop.square"), ("passport", "book"), ("driving_license", "car"),
@@ -59,13 +59,13 @@ final class SymbolModel {
             ("safe", "lock.rectangle"), ("alarm", "alarm"), ("cctv", "video"), ("siren", "light.beacon.max"),
         ]),
         ("misc_group", [
-            ("membership", "person.crop.rectangle.badge.checkmark"), ("card", "rectangle.on.rectangle"),
+            ("membership", "person.crop.circle.badge.checkmark"), ("card", "rectangle.on.rectangle"),
             ("note", "note.text"), ("bookmark", "bookmark"), ("gift", "gift"), ("education", "graduationcap"),
-            ("book", "textbook"), ("music", "music.note"), ("movie", "film"), ("game", "gamecontroller"),
+            ("book", "text.book.closed"), ("music", "music.note"), ("movie", "film"), ("game", "gamecontroller"),
             ("sport", "sportscourt"), ("travel", "airplane.departure"), ("food", "fork.knife"),
             ("coffee", "cup.and.saucer"), ("shopping", "bag"), ("tools", "wrench.and.screwdriver"),
             ("job", "briefcase"), ("meeting", "person.3"), ("lecture", "person.wave.2"),
-            ("legal", "scalemass"), ("science", "atom"), ("weather", "cloud.sun"), ("recycle", "arrow.triangle.2.circlepath.recycle"),
+            ("legal", "scalemass"), ("science", "atom"), ("weather", "cloud.sun"), ("recycle", "arrow.triangle.2.circlepath"),
             ("custom", "square.dashed"),
         ]),
         ("special_group", [

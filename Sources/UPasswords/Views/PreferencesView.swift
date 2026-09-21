@@ -48,6 +48,12 @@ struct AppearancePane: View {
 
     var body: some View {
         Form {
+            Picker(L10n.t("language_prompt"), selection: $settings.languageOverride) {
+                Text(L10n.t("system_default_text")).tag("")
+                Text("简体中文").tag("zh-Hans")
+                Text("English").tag("en")
+            }
+            Divider()
             Picker(L10n.t("sorting_title"), selection: Binding(
                 get: { settings.sortingValue }, set: { settings.sortingValue = $0 }
             )) {

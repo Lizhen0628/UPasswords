@@ -79,7 +79,7 @@ final class AppSettings: ObservableObject {
         fastUnlock = d.object(forKey: "sec.fastUnlock") as? Bool ?? true
         selfDestructAttempts = d.object(forKey: "sec.selfDestruct") as? Int ?? 0
         clipboardClearSeconds = d.object(forKey: "clipboard.clearSeconds") as? Int ?? 60
-        lockTexture = d.object(forKey: "lock.texture") as? Int ?? 0
+        lockTexture = d.object(forKey: "lock.texture") as? Int ?? 12   // 默认深灰(原 0 是亮紫渐变)
         lockWhiteText = d.object(forKey: "lock.whiteText") as? Bool ?? true
         autoBackupEnabled = d.object(forKey: "backup.enabled") as? Bool ?? false
         backupIntervalDays = d.object(forKey: "backup.intervalDays") as? Int ?? 7

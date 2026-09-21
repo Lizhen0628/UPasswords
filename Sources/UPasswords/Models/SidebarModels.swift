@@ -38,7 +38,7 @@ enum SpecialLabel: String, CaseIterable, Identifiable {
         case .notes: return "note.text"
         case .files: return "doc"
         case .images: return "photo"
-        case .passkeys: return "person.keypad"
+        case .passkeys: return "person.badge.key"
         case .creditCards: return "creditcard"
         case .weakPasswords: return "exclamationmark.triangle"
         case .samePasswords: return "square.on.square"
@@ -119,7 +119,7 @@ enum SidebarGroupStyle {
         switch self {
         case .safe: return "shield.lefthalf.filled"
         case .labels: return "tag.fill"
-        case .security: return "exclamationmark.circle.fill"
+        case .security: return "exclamationmark.shield.fill"
         case .special: return "gearshape.fill"
         }
     }

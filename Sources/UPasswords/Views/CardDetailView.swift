@@ -10,17 +10,17 @@ struct CardDetailView: View {
     @EnvironmentObject var settings: AppSettings
 
     var body: some View {
-        if let card = currentCard {
-            detail(card)
-        } else {
-            VStack(spacing: 10) {
-                Image(systemName: "rectangle.and.text.magnifyingglass")
-                    .font(.system(size: 40))
-                    .foregroundStyle(.secondary)
-                Text(L10n.t("cards_subtitle_prompt"))
-                    .foregroundStyle(.secondary)
+        Group {
+            if let card = currentCard {
+                detail(card)
+            } else {
+                // 原应用空状态:纯深色空白,仅底部操作栏可见(按钮置灰)。
+                Color(nsColor: .windowBackgroundColor)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .safeAreaInset(edge: .bottom) {
+            bottomBar(currentCard)
         }
     }
 
@@ -46,54 +46,43 @@ struct CardDetailView: View {
             .frame(maxWidth: 680, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
         }
-        .safeAreaInset(edge: .bottom) {
-            bottomBar(card)
-        }
     }
 
-    // MARK: Header — big circular icon top-right with a star badge
+    // MARK: Header — 左侧大标题+标签名(次要色),右侧独立星标 + 卡片图标
+    // (Safe 布局:图标无额外徽章,星标在图标左侧;无「设置标签」链接——在底部栏)
 
     private func header(_ card: Card) -> some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .top, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(card.title.isEmpty ? "—" : card.title)
                     .font(.system(size: 22, weight: .bold))
                     .lineLimit(2)
-                HStack(spacing: 6) {
-                    ForEach(card.labelIds, id: \.self) { lid in
-                        if let l = ctx.database.label(id: lid) {
-                            Text(l.name)
-                                .font(.caption)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 2)
-                                .background(CardColor.color(named: l.color).opacity(0.18), in: Capsule())
-                                .foregroundStyle(CardColor.color(named: l.color))
-                        }
-                    }
-                    Button(L10n.t("set_labels_button")) { ctx.activeSheet = .labels(cardId: card.id) }
-                        .buttonStyle(.link)
-                        .font(.caption)
+                let names = labelNames(card)
+                if !names.isEmpty {
+                    Text(names)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
                 warnings(card)
             }
             Spacer(minLength: 12)
-            ZStack(alignment: .bottomLeading) {
-                CardIconView(symbol: card.symbol, color: card.color, size: 70,
-                             creditCardNumber: card.fields.first { $0.type == .number }?.value)
-                Button {
-                    ctx.toggleFavorite(card.id)
-                } label: {
-                    Image(systemName: card.favorite ? "star.fill" : "star")
-                        .font(.system(size: 13))
-                        .foregroundStyle(card.favorite ? .yellow : .secondary)
-                        .padding(4)
-                        .background(Circle().fill(Color(nsColor: .windowBackgroundColor)))
-                        .offset(x: -10, y: 10)
-                }
-                .buttonStyle(.plain)
+            Button {
+                ctx.toggleFavorite(card.id)
+            } label: {
+                Image(systemName: card.favorite ? "star.fill" : "star")
+                    .font(.system(size: 16))
+                    .foregroundStyle(card.favorite ? .yellow : .secondary)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
             }
-            .padding(.bottom, 10)
+            .buttonStyle(.plain)
+            CardIconView(symbol: card.symbol, color: card.color, size: 64,
+                         creditCardNumber: card.fields.first { $0.type == .number }?.value)
         }
+    }
+
+    private func labelNames(_ card: Card) -> String {
+        card.labelIds.compactMap { ctx.database.label(id: $0)?.name }.joined(separator: ", ")
     }
 
     @ViewBuilder
@@ -220,20 +209,20 @@ struct CardDetailView: View {
         }
     }
 
+    /// Safe 页脚:右对齐两行「修改时间：」「已创建：」(无字节数、无图标)
     private func footer(_ card: Card) -> some View {
-        HStack(spacing: 18) {
-            Label(shortDate(card.created), systemImage: "calendar.badge.plus")
-            Label(shortDate(card.modified), systemImage: "pencil")
-            Label(ByteCountFormatter.string(fromByteCount: Int64(card.size), countStyle: .file), systemImage: "externaldrive")
+        VStack(alignment: .trailing, spacing: 3) {
+            Text("\(L10n.t("modified_prompt")) \(fullDate(card.modified))")
+            Text("\(L10n.t("created_prompt")) \(fullDate(card.created))")
         }
         .font(.caption)
         .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
-    private func shortDate(_ millis: TimeInterval) -> String {
+    private func fullDate(_ millis: TimeInterval) -> String {
         let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .short
+        f.dateFormat = "yyyy/MM/dd, HH:mm:ss"
         return f.string(from: millis.date)
     }
 
@@ -253,35 +242,47 @@ struct CardDetailView: View {
         }
     }
 
-    /// Bottom action bar pinned above the pane edge — 编辑 / 设置标签 capsules,
-    /// 用于自动填充 checkbox, share button at the far right.
-    private func bottomBar(_ card: Card) -> some View {
+    /// Bottom action bar — 编辑 / 设置标签圆角按钮靠左,share 按钮在最右;
+    /// 无选中卡片时整栏置灰(与原始空状态一致)。
+    private func bottomBar(_ card: Card?) -> some View {
         HStack(spacing: 10) {
             capsuleButton(L10n.t("edit_button")) {
-                ctx.editDraft = EditCardModel(card: card)
+                if let card { ctx.editDraft = EditCardModel(card: card) }
             }
+            .disabled(card == nil)
+            .opacity(card == nil ? 0.35 : 1)
             capsuleButton(L10n.t("set_labels_button")) {
-                ctx.activeSheet = .labels(cardId: card.id)
+                if let card { ctx.activeSheet = .labels(cardId: card.id) }
             }
+            .disabled(card == nil)
+            .opacity(card == nil ? 0.35 : 1)
 
-            Toggle(L10n.t("use_for_autofill_button"), isOn: Binding(
-                get: { ctx.database.card(id: card.id)?.autofillEnabled ?? false },
-                set: { on in ctx.setCardAutofill(card.id, on: on) }
-            ))
-            .toggleStyle(.checkbox)
-            .font(.system(size: 12))
+            if let card {
+                Toggle(L10n.t("use_for_autofill_button"), isOn: Binding(
+                    get: { ctx.database.card(id: card.id)?.autofillEnabled ?? false },
+                    set: { on in ctx.setCardAutofill(card.id, on: on) }
+                ))
+                .toggleStyle(.checkbox)
+                .font(.system(size: 12))
+            }
 
             Spacer(minLength: 8)
 
-            ShareLink(item: card.asPlainText()) {
+            if let card {
+                ShareLink(item: card.asPlainText()) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .help(L10n.t("share_menu"))
+            } else {
                 Image(systemName: "square.and.arrow.up")
                     .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary.opacity(0.5))
             }
-            .help(L10n.t("share_menu"))
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 24)
         .padding(.vertical, 8)
-        .background(.bar)
+        .background(Color(nsColor: .windowBackgroundColor))
         .overlay(Divider(), alignment: .top)
     }
 
@@ -289,17 +290,18 @@ struct CardDetailView: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 12))
+                .fixedSize()   // 窄窗口下不折行(竖排字)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)
-                .background(Capsule().fill(Color.primary.opacity(0.08)))
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.08)))
         }
         .buttonStyle(.plain)
     }
 }
 
-/// ViewCardFieldCell + PasswordCell + OneTimePasswordCell — form-style row:
-/// caption field name on top, value (or reveal button / live OTP) over a full
-/// hairline underline, field-type icon at the right end.
+/// ViewCardFieldCell + PasswordCell + OneTimePasswordCell — Safe 布局:
+/// 上方小字字段名,下方值,细分隔线;右侧仅一个上下文图标(密码→眼睛,网址→地球),
+/// 复制/历史移到右键菜单。
 struct FieldRowView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
@@ -313,98 +315,84 @@ struct FieldRowView: View {
             Text(field.name)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .center) {
                 if field.type.isOneTimePassword {
                     OTPView(rawValue: field.value)
                 } else {
                     valueView
                 }
                 Spacer(minLength: 12)
-                if field.hasValue {
-                    copyButton
-                }
-                if field.hasHistory {
-                    historyButton
-                }
-                Image(systemName: typeIcon)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                trailing
             }
             .padding(.bottom, 4)
             Divider()
         }
+        .contentShape(Rectangle())
+        .contextMenu {
+            if field.hasValue {
+                Button(L10n.t("copy_command")) { ClipboardModel.shared.copy(field.value) }
+            }
+            if field.hasHistory {
+                Menu(L10n.t("history_title")) {
+                    ForEach(field.history.sorted { $0.time > $1.time }) { e in
+                        Text("\(e.value) — \(e.time.date.formatted(date: .abbreviated, time: .shortened))")
+                    }
+                }
+            }
+        }
     }
 
-    /// Field-type glyph shown at the row's right end (original behavior).
-    private var typeIcon: String {
-        switch field.type {
-        case .phone: return "phone"
-        case .website: return "globe"
-        case .email: return "envelope"
-        case .date, .expiry: return "calendar"
-        case .password, .pin: return "key"
-        case .login: return "person"
-        case .oneTimePassword: return "timer"
-        default: return "doc.text"
+    /// 行尾唯一图标:隐藏类字段→眼睛(显示/隐藏),网址→地球(打开),其余无。
+    @ViewBuilder
+    private var trailing: some View {
+        if field.type.isHidden && field.hasValue {
+            Button {
+                revealed.toggle()
+            } label: {
+                Image(systemName: revealed ? "eye.slash" : "eye")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help(L10n.t(revealed ? "hide_password_button" : "show_password_button"))
+        } else if field.type == .website, !field.value.isEmpty {
+            Button {
+                let s = field.value.hasPrefix("http") ? field.value : "https://\(field.value)"
+                if let url = URL(string: s) { NSWorkspace.shared.open(url) }
+            } label: {
+                Image(systemName: "globe")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
         }
     }
 
     @ViewBuilder
     private var valueView: some View {
         if field.type.isHidden && !revealed && settings.hidePasswords {
-            Button(L10n.t("show_password_button")) { revealed = true }
-                .buttonStyle(.link)
-                .font(.callout)
+            // Safe 密码行:圆点 + 强度条 + 「破解所需时间：」
+            VStack(alignment: .leading, spacing: 6) {
+                Text(String(repeating: "•", count: max(6, min(field.value.count, 16))))
+                    .font(.callout)
+                if field.type == .password, !field.value.isEmpty {
+                    StrengthIndicatorView(strength: PasswordStrength.score(field.value))
+                        .frame(maxWidth: 280)
+                }
+            }
         } else if field.type.isHidden {
-            HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(field.value)
                     .font(.system(.callout, design: .monospaced))
                     .textSelection(.enabled)
-                if !field.value.isEmpty {
+                if field.type == .password, !field.value.isEmpty {
                     StrengthIndicatorView(strength: PasswordStrength.score(field.value))
-                        .frame(maxWidth: 180)
+                        .frame(maxWidth: 280)
                 }
-                Button {
-                    revealed = false
-                } label: {
-                    Image(systemName: "eye.slash")
-                }
-                .buttonStyle(.borderless)
             }
-        } else if field.type == .website, let url = URL(string: field.value.hasPrefix("http") ? field.value : "https://\(field.value)") {
-            Link(field.value, destination: url)
-                .font(.callout)
         } else {
             Text(field.value)
                 .font(.callout)
                 .textSelection(.enabled)
         }
-    }
-
-    private var copyButton: some View {
-        Button {
-            ClipboardModel.shared.copy(field.value)
-        } label: {
-            Image(systemName: "doc.on.doc")
-        }
-        .buttonStyle(.borderless)
-        .help(L10n.t("copy_command"))
-    }
-
-    private var historyButton: some View {
-        Menu {
-            ForEach(field.history.sorted { $0.time > $1.time }) { e in
-                Text("\(e.value) — \(e.time.date.formatted(date: .abbreviated, time: .shortened))")
-            }
-        } label: {
-            Image(systemName: "clock.arrow.circlepath")
-                .foregroundStyle(.secondary)
-        }
-        .buttonStyle(.borderless)
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help(L10n.t("history_title"))
     }
 }
 
@@ -442,6 +430,11 @@ struct OTPView: View {
     }
 
     private func tick() {
+        guard !rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            code = nil
+            error = nil
+            return
+        }
         guard let cfg = try? TOTP.parse(rawValue) else {
             error = L10n.t("invalid_value_text")
             code = nil

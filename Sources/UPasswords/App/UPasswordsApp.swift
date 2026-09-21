@@ -18,7 +18,8 @@ struct UPasswordsApp: App {
                 .environmentObject(pwdSettings)
                 .environmentObject(ctx.settings)
         }
-        .windowToolbarStyle(.unified(showsTitle: true))
+        // 注意:不要加 .windowToolbarStyle——它与 SafeWindowConfigurator 的隐藏标题栏
+        // 方案冲突,会在自绘条带上方再渲染一个系统标题区(残留的居中窗口标题)。
         .defaultSize(CGSize(width: 970, height: 640))
         .commands { UPasswordsCommands() }
 

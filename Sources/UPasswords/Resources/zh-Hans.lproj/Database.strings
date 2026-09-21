@@ -61,7 +61,7 @@
 "misc_group" = "杂项";
 "name_field" = "姓名";
 "network_field" = "网络";
-"note_template" = "Note";
+"note_template" = "笔记";
 "notes_label" = "笔记";
 "number_field" = "号码";
 "number_type" = "号码";

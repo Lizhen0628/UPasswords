@@ -86,7 +86,7 @@ private struct EditCardBody: View {
             footer
         }
         .frame(minWidth: 560, minHeight: 480)
-        .background(.regularMaterial)
+        .background(Color(nsColor: .windowBackgroundColor))
         .sheet(item: $fieldEditor) { state in
             FieldEditorSheet(state: state) { field in
                 if let i = draft.card.fields.firstIndex(where: { $0.id == field.id }) {

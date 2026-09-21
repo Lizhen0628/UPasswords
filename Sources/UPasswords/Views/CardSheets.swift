@@ -14,26 +14,29 @@ struct AddCardSheet: View {
             onCancel: { dismiss() },
             onOk: { open(instantiateCustom()) }
         ) {
-            Text(L10n.t("select_template_title"))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.bottom, 8)
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150))], spacing: 10) {
-                    ForEach(Templates.all) { spec in
-                        Button {
-                            open(Templates.makeCard(from: spec, id: ctx.newCardId()))
-                        } label: {
-                            VStack(spacing: 6) {
-                                CardIconView(symbol: spec.symbol, color: "gray", size: 40)
-                                Text(L10n.db(spec.titleKey)).lineLimit(1)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(L10n.t("select_template_title"))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 10)
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 132))], spacing: 10) {
+                        ForEach(Templates.all) { spec in
+                            Button {
+                                open(Templates.makeCard(from: spec, id: ctx.newCardId()))
+                            } label: {
+                                VStack(spacing: 8) {
+                                    CardIconView(symbol: spec.symbol, color: "gray", size: 40)
+                                    Text(L10n.db(spec.titleKey))
+                                        .font(.system(size: 12))
+                                        .lineLimit(1)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
                             }
-                            .frame(maxWidth: .infinity)
-                            .padding(10)
-                            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }

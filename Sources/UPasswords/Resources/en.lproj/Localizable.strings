@@ -22,7 +22,7 @@
 "always_text" = "Always";
 "app_folder_setting" = "App folder";
 "app_folder_text" = "The database is stored in a hidden app folder. Required permissions: access only to the application data folder.";
-"app_title" = "Safe Password Manager";
+"app_title" = "Safe";
 "appearance_title" = "Appearance";
 "archive_card_query" = "Archive card?";
 "archive_command" = "Archive";
@@ -510,3 +510,6 @@
 "xml_format_text" = "Extensible Markup Language (XML)";
 "years_text" = "years";
 "yes_button" = "Yes";
+"system_default_text" = "System";
+"hide_password_button" = "Hide Password";
+"seconds_abbr_text" = "s";
