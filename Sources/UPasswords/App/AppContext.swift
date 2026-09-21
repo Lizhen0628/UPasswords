@@ -79,6 +79,7 @@ final class AppContext: ObservableObject {
         databaseName = name
         self.password = password
         phase = .unlocked
+        lastActivity = Date() // otherwise the idle timer re-locks right after unlocking
         failedUnlockAttempts = 0
         selection = .special(.allCards)
         selectedCardId = database.activeCards.first?.id
@@ -561,6 +562,12 @@ final class AppContext: ObservableObject {
     private func installActivityMonitor() {
         autoLockTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.autoLockTick() }
+        }
+        // Any interaction with the app (typing, clicks, scrolling) counts as
+        // activity for the idle timer — not just switching the selected card.
+        NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]) { event in
+            Task { @MainActor [weak self] in self?.touch() }
+            return event
         }
         NSApplication.shared.publisher(for: \.isHidden)
             .dropFirst()
