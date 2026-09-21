@@ -36,12 +36,13 @@ struct CardIconView: View {
 
     var body: some View {
         let sym = resolvedSymbol
-        RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
-            .fill(CardColor.color(named: color).opacity(0.18))
+        let base = CardColor.color(named: color)
+        Circle()
+            .fill(base)
             .overlay(
                 Image(systemName: SymbolModel.shared.sfSymbol(for: sym))
                     .font(.system(size: size * 0.5, weight: .medium))
-                    .foregroundStyle(CardColor.color(named: color))
+                    .foregroundStyle(base == Color(nsColor: .white) ? Color.primary : Color.white)
             )
             .frame(width: size, height: size)
     }

@@ -390,6 +390,13 @@ final class AppContext: ObservableObject {
         saveDebounced()
     }
 
+    /// card-level `autofill="on|off"` XML attribute (ViewCardViewController checkbox).
+    func setCardAutofill(_ id: Int, on: Bool) {
+        guard let i = database.cards.firstIndex(where: { $0.id == id }) else { return }
+        database.cards[i].autofillEnabled = on
+        saveDebounced()
+    }
+
     func duplicateCard(_ id: Int) {
         guard let card = database.card(id: id) else { return }
         var copy = card

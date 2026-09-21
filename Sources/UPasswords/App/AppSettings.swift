@@ -53,6 +53,10 @@ final class AppSettings: ObservableObject {
     }
 
     // MARK: Misc
+    /// Optional sidebar rows (密码/文件/图片) shown through the 「显示」 menu.
+    @Published var sidebarOptionalItems: [String] {
+        didSet { d.set(sidebarOptionalItems.joined(separator: ","), forKey: "app.sidebarOptional") }
+    }
     @Published var showWhatsNewAtStartup: Bool { didSet { d.set(showWhatsNewAtStartup, forKey: "whatsnew.atStartup") } }
     var lastWhatsNewVersion: String {
         get { d.string(forKey: "whatsnew.lastVersion") ?? "" }
@@ -81,6 +85,8 @@ final class AppSettings: ObservableObject {
         backupIntervalDays = d.object(forKey: "backup.intervalDays") as? Int ?? 7
         cloudType = d.string(forKey: "sync.cloud") ?? CloudType.none.rawValue
         webdav = Self.loadCodable(WebDavSettings.self, key: "sync.webdav") ?? WebDavSettings()
+        sidebarOptionalItems = (d.string(forKey: "app.sidebarOptional") ?? "")
+            .split(separator: ",").map(String.init).filter { !$0.isEmpty }
         showWhatsNewAtStartup = d.object(forKey: "whatsnew.atStartup") as? Bool ?? true
     }
 

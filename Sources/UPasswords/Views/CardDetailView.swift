@@ -1,7 +1,10 @@
 import SwiftUI
 
-/// ViewCardViewController — detail pane with header / fields / notes / images /
-/// files / footer sections (ViewCardHeaderSection, ViewCardFieldsSection …).
+/// ViewCardViewController — detail pane styled after the original: title block
+/// with a large circular icon (star badge at its bottom-left corner), form-style
+/// field rows (caption label above, value over a hairline underline, type icon
+/// at the right end), and a bottom action bar (编辑 / 设置标签 / 用于自动填充 /
+/// share).
 struct CardDetailView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
@@ -35,32 +38,27 @@ struct CardDetailView: View {
                 if card.hasImages { imagesSection(card) }
                 if card.hasFiles { filesSection(card) }
                 footer(card)
-                actionRow(card)
+                if card.trashed || card.archived {
+                    trashActions(card)
+                }
             }
             .padding(24)
             .frame(maxWidth: 680, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
         }
+        .safeAreaInset(edge: .bottom) {
+            bottomBar(card)
+        }
     }
 
-    // MARK: Header
+    // MARK: Header — big circular icon top-right with a star badge
 
     private func header(_ card: Card) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            CardIconView(symbol: card.symbol, color: card.color, size: 64,
-                         creditCardNumber: card.fields.first { $0.type == .number }?.value)
+        HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Text(card.title.isEmpty ? "—" : card.title)
-                        .font(.title2.bold())
-                    Button {
-                        ctx.toggleFavorite(card.id)
-                    } label: {
-                        Image(systemName: card.favorite ? "star.fill" : "star")
-                            .foregroundStyle(card.favorite ? .yellow : .secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
+                Text(card.title.isEmpty ? "—" : card.title)
+                    .font(.system(size: 22, weight: .bold))
+                    .lineLimit(2)
                 HStack(spacing: 6) {
                     ForEach(card.labelIds, id: \.self) { lid in
                         if let l = ctx.database.label(id: lid) {
@@ -78,7 +76,23 @@ struct CardDetailView: View {
                 }
                 warnings(card)
             }
-            Spacer()
+            Spacer(minLength: 12)
+            ZStack(alignment: .bottomLeading) {
+                CardIconView(symbol: card.symbol, color: card.color, size: 70,
+                             creditCardNumber: card.fields.first { $0.type == .number }?.value)
+                Button {
+                    ctx.toggleFavorite(card.id)
+                } label: {
+                    Image(systemName: card.favorite ? "star.fill" : "star")
+                        .font(.system(size: 13))
+                        .foregroundStyle(card.favorite ? .yellow : .secondary)
+                        .padding(4)
+                        .background(Circle().fill(Color(nsColor: .windowBackgroundColor)))
+                        .offset(x: -10, y: 10)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.bottom, 10)
         }
     }
 
@@ -103,11 +117,10 @@ struct CardDetailView: View {
         }
     }
 
-    // MARK: Fields (ViewCardFieldsSection + ViewCardFieldCell / PasswordCell / OneTimePasswordCell)
+    // MARK: Fields — form rows: caption label, value, hairline underline, type icon
 
     private func fieldsSection(_ card: Card) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionTitle(L10n.t("fields_tab"))
+        VStack(alignment: .leading, spacing: 10) {
             ForEach(card.fields) { field in
                 FieldRowView(card: card, field: field)
             }
@@ -228,27 +241,65 @@ struct CardDetailView: View {
         Text(s).font(.caption.bold()).foregroundStyle(.secondary)
     }
 
-    private func actionRow(_ card: Card) -> some View {
+    private func trashActions(_ card: Card) -> some View {
         HStack {
-            Button(L10n.t("edit_button")) {
-                ctx.editDraft = EditCardModel(card: card)
-            }
-            .controlSize(.large)
-
             if card.trashed {
                 Button(L10n.t("restore_card_command")) { ctx.restoreCard(card.id) }
                 Button(L10n.t("delete_button"), role: .destructive) { ctx.deleteCardPermanently(card.id) }
             } else if card.archived {
                 Button(L10n.t("unarchive_command")) { ctx.unarchiveCard(card.id) }
-            } else {
-                Button(L10n.t("archive_command")) { ctx.archiveCard(card.id) }
             }
             Spacer()
         }
     }
+
+    /// Bottom action bar pinned above the pane edge — 编辑 / 设置标签 capsules,
+    /// 用于自动填充 checkbox, share button at the far right.
+    private func bottomBar(_ card: Card) -> some View {
+        HStack(spacing: 10) {
+            capsuleButton(L10n.t("edit_button")) {
+                ctx.editDraft = EditCardModel(card: card)
+            }
+            capsuleButton(L10n.t("set_labels_button")) {
+                ctx.activeSheet = .labels(cardId: card.id)
+            }
+
+            Toggle(L10n.t("use_for_autofill_button"), isOn: Binding(
+                get: { ctx.database.card(id: card.id)?.autofillEnabled ?? false },
+                set: { on in ctx.setCardAutofill(card.id, on: on) }
+            ))
+            .toggleStyle(.checkbox)
+            .font(.system(size: 12))
+
+            Spacer(minLength: 8)
+
+            ShareLink(item: card.asPlainText()) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .help(L10n.t("share_menu"))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.bar)
+        .overlay(Divider(), alignment: .top)
+    }
+
+    private func capsuleButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(Color.primary.opacity(0.08)))
+        }
+        .buttonStyle(.plain)
+    }
 }
 
-/// ViewCardFieldCell + PasswordCell + OneTimePasswordCell combined.
+/// ViewCardFieldCell + PasswordCell + OneTimePasswordCell — form-style row:
+/// caption field name on top, value (or reveal button / live OTP) over a full
+/// hairline underline, field-type icon at the right end.
 struct FieldRowView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
@@ -258,24 +309,44 @@ struct FieldRowView: View {
     @State private var revealed = false
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
+        VStack(alignment: .leading, spacing: 2) {
             Text(field.name)
+                .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-                .frame(width: 110, alignment: .leading)
-            if field.type.isOneTimePassword {
-                OTPView(rawValue: field.value)
-            } else {
-                valueView
+            HStack(alignment: .firstTextBaseline) {
+                if field.type.isOneTimePassword {
+                    OTPView(rawValue: field.value)
+                } else {
+                    valueView
+                }
+                Spacer(minLength: 12)
+                if field.hasValue {
+                    copyButton
+                }
+                if field.hasHistory {
+                    historyButton
+                }
+                Image(systemName: typeIcon)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
             }
-            Spacer(minLength: 8)
-            if field.hasValue {
-                copyButton
-            }
-            if field.hasHistory {
-                historyButton
-            }
+            .padding(.bottom, 4)
+            Divider()
         }
-        .padding(.vertical, 3)
+    }
+
+    /// Field-type glyph shown at the row's right end (original behavior).
+    private var typeIcon: String {
+        switch field.type {
+        case .phone: return "phone"
+        case .website: return "globe"
+        case .email: return "envelope"
+        case .date, .expiry: return "calendar"
+        case .password, .pin: return "key"
+        case .login: return "person"
+        case .oneTimePassword: return "timer"
+        default: return "doc.text"
+        }
     }
 
     @ViewBuilder
@@ -344,7 +415,6 @@ struct OTPView: View {
     @State private var code: String? = nil
     @State private var remaining: Int = 0
     @State private var error: String? = nil
-    @State private var timer: Timer? = nil
 
     var body: some View {
         HStack(spacing: 8) {

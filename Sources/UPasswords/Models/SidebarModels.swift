@@ -51,13 +51,29 @@ enum SpecialLabel: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Sidebar grouping, mirroring LabelListViewController's sections.
+    /// Sidebar grouping per the original app: Safe / 标签 / 安全性 / 特殊,
+    /// plus optional items hidden until enabled through the 「显示」 menu.
     var section: SidebarSection {
         switch self {
-        case .allCards, .favorites, .recent: return .top
-        case .passwords, .oneTimeCodes, .notes, .files, .images, .passkeys, .creditCards: return .views
-        case .weakPasswords, .samePasswords, .compromised, .expiring, .expired: return .security
-        case .archived, .trash, .templates: return .bottom
+        case .allCards, .favorites, .creditCards, .notes, .oneTimeCodes, .passkeys, .recent:
+            return .safe
+        case .passwords, .files, .images:
+            return .optionalItems
+        case .compromised, .weakPasswords, .samePasswords:
+            return .security
+        case .expiring, .expired, .archived, .templates, .trash:
+            return .special
+        }
+    }
+
+    /// Icon tint matching the original sidebar (colored special marks).
+    var iconColor: String? {
+        switch self {
+        case .favorites: return "yellow"
+        case .compromised, .weakPasswords: return "red"
+        case .samePasswords: return "orange"
+        case .templates: return "blue"
+        default: return nil
         }
     }
 
@@ -82,17 +98,41 @@ enum SpecialLabel: String, CaseIterable, Identifiable {
 }
 
 enum SidebarSection: String, CaseIterable {
-    case top, labels, views, security, bottom
+    case safe, labels, security, special, optionalItems
 
-    var title: String? {
+    var groupKey: String? {
         switch self {
-        case .top, .bottom: return nil
-        case .labels: return L10n.t("labels_text")
-        case .views: return L10n.db("categories_group")
-        case .security: return L10n.db("security_group")
+        case .safe: return "safe_group"
+        case .labels: return "labels_group"
+        case .security: return "security_group"
+        case .special: return "special_group"
+        case .optionalItems: return nil
         }
     }
 }
+
+/// Colored group header icons of the original sidebar (LabelListGroupCell).
+enum SidebarGroupStyle {
+    case safe, labels, security, special
+
+    var icon: String {
+        switch self {
+        case .safe: return "shield.lefthalf.filled"
+        case .labels: return "tag.fill"
+        case .security: return "exclamationmark.circle.fill"
+        case .special: return "gearshape.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .safe, .labels, .special: return .blue
+        case .security: return .red
+        }
+    }
+}
+
+import SwiftUI
 
 /// Sidebar selection: either a special label or a user label id.
 enum SidebarSelection: Hashable {

@@ -25,8 +25,8 @@ struct RootView: View {
     }
 }
 
-/// MainWindowController — per the original nib: 970×640 window, NSSplitView
-/// (213 / 355 / rest), `main_toolbar` with 8 icon-only buttons + flexible space.
+/// MainWindowController — per the original app: 970×640 window, NSSplitView
+/// (213 / 355 / rest) and a unified toolbar with 8 icon+label buttons.
 struct MainWindowView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
@@ -46,7 +46,7 @@ struct MainWindowView: View {
         }
         .frame(minWidth: 760, minHeight: 460)
         .toolbar { MainToolbar(floating: $floating) }
-        .navigationTitle(L10n.tBranded("app_title"))
+        .navigationTitle(ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName)
         .sheet(item: $ctx.editDraft) { draft in
             EditCardSheet(draft: Binding(
                 get: { ctx.editDraft ?? draft },
@@ -58,7 +58,7 @@ struct MainWindowView: View {
     }
 }
 
-// MARK: - Toolbar (main_toolbar: 8 icon-only items + flexible space)
+// MARK: - Toolbar (main_toolbar: icon + caption label items, original order)
 
 struct MainToolbar: ToolbarContent {
     @EnvironmentObject var ctx: AppContext
@@ -66,115 +66,121 @@ struct MainToolbar: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
-            button("add_button_Template", L10n.t("add_card_command"), "plus") {
+            button("add_button", "plus.circle", L10n.t("add_card_command")) {
                 ctx.activeSheet = .addCard
             }
-            button("sync_button_Template", L10n.t("sync_command"), "arrow.triangle.2.circlepath") {
-                Task { await ctx.sync() }
-            }
-        }
-        ToolbarItemGroup(placement: .primaryAction) {
-            button("sorting_button_Template", L10n.t("sorting_command"), "arrow.up.arrow.down") {
-                ctx.activeSheet = .sorting
-            }
-            button("generator_button_Template", L10n.t("generator_command"), "wand.and.stars") {
-                ctx.activeSheet = .generator
-            }
-            button("above_all_button_Template", L10n.t("above_all_button"), "pin.fill", isActive: floating) {
-                floating.toggle()
-                NSApp.keyWindow?.level = floating ? .floating : .normal
-            }
-            button("delete_button_Template", L10n.t("delete_command"), "trash") {
+            button("delete_button", "trash", L10n.t("delete_command")) {
                 if let id = ctx.selectedCardId { ctx.trashCard(id) }
             }
             .disabled(ctx.selectedCardId == nil)
-            button("lock_button_Template", L10n.t("lock_command"), "lock.fill") {
+            button("lock_button", "lock.fill", L10n.t("lock_command")) {
                 ctx.lock()
             }
-            button("preferences_button_Template", L10n.t("preferences_command"), "gearshape") {
+            button("sync_button", "arrow.triangle.2.circlepath", L10n.t("sync_command")) {
+                Task { await ctx.sync() }
+            }
+            button("generator_button", "key", L10n.t("generator_command")) {
+                ctx.activeSheet = .generator
+            }
+            button("sorting_button", "arrow.up.arrow.down", L10n.t("sorting_command")) {
+                ctx.activeSheet = .sorting
+            }
+            button("above_all_button", floating ? "pin.fill" : "pin", L10n.t("above_all_button"),
+                   isActive: floating) {
+                floating.toggle()
+                NSApp.keyWindow?.level = floating ? .floating : .normal
+            }
+            button("preferences_button", "gearshape", L10n.t("preferences_command")) {
                 ctx.activeSheet = .preferences
             }
         }
     }
 
-    private func button(_ image: String, _ help: String, _ system: String,
+    /// Toolbar item matching the original: glyph on top, small caption below.
+    private func button(_ labelKey: String, _ system: String, _ help: String,
                         isActive: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: system)
-                .foregroundStyle(isActive ? Color.accentColor : .primary)
+            VStack(spacing: 1) {
+                Image(systemName: system)
+                    .font(.system(size: 15))
+                    .foregroundStyle(isActive ? Color.accentColor : Color.primary)
+                Text(L10n.t(labelKey))
+                    .font(.system(size: 9))
+                    .foregroundStyle(isActive ? Color.accentColor : .secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .frame(width: 44)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .help(help)
     }
 }
 
-// MARK: - Sidebar (LabelListViewController: source list with collapsible group
-// rows — LabelListGroupCell 25pt with chevron + group icon, LabelListCell with
-// 16pt icon, name and right-aligned semibold count)
+// MARK: - Sidebar (LabelListViewController: four collapsible groups —
+// Safe (database name, shield) / 标签 / 安全性 / 特殊 — with colored group
+// icons, neutral selection highlight and the 「显示」 optional-item menu)
 
 struct SidebarView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
 
-    @State private var expanded: Set<String> = ["labels_group", "categories_group", "security_group"]
+    @State private var expanded: Set<String> = ["safe_group", "labels_group", "security_group", "special_group"]
 
     private struct SidebarGroup: Identifiable {
         let key: String
+        let style: SidebarGroupStyle
         var id: String { key }
     }
 
-    private let groups: [SidebarGroup] = [
-        SidebarGroup(key: "labels_group"),        // user labels render below
-        SidebarGroup(key: "categories_group"),
-        SidebarGroup(key: "security_group"),
-    ]
+    /// Original row order inside each group.
+    private static let safeOrder: [SpecialLabel] = [.allCards, .favorites, .creditCards, .notes, .oneTimeCodes, .passkeys, .recent]
+    private static let securityOrder: [SpecialLabel] = [.compromised, .weakPasswords, .samePasswords]
+    private static let specialOrder: [SpecialLabel] = [.expiring, .expired, .archived, .templates, .trash]
+    private static let optionalOrder: [SpecialLabel] = [.passwords, .files, .images]
+
+    private var groups: [SidebarGroup] {
+        [
+            SidebarGroup(key: "safe_group", style: .safe),
+            SidebarGroup(key: "labels_group", style: .labels),
+            SidebarGroup(key: "security_group", style: .security),
+            SidebarGroup(key: "special_group", style: .special),
+        ]
+    }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                ForEach(SpecialLabel.allCases.filter { $0.section == .top }) { sp in
-                    SidebarRow(sp: sp)
-                        .tag(SidebarSelection.special(sp))
+                ForEach(groups) { group in
+                    groupRow(group)
+                    if expanded.contains(group.key) {
+                        rows(for: group)
+                    }
                 }
 
-                ForEach(groups) { group in
-                    groupRow(key: group.key)
-                    if expanded.contains(group.key) {
-                        if group.key == "labels_group" {
-                            ForEach(ctx.database.labels.sorted { a, b in
-                                a.pinToTop == b.pinToTop
-                                    ? a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
-                                    : a.pinToTop && !b.pinToTop
-                            }) { label in
-                                SidebarLabelRow(label: label)
-                            }
-                        } else {
-                            ForEach(SpecialLabel.allCases.filter { $0.section == sectionOf(group.key) }) { sp in
-                                SidebarRow(sp: sp)
-                            }
+                Spacer(minLength: 8)
+
+                // 侧栏底部 "初始化 n/8" (SetupPlanViewController entry) + 「显示」
+                HStack(spacing: 6) {
+                    Button {
+                        ctx.activeSheet = .setupPlan
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "checklist")
+                            Text("\(L10n.t("setup_text")) \(ctx.setupCompletedCount)/8")
                         }
                     }
-                }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12))
 
-                Divider().padding(.vertical, 4)
+                    Spacer(minLength: 4)
 
-                ForEach(SpecialLabel.allCases.filter { $0.section == .bottom }) { sp in
-                    SidebarRow(sp: sp)
+                    showMenu
                 }
-
-                // 侧栏底部 "初始化 n/8" (SetupPlanViewController entry)
-                Button {
-                    ctx.activeSheet = .setupPlan
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "checklist")
-                        Text("\(L10n.t("setup_text")) \(ctx.setupCompletedCount)/8")
-                        Spacer()
-                    }
-                }
-                .buttonStyle(.plain)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
-                .foregroundStyle(.secondary)
             }
             .padding(.vertical, 6)
         }
@@ -191,14 +197,68 @@ struct SidebarView: View {
         }
     }
 
-    private func sectionOf(_ groupKey: String) -> SidebarSection {
-        groupKey == "categories_group" ? .views : .security
+    /// 「显示」button — toggles the optional sidebar rows (密码/文件/图片).
+    private var showMenu: some View {
+        Menu {
+            ForEach(Self.optionalOrder) { sp in
+                Button {
+                    if settings.sidebarOptionalItems.contains(sp.rawValue) {
+                        settings.sidebarOptionalItems.removeAll { $0 == sp.rawValue }
+                    } else {
+                        settings.sidebarOptionalItems.append(sp.rawValue)
+                    }
+                } label: {
+                    if settings.sidebarOptionalItems.contains(sp.rawValue) {
+                        Label(sp.name, systemImage: "checkmark")
+                    } else {
+                        Text(sp.name)
+                    }
+                }
+            }
+        } label: {
+            Text(L10n.t("show_button"))
+                .font(.system(size: 11))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(Color.primary.opacity(0.08)))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .frame(height: 18)
     }
 
-    private func groupRow(key: String) -> some View {
-        let isOpen = expanded.contains(key)
+    @ViewBuilder
+    private func rows(for group: SidebarGroup) -> some View {
+        switch group.style {
+        case .safe:
+            ForEach(Self.safeOrder) { sp in
+                SidebarRow(sp: sp)
+                    .tag(SidebarSelection.special(sp))
+            }
+        case .labels:
+            ForEach(ctx.database.labels.sorted { a, b in
+                a.pinToTop == b.pinToTop
+                    ? a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+                    : a.pinToTop && !b.pinToTop
+            }) { label in
+                SidebarLabelRow(label: label)
+            }
+        case .security:
+            ForEach(Self.securityOrder) { sp in
+                SidebarRow(sp: sp)
+            }
+        case .special:
+            ForEach(Self.specialOrder) { sp in
+                SidebarRow(sp: sp)
+            }
+        }
+    }
+
+    private func groupRow(_ group: SidebarGroup) -> some View {
+        let isOpen = expanded.contains(group.key)
         return Button {
-            if isOpen { expanded.remove(key) } else { expanded.insert(key) }
+            if isOpen { expanded.remove(group.key) } else { expanded.insert(group.key) }
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "chevron.right")
@@ -206,15 +266,18 @@ struct SidebarView: View {
                     .rotationEffect(.degrees(isOpen ? 90 : 0))
                     .foregroundStyle(.secondary)
                     .frame(width: 16)
-                Image(systemName: "folder")
+                Image(systemName: group.style.icon)
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                Text(L10n.db(key))
+                    .foregroundStyle(group.style.tint)
+                Text(group.key == "safe_group" && !ctx.databaseName.isEmpty
+                     ? ctx.databaseName
+                     : L10n.db(group.key))
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
                 Spacer()
             }
-            .frame(height: 25)
+            .frame(height: 26)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -231,11 +294,22 @@ struct SidebarRow: View {
     var body: some View {
         SidebarRowButton(title: sp.name, system: sp.systemImage, indent: 35,
                          count: settings.showCardCount ? ctx.count(for: .special(sp)) : 0,
+                         tint: tint,
                          selected: ctx.selection == .special(sp)) {
             ctx.selection = .special(sp)
         }
         .contextMenu {
             sidebarExtras(sp)
+        }
+    }
+
+    private var tint: Color {
+        switch sp.iconColor {
+        case "yellow": return .yellow
+        case "red": return .red
+        case "orange": return .orange
+        case "blue": return .blue
+        default: return .secondary
         }
     }
 
@@ -261,7 +335,7 @@ struct SidebarLabelRow: View {
     var body: some View {
         SidebarRowButton(title: label.name, system: "tag", indent: 35,
                          count: settings.showCardCount ? ctx.count(for: .label(label.id)) : 0,
-                         color: CardColor.color(named: label.color),
+                         tint: CardColor.color(named: label.color),
                          selected: ctx.selection == .label(label.id)) {
             ctx.selection = .label(label.id)
         }
@@ -281,7 +355,7 @@ private struct SidebarRowButton: View {
     let system: String
     var indent: CGFloat = 0
     var count: Int = 0
-    var color: Color? = nil
+    var tint: Color? = nil
     var selected: Bool
     var action: () -> Void
 
@@ -290,10 +364,11 @@ private struct SidebarRowButton: View {
             HStack(spacing: 6) {
                 Image(systemName: system)
                     .font(.system(size: 12))
-                    .foregroundStyle(color ?? .secondary)
+                    .foregroundStyle(tint ?? .secondary)
                     .frame(width: 16)
                 Text(title)
                     .font(.system(size: 13))
+                    .foregroundStyle(selected ? .primary : .primary)
                     .lineLimit(1)
                 Spacer()
                 if count > 0 {
@@ -304,11 +379,11 @@ private struct SidebarRowButton: View {
             }
             .padding(.leading, indent == 0 ? 10 : indent)
             .padding(.trailing, 8)
-            .frame(height: 25)
+            .frame(height: 26)
             .contentShape(Rectangle())
             .background(
                 RoundedRectangle(cornerRadius: 5)
-                    .fill(selected ? Color.accentColor.opacity(0.18) : Color.clear)
+                    .fill(selected ? Color.primary.opacity(0.10) : Color.clear)
             )
         }
         .buttonStyle(.plain)
@@ -316,7 +391,7 @@ private struct SidebarRowButton: View {
 }
 
 // MARK: - Card list (CardListViewController: search field inside the pane top,
-// database icon button, clipboard toast bar, 48pt rows — CardListCell)
+// yellow generator key + cloud sync circles at the right, 48pt rows)
 
 struct CardListView: View {
     @EnvironmentObject var ctx: AppContext
@@ -343,9 +418,10 @@ struct CardListView: View {
         ctx.cards(for: ctx.selection, search: ctx.searchText)
     }
 
-    /// Search row: NSSearchField at left, DatabaseIcon button (60×28) at right.
+    /// Search row: NSSearchField at left; generator key (yellow circle) and
+    /// cloud status (white circle) buttons at the right.
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField(L10n.t("search_text"), text: $ctx.searchText)
@@ -365,24 +441,45 @@ struct CardListView: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor)))
 
-            Spacer(minLength: 8)
-
+            // Yellow key circle — opens the password generator.
             Button {
-                ctx.activeSheet = .manageDatabases
+                ctx.activeSheet = .generator
             } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "cylinder")
-                    Text(ctx.databaseName).lineLimit(1)
-                }
-                .font(.system(size: 11))
-                .padding(.horizontal, 8)
-                .frame(height: 24)
+                Image(systemName: "key.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(Color(nsColor: .systemYellow)))
             }
-            .buttonStyle(.bordered)
-            .help(L10n.t("manage_databases_command"))
+            .buttonStyle(.plain)
+            .help(L10n.t("generator_command"))
+
+            // Cloud circle — sync status / actions.
+            Menu {
+                Button(L10n.t("sync_command")) { Task { await ctx.sync() } }
+                Divider()
+                Button(L10n.t("manage_databases_command")) { ctx.activeSheet = .manageDatabases }
+                Button(L10n.t("configure_cloud_command")) {
+                    ctx.activeSheet = .configureCloud
+                }
+            } label: {
+                Image(systemName: cloudConfigured ? "icloud.fill" : "icloud")
+                    .font(.system(size: 12))
+                    .foregroundStyle(cloudConfigured ? Color.accentColor : Color.secondary)
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(Color.primary.opacity(0.06)))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .frame(width: 24, height: 24)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    private var cloudConfigured: Bool {
+        settings.cloud != .none
     }
 
     /// clipboardToast — "Text copied to clipboard" bar at the top of the pane.
@@ -485,8 +582,9 @@ struct CardListView: View {
     }
 }
 
-/// CardListCell — 35×35 icon at (7,7); title over subtitle at x=52;
-/// 32×32 blue one-time-password icon and 32×32 star button at the right edge.
+/// CardListCell — 35pt circular icon at (7,7); title over subtitle at x=52
+/// (single centered title when there is no subtitle); blue one-time-password
+/// icon and star button at the right edge.
 struct CardListCellView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
@@ -512,12 +610,16 @@ struct CardListCellView: View {
                         Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.red)
                     }
                 }
-                Text(subtitle)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             .padding(.leading, 10)
+            .frame(maxHeight: .infinity, alignment: subtitle.isEmpty ? .center : .top)
+            .padding(.top, subtitle.isEmpty ? 0 : 7)
             Spacer(minLength: 8)
             if card.fields.contains(where: { $0.type == .oneTimePassword }) {
                 Image(systemName: "timer")
