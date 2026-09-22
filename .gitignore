@@ -4,4 +4,8 @@
 *.xcodeproj/
 DerivedData/
 dist/
+dist-web/
+node_modules/
+src-tauri/target/
+src-tauri/gen/
 *.log

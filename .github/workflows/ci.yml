@@ -2,12 +2,45 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, tauri-vue3-rewrite]
   pull_request:
 
 jobs:
-  build-and-test:
-    runs-on: macos-14
+  tauri:
+    name: Tauri build + tests
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+      - name: Frontend tests
+        run: pnpm test
+      - name: Frontend typecheck + build
+        run: pnpm build
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test --verbose
+      - name: Bundle app
+        run: pnpm tauri build
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: UPasswords-macos
+          path: |
+            src-tauri/target/release/bundle/macos/*.app
+            src-tauri/target/release/bundle/dmg/*.dmg
+
+  swift:
+    name: Swift build + tests (legacy)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Swift version
@@ -21,5 +54,5 @@ jobs:
       - name: Upload app artifact
         uses: actions/upload-artifact@v4
         with:
-          name: UPasswords-app
+          name: UPasswords-swift-app
           path: dist/UPasswords.app
