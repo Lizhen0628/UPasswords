@@ -12,7 +12,7 @@ import { t } from "../lib/i18n";
 import { OFFLINE_DEMO_SET } from "../lib/demoSet";
 import { scorePassword } from "../lib/strength";
 import {
-  type SidebarSelection, type SpecialLabel, selectionEquals, sortCards,
+  type SidebarSelection, type SpecialLabel, SPECIAL_LABELS, selectionEquals, sortCards,
   specialLabelEmptyState,
 } from "../lib/sidebar";
 import { useSettingsStore, markSetupTaskDone, pushRecentId, recentIds } from "./settings";
@@ -370,8 +370,82 @@ export const useAppStore = defineStore("app", () => {
     return text.slice(start, idx + w.length + 20);
   }
 
+  /**
+   * All sidebar counts in ONE pass over the database. Previously each sidebar
+   * row called countFor → cardsFor, i.e. ~19 full scans per render, several of
+   * which re-scored every password — the main source of jank after deleting a
+   * card. Semantics mirror strategyCards/cardsFor exactly (verified by test).
+   */
+  const sidebarCounts = computed(() => {
+    const special = new Map<SpecialLabel, number>();
+    const perLabel = new Map<number, number>();
+    for (const sp of SPECIAL_LABELS) special.set(sp, 0);
+    const inc = (sp: SpecialLabel) => special.set(sp, (special.get(sp) ?? 0) + 1);
+
+    const now = Date.now();
+    const activeIds = new Set<number>();
+    const pwGroups = new Map<string, Set<number>>();
+    const feedPwGroup = (c: Card) => {
+      for (const f of c.fields) {
+        if (f.type === "password" && f.value) {
+          const set = pwGroups.get(f.value) ?? new Set<number>();
+          set.add(c.id);
+          pwGroups.set(f.value, set);
+        }
+      }
+    };
+
+    for (const c of database.value.cards) {
+      if (c.template) { inc("templates_label"); continue; }
+      if (c.trashed) { inc("trash_label"); continue; }
+      activeIds.add(c.id);
+      if (c.archived) {
+        inc("archived_label");
+        feedPwGroup(c); // samePasswordGroups covers archived cards too
+        continue;
+      }
+
+      inc("all_cards_label");
+      if (c.favorite) inc("favorites_label");
+      if (c.symbol === "credit_card") inc("credit_cards_label");
+      if (c.files.length > 0) inc("files_label");
+      if (c.images.length > 0) inc("images_label");
+      for (const id of c.labelIds) perLabel.set(id, (perLabel.get(id) ?? 0) + 1);
+
+      let hasPw = false, hasOtp = false, weak = false, compromised = false, loginLike = false;
+      for (const f of c.fields) {
+        if (f.type === "one_time_password") { hasOtp = true; continue; }
+        if (f.type === "login" || f.type === "email") loginLike = true;
+        if (f.type === "password") {
+          hasPw = true;
+          if (f.value) {
+            if (scorePassword(f.value).score <= 1) weak = true;
+            if (OFFLINE_DEMO_SET.has(f.value)) compromised = true;
+          }
+        }
+      }
+      feedPwGroup(c);
+      if (hasPw) inc("passwords_label");
+      if (hasOtp) inc("totp_label");
+      if (weak) inc("weak_passwords_label");
+      if (compromised) inc("compromised_passwords_label");
+      if (c.notes.length > 0 && !loginLike && !hasPw) inc("notes_label");
+      if (c.expiration != null) {
+        if (c.expiration < now) inc("expired_label");
+        else if (Math.floor((c.expiration - now) / 86400000) <= 30) inc("expiring_label");
+      }
+    }
+
+    let same = 0;
+    for (const ids of pwGroups.values()) if (ids.size > 1) same += ids.size;
+    special.set("same_passwords_label", same);
+    special.set("recent_label", recentIds().filter((id) => activeIds.has(id)).length);
+    return { special, perLabel };
+  });
+
   function countFor(sel: SidebarSelection): number {
-    return cardsFor(sel, "").length;
+    const m = sidebarCounts.value;
+    return sel.kind === "special" ? (m.special.get(sel.sp) ?? 0) : (m.perLabel.get(sel.id) ?? 0);
   }
 
   const currentCards = computed(() => cardsFor(selection.value, searchText.value));

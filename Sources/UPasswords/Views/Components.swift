@@ -96,10 +96,15 @@ struct ToastOverlay: View {
             Spacer()
             if let msg = toast.message {
                 Text(msg)
+                    .font(.system(size: 12, weight: .medium))
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .shadow(radius: 4)
+                    .background(Shadcn.popover, in: RoundedRectangle(cornerRadius: Shadcn.radiusMd, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Shadcn.radiusMd, style: .continuous)
+                            .stroke(Shadcn.border, lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.18), radius: 10, y: 3)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
@@ -150,18 +155,20 @@ struct SheetShell<Content: View>: View {
             HStack {
                 if let s = search {
                     HStack {
-                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        Image(systemName: "magnifyingglass").foregroundStyle(Shadcn.mutedForeground)
                         TextField(L10n.t("search_text"), text: s)
                             .textFieldStyle(.plain)
                     }
-                    .padding(5)
-                    .background(Color(nsColor: .controlBackgroundColor))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .shadcnField(cornerRadius: Shadcn.radiusSm)
                 }
                 Spacer()
                 Button(L10n.t("cancel_button"), action: onCancel)
+                    .buttonStyle(.shadcn(.outline, size: .sm))
                     .keyboardShortcut(.cancelAction)
                 Button(okTitle ?? L10n.t("ok_button"), action: onOk)
+                    .buttonStyle(.shadcn(size: .sm))
                     .keyboardShortcut(.defaultAction)
                     .disabled(okDisabled)
             }

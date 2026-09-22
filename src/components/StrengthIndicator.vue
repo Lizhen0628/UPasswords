@@ -12,7 +12,7 @@ const segColor = computed(() => {
     case 0: return "var(--destructive)";
     case 1: return "#f76b15";
     case 2: return "#eab308";
-    default: return "#32a467";
+    default: return "var(--strength-strong)";
   }
 });
 const litCount = computed(() =>
@@ -32,17 +32,18 @@ const crack = computed(() => strengthCrackTimeText(props.strength));
         :style="i <= litCount ? { background: segColor } : undefined"
       />
     </div>
-    <div class="caption muted">{{ t("crack_time_prompt") }} {{ crack }}</div>
+    <div class="caption" :style="{ color: segColor }">{{ t("crack_time_prompt") }} {{ crack }}</div>
   </div>
 </template>
 
 <style scoped>
-.strength { display: flex; flex-direction: column; gap: 4px; }
-.segs { display: flex; gap: 3px; }
+.strength { display: flex; flex-direction: column; gap: 5px; }
+.segs { display: flex; gap: 4px; }
 .seg {
   flex: 1;
-  height: 4px;
-  border-radius: 1.5px;
-  background: color-mix(in srgb, var(--muted-fg) 25%, transparent);
+  height: 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--muted-fg) 22%, transparent);
 }
+.caption { font-weight: 500; }
 </style>

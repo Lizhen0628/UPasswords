@@ -124,12 +124,26 @@ export function bruteEntropy(password: string): number {
 }
 
 /** The attacker takes the cheapest strategy: min(pattern entropy, brute entropy). */
+// Scoring is pure on the password value, and the same values are re-scored
+// on every reactive re-render (sidebar counts, list rows, detail pane), so
+// cache results in a bounded map — this removes the delete/edit jank.
+const scoreCache = new Map<string, PasswordStrength>();
+const SCORE_CACHE_MAX = 2000;
+
 export function scorePassword(password: string): PasswordStrength {
+  const hit = scoreCache.get(password);
+  if (hit) return hit;
   const p = evaluateStrength(password);
   const b = bruteEntropy(password);
   const entropy = Math.min(p.entropy, b);
   const s = entropy < 20 ? 0 : entropy < 40 ? 1 : entropy < 60 ? 2 : entropy < 80 ? 3 : 4;
-  return { score: s, entropy };
+  const out = { score: s, entropy };
+  if (scoreCache.size >= SCORE_CACHE_MAX) {
+    // drop the oldest entry (Map preserves insertion order)
+    scoreCache.delete(scoreCache.keys().next().value!);
+  }
+  scoreCache.set(password, out);
+  return out;
 }
 
 /** Offline attack, 1e10 guesses/s — StrengthIndicator convention. */

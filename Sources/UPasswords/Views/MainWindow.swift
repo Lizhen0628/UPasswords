@@ -141,10 +141,7 @@ struct SidebarView: View {
                     .frame(maxWidth: .infinity)
             }
             .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.white.opacity(0.045))
-            )
+            .shadcnCard()
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .background(Color(nsColor: .windowBackgroundColor))
@@ -171,10 +168,10 @@ struct SidebarView: View {
             }
         } label: {
             Text(L10n.t("show_button"))
-                .font(.system(size: 11))
-                .padding(.horizontal, 16)
+                .font(.system(size: 11, weight: .medium))
+                .padding(.horizontal, 14)
                 .padding(.vertical, 3)
-                .background(Capsule().fill(Color.white.opacity(0.10)))
+                .overlay(Capsule().stroke(Shadcn.inputBorder, lineWidth: 1))
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -340,17 +337,17 @@ private struct SidebarRowButton: View {
             HStack(spacing: 7) {
                 Image(systemName: system)
                     .font(.system(size: 12.5))
-                    .foregroundStyle(selected ? Color.white : (tint ?? Color.primary))
+                    .foregroundStyle(selected ? (tint ?? Color.primary) : (tint ?? Color.primary).opacity(0.85))
                     .frame(width: 17)
                 Text(title)
                     .font(.system(size: 13, weight: selected ? .medium : .regular))
-                    .foregroundStyle(selected ? .white : .primary)
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer()
                 if let count {
                     Text("\(count)")
                         .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(selected ? Color.white.opacity(0.85) : .secondary)
+                        .foregroundStyle(Shadcn.mutedForeground)
                 }
             }
             .padding(.leading, indent == 0 ? 10 : indent)
@@ -358,8 +355,8 @@ private struct SidebarRowButton: View {
             .frame(height: 27)
             .contentShape(Rectangle())
             .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(selected ? Color.accentColor : Color.clear)
+                RoundedRectangle(cornerRadius: Shadcn.radiusSm, style: .continuous)
+                    .fill(selected ? Shadcn.accentFill : Color.clear)
             )
             .padding(.horizontal, 6)
         }
@@ -418,9 +415,7 @@ struct CardListView: View {
             .padding(.horizontal, 8)
             .frame(height: 26)
             .frame(maxWidth: .infinity)
-            .background(Color.white.opacity(0.06))
-            .clipShape(RoundedRectangle(cornerRadius: 7))
-            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.white.opacity(0.12), lineWidth: 1))
+            .shadcnField()
 
             syncCapsule
         }
@@ -428,7 +423,8 @@ struct CardListView: View {
         .padding(.vertical, 9)
     }
 
-    /// 双段胶囊:左半纯黄底白钥匙(密码生成器),右半深底白云(同步状态)。
+    /// 双段控件:左半实心主按钮(密码生成器),右半幽灵云同步按钮,
+    /// 外层 shadcn input-group 风格描边容器。
     private var syncCapsule: some View {
         HStack(spacing: 0) {
             Button {
@@ -436,13 +432,17 @@ struct CardListView: View {
             } label: {
                 Image(systemName: "key.fill")
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 28, height: 26)
-                    .background(Color(nsColor: .systemYellow))
+                    .foregroundStyle(Shadcn.primaryForeground)
+                    .frame(width: 30, height: 26)
+                    .background(Shadcn.primary)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help(L10n.t("generator_command"))
+
+            Rectangle()
+                .fill(Shadcn.border)
+                .frame(width: 1, height: 16)
 
             Menu {
                 Button(L10n.t("sync_command")) { Task { await ctx.sync() } }
@@ -454,17 +454,20 @@ struct CardListView: View {
             } label: {
                 Image(systemName: "icloud.fill")
                     .font(.system(size: 11))
-                    .foregroundStyle(.white)
-                    .frame(width: 28, height: 26)
-                    .background(Color.white.opacity(cloudConfigured ? 0.30 : 0.14))
+                    .foregroundStyle(cloudConfigured ? Color.primary : Shadcn.mutedForeground)
+                    .frame(width: 30, height: 26)
+                    .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
             .help(L10n.t("sync_command"))
         }
-        .clipShape(Capsule())
-        .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: Shadcn.radiusMd, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Shadcn.radiusMd, style: .continuous)
+                .stroke(Shadcn.inputBorder, lineWidth: 1)
+        )
     }
 
     private var cloudConfigured: Bool {
@@ -476,10 +479,14 @@ struct CardListView: View {
         HStack {
             Spacer()
             Label(toast.message ?? "", systemImage: "doc.on.doc")
-                .font(.system(size: 11))
+                .font(.system(size: 11, weight: .medium))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
-                .background(.ultraThinMaterial, in: Capsule())
+                .background(Shadcn.popover, in: RoundedRectangle(cornerRadius: Shadcn.radiusSm, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Shadcn.radiusSm, style: .continuous)
+                        .stroke(Shadcn.border, lineWidth: 1)
+                )
             Spacer()
         }
         .padding(.vertical, 4)

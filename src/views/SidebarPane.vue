@@ -1,17 +1,19 @@
 <script setup lang="ts">
-// LabelListViewController — four collapsible groups (Safe 数据库名 / 标签 /
-// 安全性 / 特殊) with colored group icons, counts and the 「显示」 optional-item
-// menu; bottom card holds「初始化 n/8」.
+// Sidebar — reference-design nav: brand header (shield logo + wordmark),
+// collapsible section groups (database / labels / security / special) with
+// tinted icons and counts, blue pill selection, colored label dots, plus a
+// security-score style progress ring card and the「显示」menu at the bottom.
 import { computed, ref } from "vue";
 import AppIcon from "../components/AppIcon.vue";
 import PopMenu, { type MenuItem } from "../components/PopMenu.vue";
 import { useAppStore } from "../stores/app";
 import { useSettingsStore, setupCompletedCount } from "../stores/settings";
-import { db as dbStr, t } from "../lib/i18n";
+import { db as dbStr, t, tBranded } from "../lib/i18n";
 import {
   type SidebarSelection, type SpecialLabel,
-  colorCss, sectionHeaderIcon, selectionEquals, specialLabelIcon, specialLabelTint,
+  colorCss, selectionEquals, specialLabelIcon, specialLabelTint,
 } from "../lib/sidebar";
+import logoUrl from "../assets/reference-style/logo-shield.png";
 
 const app = useAppStore();
 const settings = useSettingsStore();
@@ -26,10 +28,10 @@ const SPECIAL_ORDER: SpecialLabel[] = ["expiring_label", "expired_label", "archi
 const OPTIONAL_ORDER: SpecialLabel[] = ["passwords_label", "files_label", "images_label"];
 
 const groups = [
-  { key: "safe_group", section: "safe" as const, tint: "var(--tint)" },
-  { key: "labels_group", section: "labels" as const, tint: "var(--tint)" },
-  { key: "security_group", section: "security" as const, tint: "var(--destructive)" },
-  { key: "special_group", section: "special" as const, tint: "var(--tint)" },
+  { key: "safe_group", section: "safe" as const },
+  { key: "labels_group", section: "labels" as const },
+  { key: "security_group", section: "security" as const },
+  { key: "special_group", section: "special" as const },
 ];
 
 const safeRows = computed<SpecialLabel[]>(() => {
@@ -64,9 +66,9 @@ const isOpen = (key: string) => expanded.value.has(key);
 function tintCss(sp: SpecialLabel): string {
   const tint = specialLabelTint(sp);
   switch (tint) {
-    case "yellow": return "#eab308";
+    case "yellow": return "var(--star)";
     case "red": return "var(--destructive)";
-    case "orange": return "#f76b15";
+    case "orange": return "#f78130";
     case "blue": return "var(--tint)";
     default: return "var(--fg-secondary)";
   }
@@ -74,6 +76,15 @@ function tintCss(sp: SpecialLabel): string {
 
 function select(sel: SidebarSelection) {
   app.selection = sel;
+}
+
+/** bottom-bar moon button — toggles explicit light/dark, "system" untouched */
+function toggleTheme() {
+  const el = document.documentElement;
+  const darkNow =
+    el.dataset.theme === "dark" ||
+    (el.dataset.theme !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  settings.s.theme = darkNow ? "light" : "dark";
 }
 
 function specialMenu(sp: SpecialLabel): MenuItem[] {
@@ -113,24 +124,47 @@ const showMenuItems = computed<MenuItem[]>(() =>
     },
   })),
 );
+
+const setupTotal = 8;
+const setupPct = computed(() => Math.round((setupCompletedCount() / setupTotal) * 100));
+const ringLen = 2 * Math.PI * 15;
 </script>
 
 <template>
   <div class="sidebar col">
+    <!-- brand header -->
+    <div class="brand row">
+      <img class="brand-logo" :src="logoUrl" alt="" aria-hidden="true" draggable="false" />
+      <div class="col brand-texts">
+        <span class="brand-name">{{ tBranded("app_title") }}</span>
+        <span class="brand-tagline">Your secrets, safer.</span>
+      </div>
+    </div>
+
     <div class="scroll grow">
       <template v-for="group in groups" :key="group.key">
-        <button class="group-row row" @click="toggle(group.key)">
-          <AppIcon name="chevron-right" :size="9" class="chev" :class="{ open: isOpen(group.key) }" />
-          <AppIcon :name="sectionHeaderIcon(group.section)" :size="12.5" :style="{ color: group.tint }" />
-          <span class="group-name">
-            {{ group.key === "safe_group" && app.databaseName ? app.databaseName : dbStr(group.key) }}
-          </span>
-        </button>
+        <div class="group-row row">
+          <button class="group-toggle row" @click="toggle(group.key)">
+            <AppIcon name="chevron-right" :size="10" :stroke-width="2.5" class="chev" :class="{ open: isOpen(group.key) }" />
+            <span class="group-name">
+              {{ group.key === "safe_group" && app.databaseName ? app.databaseName : dbStr(group.key) }}
+            </span>
+          </button>
+          <button
+            v-if="group.section === 'labels'"
+            class="icon-btn mini group-add"
+            :title="t('add_label_button')"
+            @click="app.openSheet({ kind: 'addLabel' })"
+          >
+            <AppIcon name="plus" :size="13" />
+          </button>
+        </div>
 
         <template v-if="isOpen(group.key)">
           <!-- Safe group -->
           <template v-if="group.section === 'safe'">
             <PopMenu
+              block
               v-for="sp in safeRows"
               :key="sp"
               :items="specialMenu(sp)"
@@ -141,7 +175,7 @@ const showMenuItems = computed<MenuItem[]>(() =>
                 :class="{ selected: selectionEquals(app.selection, { kind: 'special', sp }) }"
                 @click="select({ kind: 'special', sp })"
               >
-                <AppIcon :name="specialLabelIcon(sp)" :size="12.5" :style="{ color: tintCss(sp) }" class="row-icon" />
+                <AppIcon :name="specialLabelIcon(sp)" :size="14" :style="{ color: tintCss(sp) }" class="row-icon" />
                 <span class="row-title">{{ dbStr(sp) }}</span>
                 <span v-if="settings.s.showCardCount" class="count">{{ app.countFor({ kind: 'special', sp }) }}</span>
               </button>
@@ -150,13 +184,13 @@ const showMenuItems = computed<MenuItem[]>(() =>
 
           <!-- Labels group -->
           <template v-else-if="group.section === 'labels'">
-            <PopMenu v-for="label in sortedLabels" :key="label.id" :items="labelMenu(label.id)" trigger="contextmenu">
+            <PopMenu block v-for="label in sortedLabels" :key="label.id" :items="labelMenu(label.id)" trigger="contextmenu">
               <button
                 class="row-item row"
                 :class="{ selected: selectionEquals(app.selection, { kind: 'label', id: label.id }) }"
                 @click="select({ kind: 'label', id: label.id })"
               >
-                <AppIcon name="tag" :size="12.5" :style="{ color: colorCss(label.color) }" class="row-icon" />
+                <span class="dot" :style="{ background: colorCss(label.color) }" />
                 <span class="row-title">{{ label.name }}</span>
                 <span v-if="settings.s.showCardCount" class="count">{{ app.countFor({ kind: 'label', id: label.id }) }}</span>
               </button>
@@ -166,6 +200,7 @@ const showMenuItems = computed<MenuItem[]>(() =>
           <!-- Security / Special groups -->
           <template v-else>
             <PopMenu
+              block
               v-for="sp in group.section === 'security' ? SECURITY_ORDER : SPECIAL_ORDER"
               :key="sp"
               :items="specialMenu(sp)"
@@ -176,7 +211,7 @@ const showMenuItems = computed<MenuItem[]>(() =>
                 :class="{ selected: selectionEquals(app.selection, { kind: 'special', sp }) }"
                 @click="select({ kind: 'special', sp })"
               >
-                <AppIcon :name="specialLabelIcon(sp)" :size="12.5" :style="{ color: tintCss(sp) }" class="row-icon" />
+                <AppIcon :name="specialLabelIcon(sp)" :size="14" :style="{ color: tintCss(sp) }" class="row-icon" />
                 <span class="row-title">{{ dbStr(sp) }}</span>
                 <span v-if="settings.s.showCardCount" class="count">{{ app.countFor({ kind: 'special', sp }) }}</span>
               </button>
@@ -186,52 +221,111 @@ const showMenuItems = computed<MenuItem[]>(() =>
       </template>
     </div>
 
-    <!-- setup card -->
-    <div class="setup-card">
-      <button class="setup-row row" @click="app.openSheet({ kind: 'setupPlan' })">
-        <AppIcon name="wrench" :size="12" class="muted" />
-        <span class="setup-text">{{ t("setup_text") }} {{ setupCompletedCount() }}/8</span>
+    <!-- setup progress card (security-score style ring) -->
+    <div class="bottom col">
+      <button class="score-card row" @click="app.openSheet({ kind: 'setupPlan' })">
+        <span class="ring">
+          <svg viewBox="0 0 36 36" width="38" height="38">
+            <circle cx="18" cy="18" r="15" class="ring-track" />
+            <circle
+              cx="18" cy="18" r="15"
+              class="ring-fill"
+              :stroke-dasharray="`${(setupPct / 100) * ringLen} ${ringLen}`"
+            />
+          </svg>
+          <span class="ring-pct">{{ setupPct }}</span>
+        </span>
+        <span class="col grow score-texts">
+          <span class="score-title">{{ t("setup_text") }}</span>
+          <span class="score-sub">{{ setupCompletedCount() }}/{{ setupTotal }}</span>
+        </span>
+        <AppIcon name="chevron-right" :size="14" class="muted" />
       </button>
-      <PopMenu :items="showMenuItems" trigger="click">
-        <button class="show-btn">{{ t("show_button") }}</button>
-      </PopMenu>
+      <div class="row bottom-menu">
+        <button class="icon-btn" :title="t('preferences_button')" @click="app.openSheet({ kind: 'preferences' })">
+          <AppIcon name="settings" :size="15" />
+        </button>
+        <button class="icon-btn" :title="t('dark_mode_button', '深色模式')" @click="toggleTheme">
+          <AppIcon name="moon" :size="15" />
+        </button>
+        <div class="grow" />
+        <PopMenu :items="showMenuItems" trigger="click">
+          <button class="btn ghost sm show-btn">{{ t("show_button") }}</button>
+        </PopMenu>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
 .sidebar { height: 100%; background: var(--sidebar-bg); }
-.scroll { overflow-y: auto; padding: 4px 0; }
-.group-row {
-  gap: 5px;
-  height: 28px;
-  padding: 0 8px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  font: inherit;
-  color: var(--fg);
-}
-.chev { transition: transform 0.15s; color: var(--muted-fg); }
-.chev.open { transform: rotate(90deg); }
-.group-name { font-size: 13px; font-weight: 600; }
 
-.row-item {
-  gap: 7px;
-  height: 27px;
-  margin: 0 6px;
-  padding: 0 10px;
+.brand { gap: 10px; padding: 14px 14px 12px; flex: none; }
+.brand-logo {
+  width: 34px;
+  height: 38px;
+  object-fit: contain;
+  flex: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.brand-texts { gap: 1px; min-width: 0; }
+.brand-name { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+.brand-tagline { font-size: 10.5px; color: var(--muted-fg); }
+
+.scroll { overflow-y: auto; padding: 2px 10px 6px; }
+
+.group-row {
+  height: 26px;
+  margin-top: 10px;
+  padding-right: 2px;
+}
+.group-row:first-child { margin-top: 2px; }
+.group-toggle {
+  flex: 1;
+  min-width: 0;
+  gap: 5px;
+  height: 100%;
+  padding: 0 6px;
+  background: none;
   border: none;
   border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  color: var(--muted-fg);
+}
+.group-toggle:hover { color: var(--fg); }
+.chev { transition: transform 0.15s ease; }
+.chev.open { transform: rotate(90deg); }
+.group-name {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-item {
+  gap: 10px;
+  height: 32px;
+  padding: 0 10px;
+  margin-top: 2px;
+  border: none;
+  border-radius: var(--radius-md);
   background: none;
   cursor: pointer;
   font: inherit;
   color: var(--fg);
-  width: calc(100% - 12px);
+  width: 100%;
+  transition: background 0.12s ease;
 }
-.row-item.selected { background: var(--accent-fill); }
-.row-item.selected .row-title { font-weight: 500; }
-.row-icon { width: 17px; flex: none; }
+.row-item:hover { background: var(--accent-fill); }
+.row-item.selected { background: var(--select-pill); }
+.row-item.selected .row-title { font-weight: 600; color: #fff; }
+.row-item.selected :deep(.app-icon) { color: #fff !important; }
+.row-item.selected .count { color: rgba(255, 255, 255, 0.75); }
+.row-icon { width: 18px; flex: none; }
 .row-title {
   flex: 1;
   text-align: left;
@@ -240,36 +334,57 @@ const showMenuItems = computed<MenuItem[]>(() =>
   white-space: nowrap;
   font-size: 13px;
 }
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+  margin: 0 4.5px;
+}
 .count { font-size: 11px; color: var(--muted-fg); font-variant-numeric: tabular-nums; }
 
-.setup-card {
-  border-top: 1px solid var(--border);
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: stretch;
-  background: var(--bg);
-}
-.setup-row {
-  gap: 7px;
-  background: none;
-  border: none;
-  padding: 0;
+.bottom { flex: none; padding: 8px 10px 6px; }
+.score-card {
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
   cursor: pointer;
   font: inherit;
   color: var(--fg);
+  text-align: left;
+  transition: background 0.12s ease;
 }
-.setup-text { font-size: 12px; font-weight: 500; }
-.show-btn {
-  align-self: center;
-  font-size: 11px;
-  font-weight: 500;
-  padding: 3px 14px;
-  border-radius: 999px;
-  border: 1px solid var(--input-border);
-  background: none;
-  cursor: pointer;
-  color: var(--fg);
+.score-card:hover { background: color-mix(in srgb, var(--card) 80%, var(--accent-fill)); }
+.ring { position: relative; width: 38px; height: 38px; flex: none; }
+.ring svg { display: block; transform: rotate(-90deg); }
+.ring-track { fill: none; stroke: var(--accent-fill); stroke-width: 3.5; }
+.ring-fill {
+  fill: none;
+  stroke: var(--strength-strong);
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.3s ease;
 }
+.ring-pct {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.score-texts { gap: 2px; min-width: 0; }
+.score-title { font-size: 12.5px; font-weight: 600; }
+.score-sub { font-size: 11px; color: var(--muted-fg); }
+.bottom-menu { padding: 2px 2px 0; gap: 2px; }
+.icon-btn.mini { width: 22px; height: 22px; border-radius: var(--radius-sm); }
+.group-add { color: var(--muted-fg); }
+.group-add:hover { color: var(--fg); }
+.show-btn { min-height: 20px; padding: 0 6px; font-size: 10.5px; color: var(--muted-fg); }
 </style>

@@ -42,7 +42,7 @@ const iconSize = computed(() => Math.round(props.size * 0.5));
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
+  border-radius: 26%;
   color: #fff;
   flex: none;
 }

@@ -21,6 +21,7 @@ interface PersistedSettings {
   useWebsiteIcons: boolean;
   autoLockSeconds: number;
   lockInBackground: boolean;
+  theme: "system" | "light" | "dark";
   lockIfWindowClosed: boolean;
   requirePasswordSeconds: number;
   fastUnlock: boolean;
@@ -51,7 +52,8 @@ function defaults(): PersistedSettings {
     searchPasswords: false,
     useWebsiteIcons: true,
     autoLockSeconds: 300,
-    lockInBackground: true,
+    lockInBackground: false,
+    theme: "system",
     lockIfWindowClosed: false,
     requirePasswordSeconds: 0,
     fastUnlock: true,

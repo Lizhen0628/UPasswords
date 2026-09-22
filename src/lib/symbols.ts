@@ -24,7 +24,7 @@ import {
   Check, Clock, Copy, Timer, Hourglass, CalendarX, Archive, Trash, File,
   Image, RefreshCw, ArrowUpDown, Plus, ShieldAlert, Search, EyeOff, Download,
   History, Paintbrush, SquareCheck, Square, Circle, ListTree, Wrench,
-  Paperclip, X,
+  Paperclip, X, House, Moon,
 } from "@lucide/vue";
 
 // icon name → component (explicit imports keep the bundle tree-shaken)
@@ -59,7 +59,7 @@ const registry: Record<string, Component> = {
   "circle-check": CircleCheck, "circle-help": CircleHelp, info: Info,
   settings: Settings, link: Link, "square-dashed": SquareDashed,
   // UI chrome icons (sidebar / toolbar / fields / sheets)
-  "layout-grid": LayoutGrid, "panel-left": PanelLeft, "circle-x": CircleX,
+  "layout-grid": LayoutGrid, "panel-left": PanelLeft, "circle-x": CircleX, house: House, moon: Moon,
   share: Share, "circle-plus": CirclePlus, "wand-sparkles": WandSparkles,
   "sliders-horizontal": SlidersHorizontal, ellipsis: Ellipsis, pencil: Pencil,
   "chevron-up": ChevronUp, "chevron-down": ChevronDown, "chevron-right": ChevronRight,

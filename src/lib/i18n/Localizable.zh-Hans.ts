@@ -399,7 +399,7 @@ export const localizableZh: Record<string, string> = {
   "search_empty_text": "未找到",
   "search_passwords_setting": "通过密码搜索",
   "search_preview_setting": "搜索预览：",
-  "search_text": "搜索",
+  "search_text": "搜索项目、标签或网站...",
   "security_settings_task": "配置安全设置",
   "security_title": "安全性",
   "select_all_command": "全选",

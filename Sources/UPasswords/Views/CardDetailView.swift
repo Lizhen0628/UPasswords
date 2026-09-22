@@ -87,21 +87,17 @@ struct CardDetailView: View {
 
     @ViewBuilder
     private func warnings(_ card: Card) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 6) {
             if card.isExpired {
-                Label(L10n.t("card_expired_warning"), systemImage: "clock.badge.exclamationmark")
-                    .foregroundStyle(.red).font(.caption)
+                ShadcnBadge(L10n.t("card_expired_warning"), systemImage: "clock.badge.exclamationmark", variant: .destructive)
             } else if card.isExpiring {
-                Label("\(L10n.t("card_expiring_warning")) \(card.expiringInDays)", systemImage: "hourglass")
-                    .foregroundStyle(.orange).font(.caption)
+                ShadcnBadge("\(L10n.t("card_expiring_warning")) \(card.expiringInDays)", systemImage: "hourglass", variant: .warning)
             }
             if card.hasWeakPasswords {
-                Label(L10n.t("weak_password_message"), systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red).font(.caption)
+                ShadcnBadge(L10n.t("weak_password_message"), systemImage: "exclamationmark.triangle.fill", variant: .destructive)
             }
             if card.compromised {
-                Label(L10n.t("compromised_password_message"), systemImage: "exclamationmark.shield.fill")
-                    .foregroundStyle(.red).font(.caption)
+                ShadcnBadge(L10n.t("compromised_password_message"), systemImage: "exclamationmark.shield.fill", variant: .destructive)
             }
         }
     }
@@ -153,7 +149,7 @@ struct CardDetailView: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .shadcnCard(cornerRadius: Shadcn.radiusMd)
         }
     }
 
@@ -195,7 +191,7 @@ struct CardDetailView: View {
                         .buttonStyle(.link)
                 }
                 .padding(8)
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .shadcnCard(cornerRadius: Shadcn.radiusMd)
             }
         }
     }
@@ -227,7 +223,7 @@ struct CardDetailView: View {
     }
 
     private func sectionTitle(_ s: String) -> some View {
-        Text(s).font(.caption.bold()).foregroundStyle(.secondary)
+        Text(s).font(.caption.bold()).foregroundStyle(Shadcn.mutedForeground)
     }
 
     private func trashActions(_ card: Card) -> some View {
@@ -288,14 +284,9 @@ struct CardDetailView: View {
 
     private func capsuleButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title)
-                .font(.system(size: 12))
-                .fixedSize()   // 窄窗口下不折行(竖排字)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.08)))
+            Text(title).fixedSize()   // 窄窗口下不折行(竖排字)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.shadcn(.outline, size: .sm))
     }
 }
 

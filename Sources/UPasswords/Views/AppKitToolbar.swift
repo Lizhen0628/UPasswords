@@ -363,12 +363,13 @@ struct SafeToolbarButtonSpec {
     }
 }
 
-// MARK: - 圆钮:32pt 白色描边圆环 + 13pt 字形 + 9pt caption
+// MARK: - 图标按钮:shadcn ghost 风格 — 圆角矩形悬浮底 + 13pt 字形 + 9pt caption
 
 struct SafeToolbarButton: View {
     let spec: SafeToolbarButtonSpec
     @ObservedObject var ctx: AppContext
     @ObservedObject private var floatState = WindowFloatState.shared
+    @State private var hovering = false
 
     var body: some View {
         let active = spec.isActive(ctx)
@@ -377,17 +378,17 @@ struct SafeToolbarButton: View {
             spec.action(ctx)
         } label: {
             VStack(spacing: 4) {
-                ZStack {
-                    Circle()
-                        .stroke(Color.white.opacity(active ? 1 : 0.75), lineWidth: 1.2)
-                    Image(systemName: spec.symbol())
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(active ? Color.accentColor : .white)
-                }
-                .frame(width: 32, height: 32)
+                Image(systemName: spec.symbol())
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(active ? Color.accentColor : Color.primary.opacity(0.85))
+                    .frame(width: 30, height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: Shadcn.radiusSm, style: .continuous)
+                            .fill(hovering ? Shadcn.accentFill : Color.clear)
+                    )
                 Text(L10n.t(spec.labelKey))
                     .font(.system(size: 9))
-                    .foregroundStyle(active ? Color.accentColor : .secondary)
+                    .foregroundStyle(active ? Color.accentColor : Shadcn.mutedForeground)
                     .lineLimit(1)
                     .fixedSize()
             }
@@ -395,6 +396,7 @@ struct SafeToolbarButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hovering = $0 }
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.35)
         .help(L10n.t(spec.helpKey))

@@ -6,6 +6,7 @@
 import { onMounted, watch } from "vue";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { useAppStore } from "./stores/app";
+import { useSettingsStore } from "./stores/settings";
 import { useToastStore } from "./stores/toast";
 import { currentWindow } from "./lib/window";
 import { tBranded } from "./lib/i18n";
@@ -17,6 +18,17 @@ import ToastOverlay from "./components/ToastOverlay.vue";
 
 const app = useAppStore();
 const toast = useToastStore();
+const settings = useSettingsStore();
+
+// theme override — "system" follows the OS, otherwise force via data-theme
+watch(
+  () => settings.s.theme,
+  (theme) => {
+    if (theme === "system") delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = theme;
+  },
+  { immediate: true },
+);
 
 let savedMainFrame: { width: number; height: number } | null = null;
 

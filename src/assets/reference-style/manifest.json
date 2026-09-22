@@ -1,0 +1,11 @@
+{
+  "sourceReference": "/var/folders/cz/lx1g11xn1pzfdkhxsm2k_2g40000gn/T/E7987350-04DF-4701-B882-5B874720AD23-660-00000ACC71DAD9AC/pasted-image-20260922-120439.png",
+  "assets": {
+    "logo-shield": {
+      "file": "src/assets/reference-style/logo-shield.png",
+      "sourceBox": [40, 76, 75, 115],
+      "role": "semantic",
+      "notes": "蓝色盾牌 logo，从参考图 (1024×1024) 裁切后加圆角矩形 alpha 遮罩并 4x 放大"
+    }
+  }
+}

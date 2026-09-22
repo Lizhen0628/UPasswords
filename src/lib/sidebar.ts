@@ -33,7 +33,7 @@ export function specialLabelName(sp: SpecialLabel): string {
 /** lucide icon per special label (original sidebar had colored SF Symbols). */
 export function specialLabelIcon(sp: SpecialLabel): string {
   switch (sp) {
-    case "all_cards_label": return "layout-grid";
+    case "all_cards_label": return "layers";
     case "favorites_label": return "star";
     case "recent_label": return "clock";
     case "passwords_label": return "key-round";

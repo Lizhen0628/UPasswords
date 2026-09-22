@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// CardListViewController — search field at top with the 黄钥匙+云 sync capsule
-// at the right, 48pt rows (35pt icon, title/subtitle, OTP badge, star button)
-// and the full right-click context menu.
+// Card list — reference-design header (selection title + count, cloud menu)
+// and rounded rows: squircle icon, title/subtitle, OTP mark, first-label pill
+// and a persistent star (filled yellow when favorited). Search moved to the
+// toolbar (⌘K); full right-click menu kept.
 import { computed } from "vue";
 import AppIcon from "../components/AppIcon.vue";
 import CardIcon from "../components/CardIcon.vue";
@@ -9,7 +10,8 @@ import PopMenu, { type MenuItem } from "../components/PopMenu.vue";
 import { useAppStore } from "../stores/app";
 import { useSettingsStore } from "../stores/settings";
 import { useToastStore } from "../stores/toast";
-import { t } from "../lib/i18n";
+import { t, db } from "../lib/i18n";
+import { sortingName } from "../lib/sidebar";
 import { cardLogin, isExpiring, isExpired } from "../lib/models";
 import type { Card } from "../lib/models";
 
@@ -94,38 +96,35 @@ const cloudMenu: MenuItem[] = [
 ];
 
 const cloudConfigured = computed(() => settings.s.cloudType !== "none");
+
+const selectionTitle = computed(() => {
+  const sel = app.selection;
+  if (sel.kind === "label") {
+    return app.database.labels.find((l) => l.id === sel.id)?.name ?? "";
+  }
+  return db(sel.sp);
+});
 </script>
 
 <template>
   <div class="list col">
-    <!-- header: search + generator/sync capsule -->
+    <!-- header: selection title + cloud menu -->
     <div class="header row">
-      <div class="search shadcn-field row">
-        <AppIcon name="search" :size="12" class="muted" />
-        <input
-          v-model="app.searchText"
-          class="plain"
-          type="text"
-          :placeholder="t('search_text')"
-        />
-        <button v-if="app.searchText" class="icon-btn mini" @click="app.searchText = ''">
-          <AppIcon name="circle-x" :size="12" />
+      <span class="list-title">
+        {{ selectionTitle }}
+        <span class="list-count">({{ cards.length }})</span>
+      </span>
+      <div class="grow" />
+      <PopMenu :items="cloudMenu" trigger="click">
+        <button class="icon-btn" :title="t('sync_command')">
+          <AppIcon name="cloud" :size="15" :class="{ muted: !cloudConfigured }" />
         </button>
-      </div>
-
-      <div class="capsule row">
-        <button class="cap-left" :title="t('generator_command')" @click="app.openSheet({ kind: 'generator' })">
-          <AppIcon name="key-round" :size="11" />
-        </button>
-        <span class="cap-sep" />
-        <PopMenu :items="cloudMenu" trigger="click">
-          <button class="cap-right" :title="t('sync_command')">
-            <AppIcon name="cloud" :size="11" :class="{ muted: !cloudConfigured }" />
-          </button>
-        </PopMenu>
-      </div>
+      </PopMenu>
+      <button class="sort-btn row" @click="app.openSheet({ kind: 'sorting' })">
+        <span>{{ sortingName(settings.s.sorting) }}</span>
+        <AppIcon name="chevron-down" :size="11" class="muted" />
+      </button>
     </div>
-    <div class="divider" />
 
     <!-- toast bar -->
     <div v-if="toast.message" class="toast-bar row">
@@ -137,7 +136,7 @@ const cloudConfigured = computed(() => settings.s.cloudType !== "none");
 
     <!-- card rows -->
     <div class="rows grow">
-      <PopMenu v-for="card in cards" :key="card.id" :items="cardMenu(card)" trigger="contextmenu">
+      <PopMenu block v-for="card in cards" :key="card.id" :items="cardMenu(card)" trigger="contextmenu">
         <div
           class="cell row"
           :class="{ selected: app.selectedCardId === card.id }"
@@ -147,10 +146,10 @@ const cloudConfigured = computed(() => settings.s.cloudType !== "none");
             class="icon"
             :symbol="card.symbol"
             :color="card.color"
-            :size="35"
+            :size="40"
             :credit-card-number="card.fields.find((f) => f.type === 'number')?.value ?? null"
           />
-          <div class="texts col" :class="{ 'no-sub': !subtitle(card) }">
+          <div class="texts col">
             <div class="title row">
               <span class="title-text">{{ card.title || "—" }}</span>
               <AppIcon v-if="isExpired(card)" name="calendar-x" :size="11" class="danger" />
@@ -163,110 +162,142 @@ const cloudConfigured = computed(() => settings.s.cloudType !== "none");
           <AppIcon
             v-if="card.fields.some((f) => f.type === 'one_time_password')"
             name="timer"
-            :size="14"
+            :size="13"
             class="otp-mark"
           />
-          <button class="icon-btn star" :class="{ fav: card.favorite }" @click.stop="app.toggleFavorite(card.id)">
+          <button
+            class="icon-btn mini star"
+            :class="{ fav: card.favorite }"
+            @click.stop="app.toggleFavorite(card.id)"
+          >
             <AppIcon name="star" :size="14" :class="{ filled: card.favorite }" />
           </button>
+          <AppIcon name="chevron-right" :size="13" class="row-chev" />
         </div>
       </PopMenu>
 
-      <div v-if="cards.length === 0" class="empty">
-        {{ app.emptyStateText(app.selection) }}
+      <!-- empty state -->
+      <div v-if="cards.length === 0" class="empty col">
+        <div class="empty-icon">
+          <AppIcon name="layout-grid" :size="18" />
+        </div>
+        <span class="empty-text">{{ app.emptyStateText(app.selection) }}</span>
+        <button class="btn outline sm" @click="app.openSheet({ kind: 'addCard' })">
+          <AppIcon name="plus" :size="12" />
+          {{ t("add_button") }}
+        </button>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.list { height: 100%; min-width: 0; }
-.header { gap: 10px; padding: 9px 12px; flex: none; }
-.search { gap: 5px; padding: 0 8px; height: 26px; flex: 1; }
-.search input { min-height: auto; padding: 0; }
-.icon-btn.mini { width: 18px; height: 18px; }
+.list { height: 100%; min-width: 0; background: var(--bg); }
 
-.capsule {
-  border: 1px solid var(--input-border);
-  border-radius: var(--radius-md);
-  overflow: hidden;
+.header {
+  gap: 8px;
+  padding: 12px 10px 8px 16px;
   flex: none;
+  border-bottom: 1px solid var(--border);
 }
-.cap-left {
-  width: 30px;
-  height: 26px;
-  border: none;
-  background: var(--primary);
-  color: var(--primary-fg);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.cap-sep { width: 1px; height: 16px; background: var(--border); }
-.cap-right {
-  width: 30px;
-  height: 26px;
-  border: none;
+.list-title { font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em; }
+.list-count { color: var(--muted-fg); font-weight: 500; }
+.icon-btn.mini { width: 24px; height: 24px; border-radius: var(--radius-sm); }
+.sort-btn {
+  appearance: none;
+  gap: 4px;
   background: none;
-  color: var(--fg);
+  border: none;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--muted-fg);
   cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
 }
+.sort-btn:hover { color: var(--fg); background: var(--accent-fill); }
 
-.toast-bar { justify-content: center; padding: 4px 0; flex: none; }
+.toast-bar { justify-content: center; padding: 0 0 6px; flex: none; }
 .toast-pill {
   gap: 6px;
   font-size: 11px;
   font-weight: 500;
   background: var(--popover);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 4px 10px;
+  border-radius: 999px;
+  padding: 4px 12px;
+  box-shadow: var(--shadow-sm);
 }
 
-.rows { overflow-y: auto; }
+.rows { overflow-y: auto; padding: 6px 8px 10px; }
 .cell {
-  height: 48px;
-  gap: 0;
+  min-height: 56px;
+  gap: 11px;
+  padding: 8px 10px;
+  margin-top: 2px;
+  border-radius: var(--radius-lg);
   cursor: default;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  border: 1px solid transparent;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
-.cell:hover { background: var(--accent-fill); }
-.cell.selected { background: var(--accent-fill); }
-.cell .icon { margin-left: 7px; }
-.texts { margin-left: 10px; min-width: 0; flex: 1; gap: 1px; justify-content: center; }
-.texts.no-sub { justify-content: center; }
-.title { gap: 4px; min-width: 0; }
+.cell:hover { background: color-mix(in srgb, var(--accent-fill) 55%, transparent); }
+.cell.selected {
+  background: var(--select-row);
+  border-color: var(--select-row-border);
+}
+.cell .icon { flex: none; }
+.texts { min-width: 0; flex: 1; gap: 1px; justify-content: center; }
+.title { gap: 5px; min-width: 0; }
 .title-text {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
+  letter-spacing: -0.01em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.selected .title-text { font-weight: 600; }
 .subtitle {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--muted-fg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .danger { color: var(--destructive); }
-.warn { color: #f76b15; }
-.otp-mark { color: var(--tint); width: 32px; height: 32px; flex: none; }
-.star { color: color-mix(in srgb, var(--muted-fg) 45%, transparent); margin-right: 4px; }
-.star.fav { color: #eab308; }
+.warn { color: var(--warning); }
+.otp-mark { color: var(--tint); flex: none; }
+
+.star {
+  color: color-mix(in srgb, var(--muted-fg) 70%, transparent);
+}
+.star.fav { color: var(--star); }
 .star .filled :deep(svg) { fill: currentColor; }
 
+.row-chev { color: var(--muted-fg); opacity: 0.5; flex: none; }
+
 .empty {
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
   padding: 24px;
   text-align: center;
+}
+.empty-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--muted-fg);
-  font-size: 13px;
-  max-width: 320px;
-  margin: 0 auto;
+  background: var(--accent-fill);
+}
+.empty-text {
+  color: var(--muted-fg);
+  font-size: 12.5px;
+  line-height: 1.6;
+  max-width: 240px;
 }
 </style>

@@ -14,8 +14,8 @@ export interface MenuItem {
 }
 
 const props = withDefaults(
-  defineProps<{ items: MenuItem[]; trigger?: "click" | "contextmenu" }>(),
-  { trigger: "click" },
+  defineProps<{ items: MenuItem[]; trigger?: "click" | "contextmenu"; block?: boolean }>(),
+  { trigger: "click", block: false },
 );
 
 const open = ref(false);
@@ -65,7 +65,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocDown));
 </script>
 
 <template>
-  <span ref="host" class="pop-host" @[trigger]="onTrigger">
+  <span ref="host" class="pop-host" :class="{ block }" @[trigger]="onTrigger">
     <slot />
     <Teleport to="body">
       <div v-if="open" class="menu" :style="menuStyle">
@@ -92,5 +92,6 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocDown));
 
 <style scoped>
 .pop-host { display: inline-flex; }
+.pop-host.block { display: flex; flex-direction: column; align-items: stretch; }
 .ph { width: 13px; flex: none; }
 </style>

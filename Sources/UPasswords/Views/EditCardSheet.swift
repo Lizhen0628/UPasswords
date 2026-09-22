@@ -158,11 +158,13 @@ private struct EditCardBody: View {
             Button(L10n.t("cancel_button")) {
                 ctx.editDraft = nil
             }
+            .buttonStyle(.shadcn(.outline))
             .keyboardShortcut(.cancelAction)
             Button(L10n.t("save_and_close_button")) {
                 ctx.upsertCard(draft.card)
                 ctx.editDraft = nil
             }
+            .buttonStyle(.shadcn())
             .keyboardShortcut(.defaultAction)
         }
         .padding(12)

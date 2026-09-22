@@ -34,7 +34,7 @@ struct LockWindowView: View {
                         .focused($fieldFocused)
                         .onSubmit(unlock)
                     Button(L10n.t("ok_button"), action: unlock)
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.shadcn())
                         .keyboardShortcut(.defaultAction)
                 }
                 Toggle(L10n.t("show_password_button"), isOn: $showPassword)
@@ -232,7 +232,7 @@ struct SetupWindowView: View {
             }
             HStack {
                 Button(L10n.t("continue_button"), action: create)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.shadcn())
                     .keyboardShortcut(.defaultAction)
                     .disabled(name.isEmpty || password.isEmpty)
             }

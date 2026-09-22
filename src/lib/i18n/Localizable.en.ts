@@ -399,7 +399,7 @@ export const localizableEn: Record<string, string> = {
   "search_empty_text": "Not found",
   "search_passwords_setting": "Search through passwords",
   "search_preview_setting": "Search preview:",
-  "search_text": "Search",
+  "search_text": "Search items, labels or websites...",
   "security_settings_task": "Configure security settings",
   "security_title": "Security",
   "select_all_command": "Select All",

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// ViewCardViewController — detail pane: title block with a large circular icon
-// (star at its left), form-style field rows (caption / value / hairline),
-// notes, images, files, footer timestamps and the bottom action bar.
+// Detail pane — reference-design record view: header (squircle icon, title,
+// website link, star + overflow menu), label chips with a「+」adder, each
+// field in its own card with persistent actions, password strength bar,
+// notes card with edit pencil, metadata card and a bottom action bar.
 import { computed, reactive } from "vue";
 import AppIcon from "../components/AppIcon.vue";
 import CardIcon from "../components/CardIcon.vue";
@@ -16,6 +17,7 @@ import { TEMPLATES } from "../lib/templates";
 import { asPlainText, isHiddenType, isExpiring, isExpired, expiringInDays, newField } from "../lib/models";
 import type { Card, Field } from "../lib/models";
 import { scorePassword } from "../lib/strength";
+import { colorCss } from "../lib/sidebar";
 import * as backend from "../lib/backend";
 
 const app = useAppStore();
@@ -25,13 +27,16 @@ const toast = useToastStore();
 const card = computed(() => app.selectedCard);
 const revealed = reactive<Record<string, boolean>>({});
 
-const labelNames = computed(() =>
+const cardLabels = computed(() =>
   card.value
     ? card.value.labelIds
-        .map((id) => app.database.labels.find((l) => l.id === id)?.name)
-        .filter((n): n is string => !!n)
-        .join(", ")
-    : "",
+        .map((id) => app.database.labels.find((l) => l.id === id))
+        .filter((l): l is NonNullable<typeof l> => !!l)
+    : [],
+);
+
+const websiteValue = computed(() =>
+  card.value?.fields.find((f) => f.type === "website" && f.value)?.value ?? null,
 );
 
 function fullDate(millis: number): string {
@@ -100,6 +105,33 @@ const addFieldMenu = computed<MenuItem[]>(() =>
 function shareCard(c: Card) {
   void app.copy(asPlainText(c), t("text_copied_message"));
 }
+
+/** reference design shows a type icon at the left of each field name */
+function fieldIcon(type: Field["type"]): string {
+  switch (type) {
+    case "login": return "user";
+    case "password": return "lock";
+    case "pin": return "lock-keyhole";
+    case "number": return "credit-card";
+    case "date": return "clock";
+    case "phone": return "phone";
+    case "website": return "link";
+    case "email": return "mail";
+    case "one_time_password": return "timer";
+    case "expiry": return "hourglass";
+    case "secret": return "key-round";
+    default: return "file";
+  }
+}
+
+function moreMenu(c: Card): MenuItem[] {
+  return [
+    { label: t("edit_command"), icon: "pencil", action: () => (app.editDraft = { card: c, isNew: false }) },
+    { label: t("share_menu"), icon: "share", action: () => shareCard(c) },
+    { kind: "sep" },
+    { label: t("delete_command"), icon: "trash", destructive: true, action: () => app.trashCard(c.id) },
+  ];
+}
 </script>
 
 <template>
@@ -108,9 +140,41 @@ function shareCard(c: Card) {
       <div class="content col">
         <!-- header -->
         <div class="head row">
-          <div class="col grow">
+          <CardIcon
+            class="head-icon"
+            :symbol="card.symbol"
+            :color="card.color"
+            :size="54"
+            :credit-card-number="card.fields.find((f) => f.type === 'number')?.value ?? null"
+          />
+          <div class="col grow head-texts">
             <div class="card-title">{{ card.title || "—" }}</div>
-            <div v-if="labelNames" class="labels-text muted">{{ labelNames }}</div>
+            <button
+              v-if="websiteValue"
+              class="head-link row"
+              @click="openWebsite(websiteValue)"
+            >
+              {{ websiteValue }}
+            </button>
+            <!-- label chips under the title (reference design) -->
+            <div class="chips row">
+              <span
+                v-for="label in cardLabels"
+                :key="label.id"
+                class="chip"
+                :style="{
+                  color: colorCss(label.color),
+                  background: `color-mix(in srgb, ${colorCss(label.color)} 16%, transparent)`,
+                }"
+              >{{ label.name }}</span>
+              <button
+                class="chip add-chip"
+                :title="t('set_labels_button')"
+                @click="app.openSheet({ kind: 'labels', cardId: card.id })"
+              >
+                <AppIcon name="plus" :size="12" />
+              </button>
+            </div>
             <div class="badges row">
               <span v-if="isExpired(card)" class="badge destructive">
                 <AppIcon name="calendar-x" :size="10" /> {{ t("card_expired_warning") }}
@@ -126,27 +190,35 @@ function shareCard(c: Card) {
               </span>
             </div>
           </div>
-          <button class="icon-btn" :class="{ fav: card.favorite }" @click="app.toggleFavorite(card.id)">
-            <AppIcon name="star" :size="16" :class="{ filled: card.favorite }" />
+          <button
+            class="icon-btn star-btn"
+            :class="{ fav: card.favorite }"
+            :title="db('favorites_label')"
+            @click="app.toggleFavorite(card.id)"
+          >
+            <AppIcon name="star" :size="17" :class="{ filled: card.favorite }" />
           </button>
-          <CardIcon
-            :symbol="card.symbol"
-            :color="card.color"
-            :size="64"
-            :credit-card-number="card.fields.find((f) => f.type === 'number')?.value ?? null"
-          />
+          <PopMenu :items="moreMenu(card)" trigger="click">
+            <button class="icon-btn" :title="t('more_info_button')">
+              <AppIcon name="ellipsis" :size="17" />
+            </button>
+          </PopMenu>
         </div>
 
-        <!-- fields -->
-        <div v-if="card.fields.length" class="fields col">
+        <!-- fields: one card per field -->
+        <template v-if="card.fields.length">
           <PopMenu
+            block
             v-for="field in card.fields"
             :key="field.id"
             :items="fieldMenu(field)"
             trigger="contextmenu"
           >
-            <div class="field col">
-              <div class="field-name">{{ field.name }}</div>
+            <div class="field-card shadcn-card col">
+              <div class="field-name row">
+                <AppIcon :name="fieldIcon(field.type)" :size="11" />
+                <span>{{ field.name }}</span>
+              </div>
               <div class="field-value row">
                 <OtpField v-if="field.type === 'one_time_password'" :raw-value="field.value" />
                 <div
@@ -168,39 +240,64 @@ function shareCard(c: Card) {
                     class="pw-strength"
                   />
                 </div>
-                <span v-else class="value selectable">{{ field.value }}</span>
-                <div class="grow" />
-                <button
-                  v-if="isHiddenType(field.type) && field.value"
-                  class="icon-btn"
-                  @click="revealed[field.id] = !revealed[field.id]"
-                >
-                  <AppIcon :name="revealed[field.id] ? 'eye-off' : 'eye'" :size="13" />
-                </button>
                 <button
                   v-else-if="field.type === 'website' && field.value"
-                  class="icon-btn"
+                  class="value-link selectable"
                   @click="openWebsite(field.value)"
                 >
-                  <AppIcon name="globe" :size="13" />
+                  {{ field.value }}
                 </button>
+                <span v-else class="value selectable">{{ field.value }}</span>
+                <div class="grow" />
+                <div class="field-actions row">
+                  <button
+                    v-if="isHiddenType(field.type) && field.value"
+                    class="icon-btn mini"
+                    @click="revealed[field.id] = !revealed[field.id]"
+                  >
+                    <AppIcon :name="revealed[field.id] ? 'eye-off' : 'eye'" :size="14" />
+                  </button>
+                  <button
+                    v-else-if="field.type === 'website' && field.value"
+                    class="icon-btn mini"
+                    @click="openWebsite(field.value)"
+                  >
+                    <AppIcon name="globe" :size="13" />
+                  </button>
+                  <button
+                    v-if="field.value"
+                    class="icon-btn mini"
+                    :title="t('copy_command')"
+                    @click="app.copy(field.value)"
+                  >
+                    <AppIcon name="copy" :size="14" />
+                  </button>
+                </div>
               </div>
-              <div class="hairline" />
             </div>
           </PopMenu>
 
-          <PopMenu v-if="!card.template" :items="addFieldMenu" trigger="click">
+          <PopMenu v-if="!card.template" block :items="addFieldMenu" trigger="click">
             <button class="add-field row">
-              <AppIcon name="circle-plus" :size="12" />
+              <AppIcon name="plus" :size="13" />
               <span>{{ t("add_field_button") }}</span>
             </button>
           </PopMenu>
-        </div>
+        </template>
 
         <!-- notes -->
-        <div v-if="card.notes" class="col section">
-          <div class="section-title">{{ t("notes_tab") }}</div>
-          <div class="notes shadcn-card selectable">{{ card.notes }}</div>
+        <div v-if="card.notes" class="notes-card shadcn-card col">
+          <div class="row notes-head">
+            <span class="field-name row">
+              <AppIcon name="sticky-note" :size="11" />
+              <span>{{ t("notes_tab") }}</span>
+            </span>
+            <div class="grow" />
+            <button class="icon-btn mini" :title="t('edit_button')" @click="app.editDraft = { card, isNew: false }">
+              <AppIcon name="pencil" :size="13" />
+            </button>
+          </div>
+          <div class="notes selectable">{{ card.notes }}</div>
         </div>
 
         <!-- images -->
@@ -222,7 +319,9 @@ function shareCard(c: Card) {
         <div v-if="card.files.length" class="col section">
           <div class="section-title">{{ db("files_label") }}</div>
           <div v-for="file in card.files" :key="file.id" class="file-row row shadcn-card">
-            <AppIcon name="file" :size="13" />
+            <div class="file-icon">
+              <AppIcon name="file" :size="14" />
+            </div>
             <span class="grow file-name">{{ file.name }}</span>
             <span class="caption muted">{{ fmtBytes(base64Bytes(file.data)) }}</span>
             <button class="btn link" @click="saveAttachment(file.name, file.data)">
@@ -231,10 +330,22 @@ function shareCard(c: Card) {
           </div>
         </div>
 
-        <!-- footer -->
-        <div class="footer col">
-          <span>{{ t("modified_prompt") }} {{ fullDate(card.modified) }}</span>
-          <span>{{ t("created_prompt") }} {{ fullDate(card.created) }}</span>
+        <!-- metadata -->
+        <div class="meta-card shadcn-card col">
+          <div class="meta-row row">
+            <span class="meta-label row">
+              <AppIcon name="clock" :size="12" />
+              {{ t("created_prompt") }}
+            </span>
+            <span class="meta-value">{{ fullDate(card.created) }}</span>
+          </div>
+          <div class="meta-row row">
+            <span class="meta-label row">
+              <AppIcon name="pencil" :size="12" />
+              {{ t("modified_prompt") }}
+            </span>
+            <span class="meta-value">{{ fullDate(card.modified) }}</span>
+          </div>
         </div>
 
         <!-- trash actions -->
@@ -253,9 +364,11 @@ function shareCard(c: Card) {
     <!-- bottom action bar -->
     <div class="bottom-bar row">
       <button class="btn outline sm" @click="app.editDraft = { card, isNew: false }">
+        <AppIcon name="pencil" :size="12" />
         {{ t("edit_button") }}
       </button>
-      <button class="btn outline sm" @click="app.openSheet({ kind: 'labels', cardId: card.id })">
+      <button class="btn ghost sm" @click="app.openSheet({ kind: 'labels', cardId: card.id })">
+        <AppIcon name="tag" :size="12" />
         {{ t("set_labels_button") }}
       </button>
       <label class="row autofill">
@@ -268,85 +381,222 @@ function shareCard(c: Card) {
       </label>
       <div class="grow" />
       <button class="icon-btn" :title="t('share_menu')" @click="shareCard(card)">
-        <AppIcon name="share" :size="13" />
+        <AppIcon name="share" :size="14" />
       </button>
     </div>
   </div>
 
-  <!-- empty state: flat blank, disabled bottom bar -->
+  <!-- empty state -->
   <div v-else class="detail col empty-state">
-    <div class="grow" />
+    <div class="grow empty-center col">
+      <div class="empty-icon">
+        <AppIcon name="shield-check" :size="22" :stroke-width="1.8" />
+      </div>
+      <span class="empty-text">{{ app.emptyStateText(app.selection) }}</span>
+      <button class="btn outline sm" @click="app.openSheet({ kind: 'addCard' })">
+        <AppIcon name="plus" :size="12" />
+        {{ t("add_button") }}
+      </button>
+    </div>
     <div class="bottom-bar row">
-      <button class="btn outline sm" disabled>{{ t("edit_button") }}</button>
-      <button class="btn outline sm" disabled>{{ t("set_labels_button") }}</button>
+      <button class="btn outline sm" disabled>
+        <AppIcon name="pencil" :size="12" />
+        {{ t("edit_button") }}
+      </button>
+      <button class="btn ghost sm" disabled>
+        <AppIcon name="tag" :size="12" />
+        {{ t("set_labels_button") }}
+      </button>
     </div>
   </div>
 </template>
 
 <style scoped>
 .detail { height: 100%; background: var(--bg); min-width: 0; }
-.empty-state > .grow { background: var(--sidebar-bg); }
 .scroll { overflow-y: auto; }
 .content {
-  max-width: 680px;
+  max-width: 560px;
   margin: 0 auto;
-  padding: 24px;
-  gap: 18px;
+  padding: 22px 24px 24px;
+  gap: 14px;
   align-items: stretch;
 }
 
+/* header */
 .head { gap: 14px; align-items: flex-start; }
-.card-title { font-size: 22px; font-weight: 700; line-height: 1.2; }
-.labels-text { font-size: 13px; margin-top: 4px; }
-.badges { gap: 6px; flex-wrap: wrap; margin-top: 6px; }
-.icon-btn.fav { color: #eab308; }
-.icon-btn.fav .filled :deep(svg) { fill: currentColor; }
-
-.fields { gap: 10px; }
-.field { gap: 2px; }
-.field-name { font-size: 11px; color: var(--muted-fg); }
-.field-value { padding-bottom: 4px; gap: 8px; min-height: 22px; }
-.value { font-size: 14px; }
-.pw-block { gap: 6px; margin: 4px 0; }
-.pw-dots { font-size: 14px; letter-spacing: 1px; }
-.pw-text { font-size: 14px; }
-.pw-strength { max-width: 280px; }
-.hairline { height: 1px; background: var(--border); }
-.add-field {
-  gap: 5px;
+.head-icon {
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+.head-texts { gap: 3px; min-width: 0; padding-top: 3px; }
+.card-title { font-size: 18px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; }
+.head-link {
   background: none;
   border: none;
-  color: var(--muted-fg);
-  font-size: 11px;
-  cursor: pointer;
   padding: 0;
-  align-self: flex-start;
-  font-family: inherit;
+  font: inherit;
+  font-size: 12px;
+  color: var(--tint);
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
-.add-field:hover { color: var(--fg); }
+.head-link:hover { text-decoration: underline; }
+.badges { gap: 6px; flex-wrap: wrap; margin-top: 5px; }
+.badges:empty { margin-top: 0; }
+.star-btn { color: var(--muted-fg); }
+.star-btn.fav { color: var(--star); }
+.star-btn .filled :deep(svg) { fill: currentColor; }
 
-.section { gap: 8px; }
-.section-title { font-size: 11px; font-weight: 700; color: var(--muted-fg); }
-.notes { padding: 12px; white-space: pre-wrap; font-size: 13px; }
-.imgs { gap: 10px; overflow-x: auto; }
-.img-thumb { width: 96px; height: 96px; object-fit: cover; border-radius: 8px; }
-.file-row { gap: 10px; padding: 8px; }
-.file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* label chips */
+.chips { gap: 8px; flex-wrap: wrap; margin-top: 5px; }
+.chips:has(.add-chip:only-child) { margin-top: 0; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+.add-chip {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  justify-content: center;
+  background: var(--card);
+  border-color: var(--border);
+  color: var(--muted-fg);
+  cursor: pointer;
+  font: inherit;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.add-chip:hover { color: var(--fg); border-color: var(--border-strong); }
 
-.footer {
-  align-items: flex-end;
-  gap: 3px;
+/* field cards */
+.field-card { gap: 4px; padding: 11px 14px 12px; }
+.field-name {
+  gap: 6px;
   font-size: 11px;
+  font-weight: 500;
   color: var(--muted-fg);
 }
+.field-value { gap: 6px; min-height: 24px; }
+.value { font-size: 13.5px; word-break: break-all; }
+.value-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--tint);
+  cursor: pointer;
+  text-align: left;
+  word-break: break-all;
+}
+.value-link:hover { text-decoration: underline; }
+.pw-block { gap: 7px; margin: 2px 0; }
+.pw-dots { font-size: 15px; letter-spacing: 2.5px; line-height: 1; }
+.pw-text { font-size: 13.5px; word-break: break-all; }
+.pw-strength { max-width: 300px; }
+.field-actions { gap: 2px; }
+.icon-btn.mini { width: 26px; height: 26px; }
+
+.add-field {
+  gap: 6px;
+  background: none;
+  border: 1px dashed var(--border-strong);
+  color: var(--muted-fg);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.add-field:hover { background: var(--accent-fill); color: var(--fg); border-color: var(--border); }
+
+/* notes */
+.notes-card { padding: 11px 14px 13px; gap: 6px; }
+.notes-head { min-height: 22px; }
+.notes { white-space: pre-wrap; font-size: 13px; line-height: 1.55; }
+
+/* sections */
+.section { gap: 8px; }
+.section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted-fg);
+}
+.imgs { gap: 10px; overflow-x: auto; }
+.img-thumb {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+.file-row { gap: 10px; padding: 8px 12px; }
+.file-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-fill);
+  color: var(--fg-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+
+/* metadata */
+.meta-card { padding: 4px 14px; }
+.meta-row { padding: 9px 0; font-size: 12.5px; }
+.meta-row + .meta-row { border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.meta-label { color: var(--muted-fg); gap: 7px; }
+.meta-value { margin-left: auto; font-variant-numeric: tabular-nums; }
+
 .trash-actions { gap: 8px; }
 
+/* bottom bar */
 .bottom-bar {
   flex: none;
   border-top: 1px solid var(--border);
-  padding: 8px 24px;
-  gap: 10px;
+  padding: 8px 16px;
+  gap: 6px;
   background: var(--bg);
 }
-.autofill { gap: 6px; font-size: 12px; }
+.autofill { gap: 7px; font-size: 12px; color: var(--fg-secondary); margin-left: 4px; }
+
+/* empty state */
+.empty-center {
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+.empty-icon {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-fg);
+  background: var(--accent-fill);
+}
+.empty-text {
+  color: var(--muted-fg);
+  font-size: 12.5px;
+  line-height: 1.6;
+  max-width: 320px;
+  text-align: center;
+}
 </style>
