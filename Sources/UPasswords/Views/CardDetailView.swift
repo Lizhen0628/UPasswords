@@ -15,7 +15,7 @@ struct CardDetailView: View {
                 detail(card)
             } else {
                 // 原应用空状态:纯深色空白,仅底部操作栏可见(按钮置灰)。
-                Color(nsColor: .windowBackgroundColor)
+                Color.safeBackground
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -242,20 +242,18 @@ struct CardDetailView: View {
         }
     }
 
-    /// Bottom action bar — 编辑 / 设置标签圆角按钮靠左,share 按钮在最右;
-    /// 无选中卡片时整栏置灰(与原始空状态一致)。
+    /// Bottom action bar(参考图实测)— 编辑 50.5×23.5、设置标签 86.5×23.5、
+    /// 分享 40.5×23.5,深灰圆角填充,无边框线;无选中卡片时整栏置灰。
     private func bottomBar(_ card: Card?) -> some View {
-        HStack(spacing: 10) {
-            capsuleButton(L10n.t("edit_button")) {
+        HStack(spacing: 13.5) {
+            capsuleButton(L10n.t("edit_button"), enabled: card != nil) {
                 if let card { ctx.editDraft = EditCardModel(card: card) }
             }
             .disabled(card == nil)
-            .opacity(card == nil ? 0.35 : 1)
-            capsuleButton(L10n.t("set_labels_button")) {
+            capsuleButton(L10n.t("set_labels_button"), enabled: card != nil) {
                 if let card { ctx.activeSheet = .labels(cardId: card.id) }
             }
             .disabled(card == nil)
-            .opacity(card == nil ? 0.35 : 1)
 
             if let card {
                 Toggle(L10n.t("use_for_autofill_button"), isOn: Binding(
@@ -268,32 +266,38 @@ struct CardDetailView: View {
 
             Spacer(minLength: 8)
 
-            if let card {
-                ShareLink(item: card.asPlainText()) {
+            Group {
+                if let card {
+                    ShareLink(item: card.asPlainText()) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .help(L10n.t("share_menu"))
+                } else {
                     Image(systemName: "square.and.arrow.up")
                         .font(.system(size: 13, weight: .medium))
                 }
-                .help(L10n.t("share_menu"))
-            } else {
-                Image(systemName: "square.and.arrow.up")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary.opacity(0.5))
             }
+            .foregroundStyle(Color.white.opacity(card == nil ? 0.28 : 0.55))
+            .frame(width: 40.5, height: 23.5)
+            .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.045)))
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 8)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .overlay(Divider(), alignment: .top)
+        .padding(.leading, 17.5)
+        .padding(.trailing, 21)
+        .padding(.bottom, 12)
+        .background(Color.safeBackground)
     }
 
-    private func capsuleButton(_ title: String, action: @escaping () -> Void) -> some View {
+    private func capsuleButton(_ title: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 12))
+                .font(.system(size: 13))
+                .foregroundStyle(Color.white.opacity(enabled ? 0.85 : 0.28))
+                .lineLimit(1)
                 .fixedSize()   // 窄窗口下不折行(竖排字)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.08)))
+                .frame(height: 23.5)
+                .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.045)))
         }
         .buttonStyle(.plain)
     }

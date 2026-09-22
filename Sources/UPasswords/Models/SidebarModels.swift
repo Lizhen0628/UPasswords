@@ -34,20 +34,20 @@ enum SpecialLabel: String, CaseIterable, Identifiable {
         case .favorites: return "star.fill"
         case .recent: return "clock"
         case .passwords: return "key"
-        case .oneTimeCodes: return "timer"
-        case .notes: return "note.text"
+        case .oneTimeCodes: return "chart.pie.fill"
+        case .notes: return "doc.plaintext"
         case .files: return "doc"
         case .images: return "photo"
-        case .passkeys: return "person.badge.key"
+        case .passkeys: return "person.badge.key.fill"
         case .creditCards: return "creditcard"
-        case .weakPasswords: return "exclamationmark.triangle"
-        case .samePasswords: return "square.on.square"
-        case .compromised: return "exclamationmark.shield"
+        case .weakPasswords: return "xmark.shield"
+        case .samePasswords: return "exclamationmark.triangle"
+        case .compromised: return "lock.open"
         case .expiring: return "hourglass"
-        case .expired: return "calendar.badge.exclamationmark"
+        case .expired: return "hourglass"
         case .archived: return "archivebox"
         case .trash: return "trash"
-        case .templates: return "square.stack.3d.up"
+        case .templates: return "doc.on.doc"
         }
     }
 
@@ -70,9 +70,7 @@ enum SpecialLabel: String, CaseIterable, Identifiable {
     var iconColor: String? {
         switch self {
         case .favorites: return "yellow"
-        case .compromised, .weakPasswords: return "red"
-        case .samePasswords: return "orange"
-        case .templates: return "blue"
+        case .compromised, .weakPasswords, .samePasswords: return "red"
         default: return nil
         }
     }
@@ -117,10 +115,10 @@ enum SidebarGroupStyle {
 
     var icon: String {
         switch self {
-        case .safe: return "shield.lefthalf.filled"
-        case .labels: return "tag.fill"
-        case .security: return "exclamationmark.shield.fill"
-        case .special: return "gearshape.fill"
+        case .safe: return "lock.shield"
+        case .labels: return "tag"
+        case .security: return "exclamationmark.shield"
+        case .special: return "gearshape.2"
         }
     }
 

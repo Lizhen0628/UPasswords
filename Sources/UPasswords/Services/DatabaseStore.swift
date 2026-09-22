@@ -59,23 +59,41 @@ final class DatabaseStore {
             throw StoreError(L10n.t("database_name_error"))
         }
         guard !exists(name) else { throw StoreError(L10n.t("database_already_exists_error")) }
+        let t0 = Date()
         let db = PasswordDatabase.createDefault(now: now)
         let plain = db.xmlData()
         let enc = try DatabaseCipher.encryptedData(plain, password: password)
-        try enc.write(to: url(for: name))
+        do {
+            try enc.write(to: url(for: name))
+        } catch {
+            Log.error("db", "create \"\(name).upw\" write failed: \(error)")
+            throw error
+        }
         PasswordStore.savePassword(password, databaseName: name)
+        Log.info("db", "created \"\(name).upw\" (\(enc.count)B, \(Int(Date().timeIntervalSince(t0) * 1000))ms) at \(url(for: name).path)")
         return DatabaseFile(name: name, fileName: "\(name).upw", created: now, isMain: list().isEmpty)
     }
 
     func load(name: String, password: String) throws -> PasswordDatabase {
-        let data = try Data(contentsOf: url(for: name))
+        let t0 = Date()
+        let data: Data
+        do {
+            data = try Data(contentsOf: url(for: name))
+        } catch {
+            Log.error("db", "load \"\(name).upw\" unreadable: \(error)")
+            throw error
+        }
         let plain = try DatabaseCipher.decryptedData(data, password: password)
-        return try PasswordDatabase.parse(plain)
+        let db = try PasswordDatabase.parse(plain)
+        Log.debug("db", "loaded \"\(name).upw\" (\(data.count)B, \(Int(Date().timeIntervalSince(t0) * 1000))ms)")
+        return db
     }
 
     func save(_ db: PasswordDatabase, name: String, password: String) throws {
+        let t0 = Date()
         let enc = try DatabaseCipher.encryptedData(db.xmlData(), password: password)
         try enc.write(to: url(for: name), options: .atomic)
+        Log.debug("db", "saved \"\(name).upw\" (\(enc.count)B, \(Int(Date().timeIntervalSince(t0) * 1000))ms)")
     }
 
     func rename(_ old: String, to new: String) throws {
@@ -84,6 +102,7 @@ final class DatabaseStore {
         guard new.range(of: "^[A-Za-z0-9]+$", options: .regularExpression) != nil else {
             throw StoreError(L10n.t("database_name_error"))
         }
+        Log.info("db", "rename \"\(old)\" → \"\(new)\"")
         try fm.moveItem(at: url(for: old), to: url(for: new))
         if let pw = PasswordStore.loadPassword(databaseName: old) {
             PasswordStore.savePassword(pw, databaseName: new)
@@ -98,6 +117,7 @@ final class DatabaseStore {
 
     func delete(name: String, alsoBackups: Bool = true) throws {
         guard exists(name) else { return }
+        Log.warn("db", "delete \"\(name).upw\" (alsoBackups=\(alsoBackups))")
         try fm.removeItem(at: url(for: name))
         PasswordStore.eraseData(databaseName: name)
         if alsoBackups {
@@ -125,7 +145,7 @@ final class DatabaseStore {
         let data = try Data(contentsOf: url(for: name))
         let stamp = Self.backupStampFormatter.string(from: now)
         try data.write(to: dir.appendingPathComponent("\(stamp).upw"))
-        pruneBackups(name: name, keep: 10)
+        Log.info("backup", "backup \"\(name)\" → \(stamp).upw (\(data.count)B), kept \(pruneBackups(name: name, keep: 10)) most recent")
     }
 
     static let backupStampFormatter: DateFormatter = {
@@ -145,15 +165,21 @@ final class DatabaseStore {
             }
     }
 
-    private func pruneBackups(name: String, keep: Int) {
+    @discardableResult
+    private func pruneBackups(name: String, keep: Int) -> Int {
         let all = backups(name: name)
-        guard all.count > keep else { return }
+        guard all.count > keep else { return all.count }
         for url in all.dropFirst(keep) { try? fm.removeItem(at: url) }
+        return keep
     }
 
     func restore(backup: URL, to name: String) throws {
+        Log.info("backup", "restore \(backup.lastPathComponent) → \"\(name).upw\"")
         let data = try Data(contentsOf: backup)
-        guard DatabaseCipher.checkFileMagic(data) else { throw StoreError(L10n.t("wrong_database_format_error")) }
+        guard DatabaseCipher.checkFileMagic(data) else {
+            Log.error("backup", "restore rejected: wrong file magic in \(backup.lastPathComponent)")
+            throw StoreError(L10n.t("wrong_database_format_error"))
+        }
         try data.write(to: url(for: name), options: .atomic)
     }
 

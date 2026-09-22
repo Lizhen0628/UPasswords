@@ -28,27 +28,26 @@ struct RootView: View {
     }
 }
 
-/// MainWindowController — per the original app: 970×640 window, NSSplitView
-/// (213 / 355 / rest) and a unified toolbar with 8 icon+label buttons.
+/// MainWindowController — 参考图实测:970×819 窗口,70pt 自绘工具栏条带,
+/// 三列布局(侧栏 225pt / 5pt 凹槽 / 列表 266pt / 5pt 凹槽 / 详情),
+/// 不用 NavigationSplitView:其侧栏列在 macOS 26 带 30pt 玻璃内缩且无法关闭。
 struct MainWindowView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
 
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
-
     var body: some View {
         VStack(spacing: 0) {
-            // 自绘 66pt 工具栏条带(系统 NSToolbar 在 macOS 26 必然附加玻璃胶囊,见 AppKitToolbar.swift)
-            SafeTitleBarView(columnVisibility: $columnVisibility)
-            Divider()
-            NavigationSplitView(columnVisibility: $columnVisibility) {
+            // 自绘 70pt 工具栏条带(系统 NSToolbar 在 macOS 26 必然附加玻璃胶囊,见 AppKitToolbar.swift)
+            SafeTitleBarView()
+            HStack(spacing: 0) {
                 SidebarView()
-                    .navigationSplitViewColumnWidth(min: 180, ideal: 213, max: 280)
-            } content: {
+                    .frame(width: 225)
+                ColumnGroove()
                 CardListView()
-                    .navigationSplitViewColumnWidth(min: 300, ideal: 355, max: 520)
-            } detail: {
+                    .frame(width: 266)
+                ColumnGroove()
                 CardDetailView()
+                    .frame(maxWidth: .infinity)
             }
         }
         .frame(minWidth: 760, minHeight: 460)
@@ -107,46 +106,47 @@ struct SidebarView: View {
                     }
                 }
             }
-            .padding(.vertical, 4)
+            .padding(.top, 7)
+            .padding(.bottom, 4)
         }
+        // macOS 26 给侧栏滚动区顶部加了 ~30pt 玻璃条预留,把滚动区整体
+        // 上提回 70pt 条带下缘,否则首行被压到 ~120pt(参考图为 91pt)。
+        // 参考图实测:首行中心距窗口顶 91pt(70pt 条带 + 7pt 内边距 + 27/2)。
+        .scrollClipDisabled()
         .background(SidebarMaterial())
         .safeAreaInset(edge: .bottom) {
             setupCard
         }
     }
 
-    /// 侧栏底部圆角卡片 —「初始化 n/8」(SetupPlanViewController 入口) + 居中
-    /// 的「显示」胶囊按钮,与原应用一致独立于滚动内容、上方有分隔线。
+    /// 侧栏底部块 — 全宽分隔线 + 居中「初始化 n/8」(SetupPlanViewController 入口)
+    /// + 居中的「显示」按钮。参考图实测:分隔线以下整条底色比侧栏深
+    /// (windowBackgroundColor 30,30,30),「显示」为深灰圆角按钮。
     private var setupCard: some View {
         VStack(spacing: 0) {
             Divider()
-            VStack(spacing: 8) {
+            VStack(spacing: 7) {
                 Button {
                     ctx.activeSheet = .setupPlan
                 } label: {
                     HStack(spacing: 7) {
                         Image(systemName: "wrench.and.screwdriver")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 16))
+                            .foregroundStyle(Color.white.opacity(0.22))
                         Text("\(L10n.t("setup_text")) \(ctx.setupCompletedCount)/8")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 13))
                             .foregroundStyle(.primary)
-                        Spacer()
                     }
+                    .frame(height: 22)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
 
                 showMenu
-                    .frame(maxWidth: .infinity)
             }
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.white.opacity(0.045))
-            )
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.top, 15)
+            .padding(.bottom, 8)
+            .frame(maxWidth: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))
         }
     }
@@ -171,15 +171,14 @@ struct SidebarView: View {
             }
         } label: {
             Text(L10n.t("show_button"))
-                .font(.system(size: 11))
-                .padding(.horizontal, 16)
-                .padding(.vertical, 3)
-                .background(Capsule().fill(Color.white.opacity(0.10)))
+                .font(.system(size: 13))
+                .foregroundStyle(.primary)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .fixedSize()
-        .frame(height: 18)
+        .frame(width: 70, height: 27)
+        .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.075)))
+        .clipped()
     }
 
     @ViewBuilder
@@ -236,28 +235,46 @@ struct SidebarView: View {
         return Button {
             if isOpen { expanded.remove(group.key) } else { expanded.insert(group.key) }
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "chevron.right")
+            // 参考图实测:折叠箭头 ~26pt、组图标 ~44pt、组名 ~65pt(相对侧栏左缘)
+            HStack(spacing: 0) {
+                Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .bold))
-                    .rotationEffect(.degrees(isOpen ? 90 : 0))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 14)
+                    .rotationEffect(.degrees(isOpen ? 0 : -90))
+                    .foregroundStyle(Color.white.opacity(0.55))
+                    .frame(width: 13)
+                    .padding(.leading, 18)
                 Image(systemName: group.style.icon)
-                    .font(.system(size: 12.5))
+                    .font(.system(size: 14))
                     .foregroundStyle(group.style.tint)
+                    .frame(width: 20)
+                    .padding(.leading, 9)
                 Text(group.key == "safe_group" && !ctx.databaseName.isEmpty
                      ? ctx.databaseName
                      : L10n.db(group.key))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
+                    .padding(.leading, 5)
                 Spacer()
             }
-            .frame(height: 28)
+            .frame(height: 27)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 10)
+    }
+}
+
+/// 参考图的列间分割:5.5pt 凹槽(两侧 0.75pt 浅边线 #393836 + 中间 4pt 深槽 #1A1A1A)。
+struct ColumnGroove: View {
+    var body: some View {
+        HStack(spacing: 0) {
+            Rectangle().fill(Color.white.opacity(0.10)).frame(width: 0.75)
+            Rectangle().fill(Color(red: 26/255.0, green: 26/255.0, blue: 26/255.0))
+                .frame(width: 4)
+            Rectangle().fill(Color.white.opacity(0.10)).frame(width: 0.75)
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -337,11 +354,13 @@ private struct SidebarRowButton: View {
 
     var body: some View {
         Button(action: action) {
+            // 参考图实测:行高 27pt;图标 ~51.5pt、文字 ~73pt、计数右缘 ~205pt,
+            // 选中高亮为中性灰圆角矩形(非主题蓝)。
             HStack(spacing: 7) {
                 Image(systemName: system)
-                    .font(.system(size: 12.5))
+                    .font(.system(size: 14))
                     .foregroundStyle(selected ? Color.white : (tint ?? Color.primary))
-                    .frame(width: 17)
+                    .frame(width: 15)
                 Text(title)
                     .font(.system(size: 13, weight: selected ? .medium : .regular))
                     .foregroundStyle(selected ? .white : .primary)
@@ -350,18 +369,18 @@ private struct SidebarRowButton: View {
                 if let count {
                     Text("\(count)")
                         .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(selected ? Color.white.opacity(0.85) : .secondary)
+                        .foregroundStyle(selected ? Color.white.opacity(0.85) : Color.white.opacity(0.45))
                 }
             }
-            .padding(.leading, indent == 0 ? 10 : indent)
+            .padding(.leading, indent == 0 ? 10 : 41.5)
             .padding(.trailing, 10)
             .frame(height: 27)
             .contentShape(Rectangle())
             .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(selected ? Color.accentColor : Color.clear)
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(selected ? Color.white.opacity(0.16) : Color.clear)
             )
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 10)
         }
         .buttonStyle(.plain)
     }
@@ -384,6 +403,7 @@ struct CardListView: View {
             }
             list
         }
+        .background(Color.safeBackground)
         .overlay {
             if cards.isEmpty {
                 emptyState
@@ -395,50 +415,54 @@ struct CardListView: View {
         ctx.cards(for: ctx.selection, search: ctx.searchText)
     }
 
-    /// Search row: NSSearchField 风格深色圆角框在左;右侧是原应用的
-    /// 「黄钥匙 + 云朵」双段连体胶囊(生成器 / 云同步)。
+    /// Search row(参考图实测):搜索框 25.5pt 高、同底色 + 极淡描边;右侧
+    /// 「盾牌 + 云朵」全黄连体胶囊 59.5×27.5pt(生成器 / 云同步)。
     private var header: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 5) {
+        HStack(spacing: 0) {
+            HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.white.opacity(0.45))
                 TextField(L10n.t("search_text"), text: $ctx.searchText)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
+                    .foregroundStyle(.white)
                 if !ctx.searchText.isEmpty {
                     Button {
                         ctx.searchText = ""
                     } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.white.opacity(0.45))
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 8)
-            .frame(height: 26)
+            .padding(.horizontal, 9)
+            .frame(height: 25.5)
             .frame(maxWidth: .infinity)
-            .background(Color.white.opacity(0.06))
-            .clipShape(RoundedRectangle(cornerRadius: 7))
-            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.white.opacity(0.12), lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.012)))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.05), lineWidth: 1))
 
             syncCapsule
+                .padding(.leading, 8)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.leading, 8.5)
+        .padding(.trailing, 6.5)
+        .padding(.top, 2.5)
+        .padding(.bottom, 4.5)
     }
 
-    /// 双段胶囊:左半纯黄底白钥匙(密码生成器),右半深底白云(同步状态)。
+    /// 双段胶囊:整段黄底,左半白色盾牌(密码生成器),右半白云(同步状态)。
     private var syncCapsule: some View {
         HStack(spacing: 0) {
             Button {
                 ctx.activeSheet = .generator
             } label: {
-                Image(systemName: "key.fill")
-                    .font(.system(size: 11, weight: .bold))
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 16))
                     .foregroundStyle(.white)
-                    .frame(width: 28, height: 26)
-                    .background(Color(nsColor: .systemYellow))
+                    .frame(width: 29.5, height: 27.5)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -453,22 +477,17 @@ struct CardListView: View {
                 }
             } label: {
                 Image(systemName: "icloud.fill")
-                    .font(.system(size: 11))
+                    .font(.system(size: 15))
                     .foregroundStyle(.white)
-                    .frame(width: 28, height: 26)
-                    .background(Color.white.opacity(cloudConfigured ? 0.30 : 0.14))
+                    .frame(width: 30, height: 27.5)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
-            .fixedSize()
+            .frame(width: 30, height: 27.5)
             .help(L10n.t("sync_command"))
         }
+        .background(Color(red: 252.0/255.0, green: 178.0/255.0, blue: 59.0/255.0))
         .clipShape(Capsule())
-        .overlay(Capsule().stroke(Color.white.opacity(0.18), lineWidth: 1))
-    }
-
-    private var cloudConfigured: Bool {
-        settings.cloud != .none
     }
 
     /// clipboardToast — "Text copied to clipboard" bar at the top of the pane.
@@ -560,9 +579,10 @@ struct CardListView: View {
         VStack(spacing: 10) {
             Text(emptyStateText)
                 .font(.system(size: 13))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.white.opacity(0.55))
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 300)
+                .lineSpacing(3)
+                .frame(maxWidth: 280)
         }
         .padding()
     }

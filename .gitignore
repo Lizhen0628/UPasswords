@@ -5,3 +5,5 @@
 DerivedData/
 dist/
 *.log
+node_modules/
+.claude-screens/

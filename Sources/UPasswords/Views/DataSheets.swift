@@ -186,6 +186,7 @@ struct CompromisedSheet: View {
         SheetShell(
             title: L10n.t("compromised_passwords_title"),
             minWidth: 520,
+            minHeight: 400,
             okTitle: L10n.t("close_button"),
             onCancel: { dismiss() },
             onOk: { dismiss() },
@@ -230,6 +231,8 @@ struct CompromisedSheet: View {
                             .buttonStyle(.plain)
                         }
                     }
+                    // 滚动容器需显式高度,否则在 Sheet 里塌缩为 0
+                    .frame(height: 200)
                     .overlay {
                         if compromisedCards.isEmpty && !running {
                             Text(L10n.t("compromised_passwords_empty_state"))
@@ -576,6 +579,7 @@ struct SelectDatabaseSheet: View {
     var body: some View {
         SheetShell(
             title: L10n.t("select_database_title"),
+            minHeight: 300,
             okTitle: L10n.t("close_button"),
             onCancel: { dismiss() },
             onOk: { dismiss() },
@@ -599,7 +603,7 @@ struct SelectDatabaseSheet: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .frame(minHeight: 120)
+                .frame(height: 200)
             }
         )
     }
@@ -732,6 +736,7 @@ struct SetupPlanSheet: View {
         SheetShell(
             title: L10n.t("setup_text"),
             minWidth: 500,
+            minHeight: 460,
             okTitle: L10n.t("finish_button"),
             onCancel: { dismiss() },
             onOk: { dismiss() },
@@ -751,6 +756,8 @@ struct SetupPlanSheet: View {
                             }
                         }
                     }
+                    // List 是滚动容器,理想高度为 0,必须显式给高,否则弹窗塌缩
+                    .frame(height: 330)
                     ProgressView(value: Double(ctx.setupCompletedCount), total: 8)
                         .padding(.top, 8)
                 }
@@ -764,9 +771,8 @@ struct SetupPlanSheet: View {
         case .importPasswords: ctx.activeSheet = .importData
         case .touchID:
             ctx.settings.fastUnlock = true
-            if let pw = PasswordStore.loadPassword(databaseName: ctx.databaseName) {
-                PasswordStore.savePasswordForBiometric(pw, databaseName: ctx.databaseName)
-            }
+            // 已解锁状态下内存里有当前密码,用它保存生物识别副本
+            ctx.enableTouchIDUnlock()
             ctx.markSetupTaskDone(task)
         case .securitySettings: ctx.activeSheet = .preferences
         case .autoBackup:
@@ -850,6 +856,7 @@ struct PasswordHistorySheet: View {
         SheetShell(
             title: L10n.t("password_history_command"),
             minWidth: 520,
+            minHeight: 460,
             okTitle: L10n.t("close_button"),
             onCancel: { dismiss() },
             onOk: { dismiss() },
@@ -881,6 +888,8 @@ struct PasswordHistorySheet: View {
                                 }
                             }
                         }
+                        // 滚动容器需显式高度,否则在 Sheet 里塌缩为 0
+                        .frame(height: 320)
                     }
                 }
             }

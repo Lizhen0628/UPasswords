@@ -457,6 +457,8 @@
 "tools_menu" = "Tools";
 "totp_empty_state" = "There will be web accounts with one-time passwords to generate authentication codes.";
 "touch_id_button" = "Login with Touch ID";
+"touch_id_unlock_reason" = "Use Touch ID to unlock your database";
+"touch_id_not_set_hint" = "Touch ID unlock is not set up yet. Enable it in Preferences or Setup.";
 "touch_id_login_query" = "Enable login with Touch ID?";
 "touch_id_login_warning" = "Touch ID login does not substitute your password. You might need to enter your password again in a case of Touch ID settings reset. Remember your password!";
 "touch_id_task" = "Login with Touch ID";

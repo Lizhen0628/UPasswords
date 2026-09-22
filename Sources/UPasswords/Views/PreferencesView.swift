@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// The Settings window — tabbed like the original's preferences panes:
 /// Appearance / Security / AutoBackup / Autofill (+ lock screen / sync).
@@ -103,8 +104,19 @@ struct SecurityPane: View {
             Toggle(L10n.t("lock_in_background_button"), isOn: $settings.lockInBackground)
             Toggle(L10n.t("lock_if_window_closed_button"), isOn: $settings.lockIfWindowClosed)
             Divider()
-            Toggle(L10n.t("fast_unlock_setting"), isOn: $settings.fastUnlock)
-                .disabled(!ctx.touchIDAvailable)
+            Toggle(L10n.t("fast_unlock_setting"), isOn: Binding(
+                get: { settings.fastUnlock },
+                set: { on in
+                    settings.fastUnlock = on
+                    if on {
+                        // 开启时保存当前数据库密码的生物识别副本
+                        ctx.enableTouchIDUnlock()
+                    } else {
+                        PasswordStore.removeBiometricPassword(databaseName: ctx.databaseName)
+                    }
+                }
+            ))
+            .disabled(!ctx.touchIDAvailable)
             if !ctx.touchIDAvailable {
                 Text(L10n.t("not_recommended_text") + ": Touch ID unavailable")
                     .font(.caption).foregroundStyle(.secondary)
@@ -153,6 +165,17 @@ struct AutoBackupPane: View {
                 Text("~/Library/Application Support/UPasswords/Backups")
                     .font(.caption).foregroundStyle(.secondary)
                     .textSelection(.enabled)
+            }
+            // 开发期排障入口:日志文件位置 + 在 Finder 中打开
+            LabeledRow(label: L10n.t("logs_location_setting", fallback: "日志")) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(Log.fileURL.path)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    Button(L10n.t("open_logs_folder_button", fallback: "打开日志文件夹")) {
+                        NSWorkspace.shared.open(Log.dir)
+                    }
+                }
             }
             HStack {
                 Button(L10n.t("backup_now_button")) { ctx.backupNow() }

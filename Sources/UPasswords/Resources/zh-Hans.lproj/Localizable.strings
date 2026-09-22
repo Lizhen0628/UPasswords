@@ -457,6 +457,8 @@
 "tools_menu" = "工具";
 "totp_empty_state" = "这里会显示带有一次性密码的网络账号，用于生成验证码。";
 "touch_id_button" = "使用 Touch ID 登录";
+"touch_id_unlock_reason" = "使用 Touch ID 解锁数据库";
+"touch_id_not_set_hint" = "尚未启用 Touch ID 快速解锁：请在偏好设置或「初始化」中开启。";
 "touch_id_login_query" = "启用Touch ID登录吗？";
 "touch_id_login_warning" = "Touch ID登录不能代替您的密码。您可能需要在Touch ID设置复位的情况下再次输入密码。记住你的密码！";
 "touch_id_task" = "使用 Touch ID 登录";
@@ -480,7 +482,7 @@
 "use_for_autofill_button" = "用于自动填充";
 "use_website_icon_command" = "使用网站图标";
 "use_website_icons_setting" = "使用网站图标";
-"user_empty_state" = "这里还没有任何内容。点击“添加”按钮，在这里添加一个密码或一张信用卡。";
+"user_empty_state" = "There's nothing here yet. Click the Plus button and add a password or a credit card here.";
 "user_name_prompt" = "用户名:";
 "version_text" = "版本";
 "view_image_title" = "查看图片";

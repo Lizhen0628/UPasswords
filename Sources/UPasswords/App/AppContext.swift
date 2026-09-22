@@ -15,14 +15,26 @@ final class AppContext: ObservableObject {
     }
 
     // MARK: - Published state
-    @Published var phase: Phase = .setup
+    @Published var phase: Phase = .setup {
+        didSet { Log.info("lifecycle", "phase \(oldValue) → \(phase)") }
+    }
     @Published var database = PasswordDatabase()
-    @Published var databaseName: String = ""
+    @Published var databaseName: String = "" {
+        didSet {
+            guard oldValue != databaseName else { return }
+            Log.info("lifecycle", "databaseName \"\(oldValue.isEmpty ? "∅" : oldValue)\" → \"\(databaseName.isEmpty ? "∅" : databaseName)\"")
+        }
+    }
     @Published var selection: SidebarSelection = .special(.allCards)
     @Published var selectedCardId: Int? = nil
     @Published var searchText: String = ""
     @Published var editDraft: EditCardModel? = nil
-    @Published var activeSheet: AppSheet? = nil
+    @Published var activeSheet: AppSheet? = nil {
+        didSet {
+            guard oldValue != activeSheet else { return }
+            Log.info("ui", "sheet \(oldValue.map { "open \($0.id)" } ?? "nil") → \(activeSheet.map { "open \($0.id)" } ?? "close")")
+        }
+    }
     @Published var syncState: SyncState = .disabled
     @Published var lastSync: Date? = nil
     @Published var lastSyncFailed: Date? = nil
@@ -51,10 +63,74 @@ final class AppContext: ObservableObject {
     // MARK: - Bootstrap
 
     private func bootstrapPhase() {
+        Log.info("lifecycle", "bootstrap: mainDatabaseName=\"\(store.mainDatabaseName)\" databases=\(store.list().map(\.name))")
+        #if DEBUG
+        // 复现「锁定→解锁」过渡:UP_SCREENSHOT_BOOT=2 时建库(如有)→启动进锁定态,
+        // 3 秒后自动解锁(自动化测试用,release 不编译)。
+        if ProcessInfo.processInfo.environment["UP_SCREENSHOT_BOOT"] == "2" {
+            Log.info("lifecycle", "UP_SCREENSHOT_BOOT=2 (debug automation)")
+            if !store.exists("TestDB") {
+                _ = try? store.create(name: "TestDB", password: "screenshot")
+                store.mainDatabaseName = "TestDB"
+            }
+            databaseName = "TestDB"
+            phase = .locked
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                guard let self, self.phase == .locked else { return }
+                // 二进制重建后钥匙串 ACL 会拒绝读取,回退到建库密码
+                let pw = PasswordStore.loadPassword(databaseName: self.databaseName) ?? "screenshot"
+                if PasswordStore.loadPassword(databaseName: self.databaseName) == nil {
+                    Log.warn("keychain", "stored password unreadable (ACL/signature change?) → fallback to build password")
+                }
+                try? self.unlock(name: self.databaseName, password: pw)
+            }
+            return
+        }
+        #endif
+        #if DEBUG
+        // 截图/自动化专用:UP_SCREENSHOT_BOOT=1 时跳过向导直接建库解锁。
+        // 仅 DEBUG 构建生效,release 行为不变。
+        if ProcessInfo.processInfo.environment["UP_SCREENSHOT_BOOT"] == "1" {
+            Log.info("lifecycle", "UP_SCREENSHOT_BOOT=1 (screenshot automation)")
+            UserDefaults.standard.set("zh-Hans", forKey: "app.language")
+            for key in UserDefaults.standard.dictionaryRepresentation().keys
+            where key.hasPrefix("setup.done.") {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+            settings.showWhatsNewAtStartup = false
+            settings.autoLockSeconds = 0
+            settings.fastUnlock = false
+            let name = "Safe"
+            if !store.exists(name) {
+                do {
+                    // 走与向导「继续」相同的 createDatabase 路径,复现 setupPlan 弹窗
+                    try createDatabase(name: name, password: "screenshot", touchID: false)
+                } catch {
+                    FileHandle.standardError.write(Data("[UP_SCREENSHOT_BOOT] create failed: \(error)\n".utf8))
+                }
+                // createDatabase 内部已 unlock + 弹出 setupPlan
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    NSApp.activate(ignoringOtherApps: true)
+                    for w in NSApp.windows where w.frame.width > 800 {
+                        w.setFrameOrigin(NSPoint(x: 120, y: 140))
+                        w.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+                        w.makeKeyAndOrderFront(nil)
+                    }
+                }
+                Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
+                    NSApp.setActivationPolicy(.regular)
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                return
+            }
+        }
+        #endif
         let dbs = store.list()
         if dbs.isEmpty {
+            Log.info("lifecycle", "bootstrap → phase=setup (no databases)")
             phase = .setup
         } else {
+            Log.info("lifecycle", "bootstrap → phase=locked (databases present)")
             phase = .locked
             databaseName = store.exists(store.mainDatabaseName)
                 ? store.mainDatabaseName
@@ -65,7 +141,13 @@ final class AppContext: ObservableObject {
     // MARK: - Setup / lifecycle (SetupWindowController → DatabaseManager)
 
     func createDatabase(name: String, password: String, touchID: Bool) throws {
-        try store.create(name: name, password: password)
+        Log.info("lifecycle", "createDatabase \"\(name)\" touchID=\(touchID) (password length \(password.count))")
+        do {
+            try store.create(name: name, password: password)
+        } catch {
+            Log.error("lifecycle", "createDatabase \"\(name)\" failed: \(error)")
+            throw error
+        }
         store.mainDatabaseName = name
         if touchID && PasswordStore.biometricAvailable() {
             PasswordStore.savePasswordForBiometric(password, databaseName: name)
@@ -75,7 +157,13 @@ final class AppContext: ObservableObject {
     }
 
     func unlock(name: String, password: String) throws {
-        database = try store.load(name: name, password: password)
+        Log.info("lifecycle", "unlock \"\(name)\" (password length \(password.count))")
+        do {
+            database = try store.load(name: name, password: password)
+        } catch {
+            Log.warn("lifecycle", "unlock \"\(name)\" failed: \(error)")
+            throw error
+        }
         databaseName = name
         self.password = password
         phase = .unlocked
@@ -83,6 +171,7 @@ final class AppContext: ObservableObject {
         failedUnlockAttempts = 0
         selection = .special(.allCards)
         selectedCardId = database.activeCards.first?.id
+        Log.info("lifecycle", "unlocked \"\(name)\": \(database.cards.count) cards, \(database.labels.count) labels")
         scheduleAutoBackupIfNeeded()
         markSetupTaskDoneIf(.cloudSync, when: settings.cloud != .none)
         markSetupTaskDoneIf(.autoBackup, when: settings.autoBackupEnabled)
@@ -106,6 +195,7 @@ final class AppContext: ObservableObject {
     /// LockWindowController + LockedState.enter
     func lock() {
         guard phase == .unlocked else { return }
+        Log.info("lifecycle", "lock \"\(databaseName)\"")
         password = ""
         phase = .locked
         activeSheet = nil
@@ -116,16 +206,45 @@ final class AppContext: ObservableObject {
         PasswordStore.biometricAvailable()
     }
 
-    /// LockedState biometric unlock: prompts Touch ID then unlocks.
+    /// 当前数据库是否已启用 Touch ID 快速解锁(存在生物识别密码副本)。
+    var hasBiometricItem: Bool {
+        PasswordStore.hasBiometricItem(databaseName: databaseName)
+    }
+
+    /// 启用 Touch ID 快速解锁:把当前(已解锁状态下的)数据库密码存为副本。
+    /// 偏好设置开关和初始化清单共用。
+    func enableTouchIDUnlock() {
+        guard phase == .unlocked, !password.isEmpty else {
+            Log.warn("keychain", "enableTouchIDUnlock skipped (phase=\(phase), password empty=\(password.isEmpty))")
+            return
+        }
+        PasswordStore.savePasswordForBiometric(password, databaseName: databaseName)
+    }
+
+    /// LockedState biometric unlock: prompts Touch ID, then unlocks.
     func unlockWithTouchID() {
-        guard phase == .locked, settings.fastUnlock,
-              let pw = PasswordStore.biometricPassword(databaseName: databaseName) else { return }
-        try? unlock(name: databaseName, password: pw)
+        guard phase == .locked, settings.fastUnlock else {
+            Log.debug("keychain", "unlockWithTouchID skipped (phase=\(phase), fastUnlock=\(settings.fastUnlock))")
+            return
+        }
+        Log.info("keychain", "Touch ID unlock requested for \"\(databaseName)\"")
+        PasswordStore.biometricPassword(databaseName: databaseName) { [weak self] pw in
+            guard let self else { return }
+            if let pw {
+                DispatchQueue.main.async {
+                    do { try self.unlock(name: self.databaseName, password: pw) }
+                    catch { Log.warn("keychain", "Touch ID unlock failed at load: \(error)") }
+                }
+            } else {
+                Log.warn("keychain", "Touch ID evaluation failed or cancelled")
+            }
+        }
     }
 
     func registerFailedAttempt() {
         failedUnlockAttempts += 1
         let limit = settings.selfDestructAttempts
+        Log.warn("lifecycle", "failed unlock attempt #\(failedUnlockAttempts)" + (limit > 0 ? " (self-destruct at \(limit))" : ""))
         if limit > 0, failedUnlockAttempts >= limit {
             eraseAllData()
         }
@@ -133,6 +252,7 @@ final class AppContext: ObservableObject {
 
     /// erase_data_command — removes local data (cloud copies untouched).
     func eraseAllData() {
+        Log.warn("lifecycle", "ERASE ALL DATA (self-destruct or manual)")
         for db in store.list() {
             try? store.delete(name: db.name)
         }
@@ -149,6 +269,7 @@ final class AppContext: ObservableObject {
         do {
             try store.save(database, name: databaseName, password: password)
         } catch {
+            Log.error("db", "save \"\(databaseName)\" failed: \(error)")
             AppToast.shared.show(error.localizedDescription)
         }
     }
@@ -474,7 +595,10 @@ final class AppContext: ObservableObject {
     // MARK: - Change password (SetPasswordSheetController / changePassword:)
 
     func changePassword(current: String, new: String) throws {
-        guard current == password else { throw DatabaseCipher.CipherError(message: L10n.t("wrong_password_error")) }
+        guard current == password else {
+            Log.warn("db", "changePassword \"\(databaseName)\" failed: wrong current password")
+            throw DatabaseCipher.CipherError(message: L10n.t("wrong_password_error"))
+        }
         // re-encrypt under the new password
         try store.save(database, name: databaseName, password: new)
         PasswordStore.savePassword(new, databaseName: databaseName)
@@ -482,6 +606,7 @@ final class AppContext: ObservableObject {
             PasswordStore.savePasswordForBiometric(new, databaseName: databaseName)
         }
         password = new
+        Log.info("db", "changePassword \"\(databaseName)\" ok (re-encrypted)")
     }
 
     // MARK: - Info
@@ -504,8 +629,10 @@ final class AppContext: ObservableObject {
         save()
         do {
             try store.backup(name: databaseName, password: password)
+            Log.info("backup", "manual backup of \"\(databaseName)\" ok")
             AppToast.shared.show(L10n.t("database_saved_message") + " " + L10n.t("backup_command"))
         } catch {
+            Log.error("backup", "manual backup of \"\(databaseName)\" failed: \(error)")
             AppToast.shared.show(error.localizedDescription)
         }
     }
@@ -514,9 +641,17 @@ final class AppContext: ObservableObject {
         guard settings.autoBackupEnabled, settings.backupIntervalDays > 0 else { return }
         let last = UserDefaults.standard.double(forKey: "backup.last.\(databaseName)")
         let interval = Double(settings.backupIntervalDays) * 86400
-        if Date().timeIntervalSince1970 - last >= interval {
-            try? store.backup(name: databaseName, password: password)
+        let elapsed = Date().timeIntervalSince1970 - last
+        guard elapsed >= interval else {
+            Log.debug("backup", "auto-backup not due (elapsed \(Int(elapsed))s < interval \(Int(interval))s)")
+            return
+        }
+        do {
+            try store.backup(name: databaseName, password: password)
             UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "backup.last.\(databaseName)")
+            Log.info("backup", "auto backup of \"\(databaseName)\" ok")
+        } catch {
+            Log.error("backup", "auto backup of \"\(databaseName)\" failed: \(error)")
         }
     }
 
@@ -525,34 +660,43 @@ final class AppContext: ObservableObject {
         guard settings.cloud == .webdav else {
             if settings.cloud == .none {
                 syncState = .disabled
+                Log.debug("sync", "sync skipped: cloud disabled")
                 AppToast.shared.show(L10n.t("sync_disabled_state"))
             } else {
+                Log.debug("sync", "sync skipped: cloud=\(settings.cloud) not configured")
                 AppToast.shared.show(L10n.t("not_configured_state"))
             }
             return
         }
+        Log.info("sync", "sync \"\(databaseName)\" started (webdav)")
         syncState = .syncing
         save()
         let driver = WebDavDriver(settings: settings.webdav, databaseName: databaseName)
         do {
             try await driver.testConnection()
+            Log.debug("sync", "webdav connection ok")
             let remoteData = try await driver.download()
             var local = database
             if let remoteData {
                 let plain = try DatabaseCipher.decryptedData(remoteData, password: password)
                 let remote = try PasswordDatabase.parse(plain)
+                Log.info("sync", "remote: \(remote.cards.count) cards, \(remote.labels.count) labels; local: \(local.cards.count) cards — merging")
                 local.merge(with: remote)
                 database = local
                 save()
+            } else {
+                Log.info("sync", "no remote database yet — uploading local")
             }
             let out = try DatabaseCipher.encryptedData(database.xmlData(), password: password)
             try await driver.upload(out)
             lastSync = Date()
             syncState = .idle
+            Log.info("sync", "sync \"\(databaseName)\" finished (uploaded \(out.count)B)")
             AppToast.shared.show(L10n.t("last_sync_completed_prompt") + " " + DateFormatter.localizedString(from: lastSync!, dateStyle: .short, timeStyle: .short))
         } catch {
             lastSyncFailed = Date()
             syncState = .error(error.localizedDescription)
+            Log.error("sync", "sync \"\(databaseName)\" failed: \(error)")
             AppToast.shared.show("\(L10n.t("sync_error")): \(error.localizedDescription)")
         }
     }
@@ -574,6 +718,7 @@ final class AppContext: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] hidden in
                 if hidden == true, self?.settings.lockInBackground == true {
+                    Log.info("autolock", "app hidden → locking (lockInBackground)")
                     self?.lock()
                 }
             }
@@ -582,7 +727,9 @@ final class AppContext: ObservableObject {
 
     private func autoLockTick() {
         guard phase == .unlocked, settings.autoLockSeconds > 0 else { return }
-        if Date().timeIntervalSince(lastActivity) >= Double(settings.autoLockSeconds) {
+        let idle = Date().timeIntervalSince(lastActivity)
+        if idle >= Double(settings.autoLockSeconds) {
+            Log.info("autolock", "idle \(Int(idle))s ≥ autoLockSeconds=\(settings.autoLockSeconds) → locking")
             lock()
         }
     }

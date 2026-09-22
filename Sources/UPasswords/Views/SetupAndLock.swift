@@ -56,7 +56,12 @@ struct LockWindowView: View {
             HStack(spacing: 10) {
                 if ctx.touchIDAvailable && settings.fastUnlock {
                     Button {
-                        ctx.unlockWithTouchID()
+                        if ctx.hasBiometricItem {
+                            ctx.unlockWithTouchID()
+                        } else {
+                            // 生物识别副本不存在(向导时未勾选/旧版本保存失败)
+                            error = L10n.t("touch_id_not_set_hint")
+                        }
                     } label: {
                         HStack(spacing: 7) {
                             Image(systemName: "touchid")
@@ -68,6 +73,7 @@ struct LockWindowView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .help(L10n.t("fast_unlock_setting"))
                 }
                 if ctx.dbsInfo().count > 1 {
                     Button(L10n.t("select_database_title")) {
@@ -95,10 +101,23 @@ struct LockWindowView: View {
         .background(LockTextures.gradient(for: settings.lockTexture).ignoresSafeArea())
         .background(WindowChromeConfigurator(mode: .lock))
         .preferredColorScheme(nil)
+        #if DEBUG
+        // 复现锁屏→解锁过渡用:直接用钥匙串里存的密码解锁(自动化测试)
+        .background(
+            Button("debug-unlock") {
+                if let pw = PasswordStore.loadPassword(databaseName: ctx.databaseName) {
+                    try? ctx.unlock(name: ctx.databaseName, password: pw)
+                }
+            }
+            .keyboardShortcut("u", modifiers: [.command, .shift])
+            .frame(width: 0, height: 0)
+            .opacity(0)
+        )
+        #endif
         .onAppear {
             fieldFocused = true
-            // 与 Safe 一致:进入锁屏自动弹出一次 Touch ID
-            if !touchIDAsked, ctx.touchIDAvailable, settings.fastUnlock {
+            // 与 Safe 一致:进入锁屏自动弹出一次 Touch ID(需已保存生物识别副本)
+            if !touchIDAsked, ctx.touchIDAvailable, settings.fastUnlock, ctx.hasBiometricItem {
                 touchIDAsked = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     ctx.unlockWithTouchID()

@@ -1,5 +1,11 @@
 import SwiftUI
 
+/// 参考图采样的统一窗口底色(标题栏/侧栏/列表/详情一致,原应用为
+/// NSVisualEffectView windowBackground 材质色,比系统 windowBackgroundColor 略暖)。
+extension Color {
+    static let safeBackground = Color(red: 35.0/255.0, green: 34.0/255.0, blue: 32.0/255.0)
+}
+
 /// Card color palette resolution (XML `color` attribute → SwiftUI color).
 extension CardColor {
     var color: Color {
@@ -131,6 +137,9 @@ private struct ToastActivityModifier: ViewModifier {
 struct SheetShell<Content: View>: View {
     let title: String
     var minWidth: CGFloat = 400
+    /// 弹窗最小高度:含 List/滚动区的内容必须给足高度,
+    /// 否则滚动容器理想高度为 0,弹窗塌缩成只剩进度条/按钮。
+    var minHeight: CGFloat = 120
     var okTitle: String? = nil
     var okDisabled: Bool = false
     var search: Binding<String>? = nil
@@ -167,7 +176,7 @@ struct SheetShell<Content: View>: View {
             }
             .padding(10)
         }
-        .frame(minWidth: minWidth, minHeight: 120)
+        .frame(minWidth: minWidth, minHeight: minHeight)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { onAppearBody?() }
     }
