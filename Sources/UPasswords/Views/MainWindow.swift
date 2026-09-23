@@ -354,8 +354,9 @@ private struct SidebarRowButton: View {
 
     var body: some View {
         Button(action: action) {
-            // 参考图实测:行高 27pt;图标 ~51.5pt、文字 ~73pt、计数右缘 ~205pt,
-            // 选中高亮为中性灰圆角矩形(非主题蓝)。
+            // 参考图实测:行高 27pt;计数右缘 ~205pt,选中高亮为中性灰圆角矩形。
+            // 子行(组内选项)起始位置再右移一档(~65pt,与父级文字对齐),
+            // 明确体现「组 → 子选项」层级。
             HStack(spacing: 7) {
                 Image(systemName: system)
                     .font(.system(size: 14))
@@ -372,7 +373,7 @@ private struct SidebarRowButton: View {
                         .foregroundStyle(selected ? Color.white.opacity(0.85) : Color.white.opacity(0.45))
                 }
             }
-            .padding(.leading, indent == 0 ? 10 : 41.5)
+            .padding(.leading, indent == 0 ? 10 : 55)
             .padding(.trailing, 10)
             .frame(height: 27)
             .contentShape(Rectangle())
