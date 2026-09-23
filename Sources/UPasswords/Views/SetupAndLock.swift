@@ -6,6 +6,7 @@ import LocalAuthentication
 /// 红绿灯占位 + 居中标题 + 可拖动区。红绿灯由系统绘制在条带左上角。
 struct PhaseTitleBar: View {
     var title: String
+    var showsDivider = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,112 +20,72 @@ struct PhaseTitleBar: View {
             }
             .frame(height: 27)
             .background(WindowDragArea())
-            Divider()
+            if showsDivider { Divider() }
         }
     }
 }
 
-/// LockWindowController — Safe 锁屏 1:1:普通标题栏小窗(500×380),
-/// 应用图标(黄圆+白盾+钥匙孔)居中;「输入密码:」左对齐 + 输入框与
-/// 「确定」同行 + 「显示密码」复选框;底部左侧 Touch ID、右侧「?」帮助。
+/// LockWindowController — 系统锁定风格:应用图标 + Touch ID 徽章居中,
+/// 「“xx” 已锁定」标题、说明文字、居中密码框(回车解锁),底部无按钮。
 struct LockWindowView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
 
     @State private var password = ""
-    @State private var showPassword = false
     @State private var error = ""
-    @State private var shake = false
     @State private var touchIDAsked = false
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
-            PhaseTitleBar(title: L10n.tBranded("app_title"))
-            Spacer()
+            PhaseTitleBar(title: "", showsDivider: false)
 
-            appIcon
+            // 像素级蓝图(参考 982×780 → 500×380,比例 ~0.51):
+            // 图标块顶 y≈102,方块 80×80,角标圆 53 右下外挂;
+            // 标题中心 y≈215(16pt bold),副标题中心 y≈244(12pt);
+            // 密码框 190×27 @ y≈273 居中,底部余白 ~80。
+            Spacer().frame(height: 75)
 
-            Spacer().frame(height: 38)
+            iconCluster
 
-            VStack(alignment: .leading, spacing: 7) {
-                Text(L10n.t("enter_password_prompt"))
-                    .font(.system(size: 13))
-                    .foregroundStyle(textStyle)
-                HStack(spacing: 8) {
-                    passwordField
-                        .textFieldStyle(.roundedBorder)
-                        .focused($fieldFocused)
-                        .onSubmit(unlock)
-                    Button(L10n.t("ok_button"), action: unlock)
-                        .buttonStyle(.borderedProminent)
-                        .keyboardShortcut(.defaultAction)
-                }
-                Toggle(L10n.t("show_password_button"), isOn: $showPassword)
+            Spacer().frame(height: 10)
+
+            Text("“UPasswords” 已锁定")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+
+            Spacer().frame(height: 13)
+
+            Text(subtitle)
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.87))
+
+            Spacer().frame(height: 21)
+
+            passwordField
+
+            if !error.isEmpty {
+                Text(error)
                     .font(.system(size: 12))
-                    .toggleStyle(.checkbox)
-                    .foregroundStyle(textStyle)
-                if !error.isEmpty {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
+                    .foregroundStyle(.red)
+                    .padding(.top, 8)
             }
-            .frame(width: 320)
-            .offset(x: shake ? -8 : 0)
-            .animation(.default.repeatCount(3, autoreverses: true), value: shake)
 
             Spacer()
-
-            HStack(spacing: 10) {
-                if ctx.touchIDAvailable && settings.fastUnlock {
-                    Button {
-                        if ctx.hasBiometricItem {
-                            ctx.unlockWithTouchID()
-                        } else {
-                            // 生物识别副本不存在(向导时未勾选/旧版本保存失败)
-                            error = L10n.t("touch_id_not_set_hint")
-                        }
-                    } label: {
-                        HStack(spacing: 7) {
-                            Image(systemName: "touchid")
-                                .font(.system(size: 21))
-                            Text(L10n.t("touch_id_button"))
-                                .font(.system(size: 13))
-                        }
-                        .foregroundStyle(textStyle.opacity(0.85))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help(L10n.t("fast_unlock_setting"))
-                }
-                if ctx.dbsInfo().count > 1 {
-                    Button(L10n.t("select_database_title")) {
-                        ctx.activeSheet = .selectDatabase
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundStyle(textStyle.opacity(0.7))
-                }
-                Spacer()
-                Button {
-                    NSApp.showHelp(nil)
-                } label: {
-                    Image(systemName: "questionmark.circle")
-                        .font(.system(size: 16))
-                        .foregroundStyle(textStyle.opacity(0.6))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 14)
-            .padding(.bottom, 10)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(.container, edges: .top)   // 标题条贴窗口顶(红绿灯叠在其上)
-        .background(LockTextures.gradient(for: settings.lockTexture).ignoresSafeArea())
+        .background(
+            // 参考图背景:顶 #393A39 → 底 #272A2B 的对角微渐变
+            LinearGradient(
+                colors: [Color(red: 0.224, green: 0.227, blue: 0.224),
+                         Color(red: 0.153, green: 0.165, blue: 0.169)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+        )
         .background(WindowChromeConfigurator(mode: .lock))
-        .preferredColorScheme(nil)
+        .preferredColorScheme(.dark)
         #if DEBUG
         // 复现锁屏→解锁过渡用:直接用钥匙串里存的密码解锁(自动化测试)
         .background(
@@ -150,40 +111,75 @@ struct LockWindowView: View {
         }
     }
 
-    @ViewBuilder
+    /// 居中密码框(参考实测:宽 190、总高 27、圆角 7、描边钢蓝 rgb(49,112,156)、
+    /// 填充 #252523、placeholder #5B5B59 居中),回车解锁。
     private var passwordField: some View {
-        if showPassword {
-            TextField("", text: $password)
-        } else {
-            SecureField("", text: $password)
-        }
-    }
-
-    /// Safe 图标:黄色径向圆 + 白盾 + 黑钥匙孔。
-    private var appIcon: some View {
         ZStack {
-            Circle()
-                .fill(LinearGradient(
-                    colors: [Color(red: 1.0, green: 0.86, blue: 0.38),
-                             Color(red: 0.97, green: 0.72, blue: 0.18)],
-                    startPoint: .top, endPoint: .bottom))
-            Image(systemName: "shield.fill")
-                .font(.system(size: 40))
-                .foregroundStyle(.white)
-            VStack(spacing: 1) {
-                Circle().fill(.black).frame(width: 10, height: 10)
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(.black)
-                    .frame(width: 4.5, height: 11)
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(red: 0.145, green: 0.145, blue: 0.137))
+            if password.isEmpty {
+                Text(placeholder)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.32))
             }
-            .offset(y: 2)
+            SecureField("", text: $password)
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.center)
+                .font(.system(size: 12))
+                .foregroundStyle(.white)
+                .focused($fieldFocused)
+                .onSubmit(unlock)
         }
-        .frame(width: 78, height: 78)
-        .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+        .frame(width: 190, height: 27)
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(red: 0.19, green: 0.44, blue: 0.61),
+                        lineWidth: fieldFocused ? 2 : 1)
+                .shadow(color: Color(red: 0.19, green: 0.44, blue: 0.61).opacity(0.35), radius: 3)
+        )
     }
 
-    private var textStyle: Color {
-        settings.lockWhiteText ? .white : .primary
+    /// 应用图标(保留自家 logo)+ 右下角 Touch ID 徽章(仅设备支持时显示)。
+    /// 参考实测:方块 80×80 圆角 ~18,角标圆 53,粉 #FF375F,暗底 #1E1E1E,
+    /// 徽章中心相对方块中心偏移 (+39.5, +26.5)。
+    private var iconCluster: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(red: 0.118, green: 0.118, blue: 0.118))
+                .frame(width: 80, height: 80)
+                .overlay(
+                    Image(nsImage: NSApp.applicationIconImage)
+                        .resizable()
+                        .frame(width: 68, height: 68)
+                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                )
+                .shadow(color: .black.opacity(0.45), radius: 8, y: 3)
+
+            if ctx.touchIDAvailable {
+                ZStack {
+                    Circle()
+                        .fill(Color(red: 0.118, green: 0.118, blue: 0.118))
+                    Image(systemName: "touchid")
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundStyle(Color(red: 1.0, green: 0.216, blue: 0.373))
+                }
+                .frame(width: 53, height: 53)
+                .overlay(Circle().stroke(Color(red: 0.224, green: 0.227, blue: 0.224), lineWidth: 4))
+                .offset(x: 39.5, y: 26.5)
+            }
+        }
+    }
+
+    /// 说明文字:支持触控 ID 时与参考文案一致。
+    private var subtitle: String {
+        if ctx.touchIDAvailable && settings.fastUnlock {
+            return "使用触控 ID 或输入 UPasswords 的密码解锁。"
+        }
+        return "输入 UPasswords 的密码解锁。"
+    }
+
+    private var placeholder: String {
+        L10n.t("enter_password_prompt").trimmingCharacters(in: CharacterSet(charactersIn: ":： "))
     }
 
     private func unlock() {
@@ -194,7 +190,6 @@ struct LockWindowView: View {
         } catch let err {
             error = err.localizedDescription
             ctx.registerFailedAttempt()
-            shake.toggle()
             password = ""
         }
     }

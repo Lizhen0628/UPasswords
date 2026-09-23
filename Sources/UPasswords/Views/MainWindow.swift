@@ -54,7 +54,10 @@ struct MainWindowView: View {
         .ignoresSafeArea(.all, edges: .top)   // 隐藏标题栏后仍有 ~8pt 残留安全区,条带需贴顶
         .background(WindowChromeConfigurator(mode: .main))
         .navigationTitle(ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName)
-        .sheet(item: $ctx.editDraft) { draft in
+        .sheet(item: Binding(
+            get: { ctx.editDraft },
+            set: { ctx.editDraft = $0 }   // 打开/关闭的通知由 editDraft.didSet 负责
+        )) { draft in
             EditCardSheet(draft: Binding(
                 get: { ctx.editDraft ?? draft },
                 set: { ctx.editDraft = $0 }
@@ -261,17 +264,31 @@ struct SidebarView: View {
     }
 }
 
-/// 参考图的列间分割:5.5pt 凹槽(两侧 0.75pt 浅边线 #393836 + 中间 4pt 深槽 #1A1A1A)。
+/// 参考图的分隔凹槽:两侧 0.75pt 浅边线(white 10%)+ 中间 4pt 深槽 #1A1A1A,
+/// 总宽/高 5.5pt。竖向用于列间;横向(horizontal: true)用于工具栏条带底缘。
 struct ColumnGroove: View {
+    var horizontal = false
+
     var body: some View {
-        HStack(spacing: 0) {
-            Rectangle().fill(Color.white.opacity(0.10)).frame(width: 0.75)
-            Rectangle().fill(Color(red: 26/255.0, green: 26/255.0, blue: 26/255.0))
-                .frame(width: 4)
-            Rectangle().fill(Color.white.opacity(0.10)).frame(width: 0.75)
+        Group {
+            if horizontal {
+                VStack(spacing: 0) {
+                    Rectangle().fill(Color.white.opacity(0.10)).frame(height: 0.75)
+                    Rectangle().fill(Self.dark).frame(height: 4)
+                    Rectangle().fill(Color.white.opacity(0.10)).frame(height: 0.75)
+                }
+            } else {
+                HStack(spacing: 0) {
+                    Rectangle().fill(Color.white.opacity(0.10)).frame(width: 0.75)
+                    Rectangle().fill(Self.dark).frame(width: 4)
+                    Rectangle().fill(Color.white.opacity(0.10)).frame(width: 0.75)
+                }
+            }
         }
         .allowsHitTesting(false)
     }
+
+    static let dark = Color(red: 26/255.0, green: 26/255.0, blue: 26/255.0)
 }
 
 /// LabelListCell — 16pt icon, name, right-aligned count (weight 1000 in nib).
@@ -446,45 +463,33 @@ struct CardListView: View {
         }
         .padding(.leading, 8.5)
         .padding(.trailing, 6.5)
-        .padding(.top, 2.5)
-        .padding(.bottom, 4.5)
+        .padding(.top, 6)
+        .padding(.bottom, 6)
     }
 
-    /// 双段胶囊:整段黄底,左半白色盾牌(密码生成器),右半白云(同步状态)。
+    /// 黄色胶囊:仅云同步菜单(密码生成器已上移到顶部工具栏)。
+    /// 黄底尺寸随内容自适应;搜索框用 maxWidth:.infinity 自动占满剩余宽度。
     private var syncCapsule: some View {
-        HStack(spacing: 0) {
-            Button {
-                ctx.activeSheet = .generator
-            } label: {
-                Image(systemName: "lock.shield.fill")
-                    .font(.system(size: 16))
-                    .foregroundStyle(.white)
-                    .frame(width: 29.5, height: 27.5)
-                    .contentShape(Rectangle())
+        Menu {
+            Button(L10n.t("sync_command")) { Task { await ctx.sync() } }
+            Divider()
+            Button(L10n.t("manage_databases_command")) { ctx.activeSheet = .manageDatabases }
+            Button(L10n.t("configure_cloud_command")) {
+                ctx.activeSheet = .configureCloud
             }
-            .buttonStyle(.plain)
-            .help(L10n.t("generator_command"))
-
-            Menu {
-                Button(L10n.t("sync_command")) { Task { await ctx.sync() } }
-                Divider()
-                Button(L10n.t("manage_databases_command")) { ctx.activeSheet = .manageDatabases }
-                Button(L10n.t("configure_cloud_command")) {
-                    ctx.activeSheet = .configureCloud
-                }
-            } label: {
-                Image(systemName: "icloud.fill")
-                    .font(.system(size: 15))
-                    .foregroundStyle(.white)
-                    .frame(width: 30, height: 27.5)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: 30, height: 27.5)
-            .help(L10n.t("sync_command"))
+        } label: {
+            Image(systemName: "icloud.fill")
+                .font(.system(size: 15))
+                .foregroundStyle(.white)
+                .contentShape(Rectangle())
         }
-        .background(Color(red: 252.0/255.0, green: 178.0/255.0, blue: 59.0/255.0))
-        .clipShape(Capsule())
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        // 正圆样式:图标居中,四周留白相等(直径 26,图标 15,四周各 5.5pt)
+        .frame(width: 26, height: 26)
+        .background(Color(red: 0.30, green: 0.66, blue: 0.96))   // 天蓝色
+        .clipShape(Circle())
+        .help(L10n.t("sync_command"))
     }
 
     /// clipboardToast — "Text copied to clipboard" bar at the top of the pane.

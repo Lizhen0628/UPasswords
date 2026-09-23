@@ -28,7 +28,23 @@ final class AppContext: ObservableObject {
     @Published var selection: SidebarSelection = .special(.allCards)
     @Published var selectedCardId: Int? = nil
     @Published var searchText: String = ""
-    @Published var editDraft: EditCardModel? = nil
+    /// 编辑工作副本。故意不用 @Published:填字段值时每个按键都会写入,
+    /// @Published 会逐键广播 objectWillChange 让整棵视图树重渲染(输入卡顿)。
+    /// didSet 只在「打开(nil → 有值)」和「关闭(有值 → nil)」时通知视图;
+    /// 编辑中的键入写入(有值 → 有值)对 UI 不可见,TextField 自己维护显示。
+    var editDraft: EditCardModel? = nil {
+        didSet {
+            let opened = oldValue == nil && editDraft != nil
+            let closed = oldValue != nil && editDraft == nil
+            if opened || closed { objectWillChange.send() }
+            // 探针:只记录长度不记录内容(隐私)。用于定位编辑表单的显示延迟。
+            let probe = editDraft?.card.fields.first?.value.count ?? -1
+            let oldProbe = oldValue?.card.fields.first?.value.count ?? -1
+            if probe != oldProbe || opened || closed {
+                Log.debug("ui", "editDraft write: field0.len=\(probe) (was \(oldProbe)) opened=\(opened) closed=\(closed)")
+            }
+        }
+    }
     @Published var activeSheet: AppSheet? = nil {
         didSet {
             guard oldValue != activeSheet else { return }
@@ -39,7 +55,9 @@ final class AppContext: ObservableObject {
     @Published var lastSync: Date? = nil
     @Published var lastSyncFailed: Date? = nil
     @Published var failedUnlockAttempts = 0
-    @Published var lastActivity: Date = Date()
+    // 空闲追踪用,不进 UI。故意不用 @Published:活动监视器把每次键盘/鼠标
+    // 事件都算作活动,若发布会在打字时逐键触发整棵视图树重渲染(输入卡顿)。
+    var lastActivity: Date = Date()
 
     enum SyncState: Equatable {
         case disabled, idle, syncing, error(String)

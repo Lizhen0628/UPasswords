@@ -39,7 +39,7 @@ struct EditCardSheet: View {
 
     var body: some View {
         if let d = Binding($draft) {
-            EditCardBody(draft: d, tab: $tab)
+            EditCardBody(draft: d, tab: $tab) { draft = nil }
         } else {
             Color.clear.frame(minWidth: 560, minHeight: 480)
         }
@@ -51,15 +51,30 @@ private struct EditCardBody: View {
     @Binding var draft: EditCardModel
     @Binding var tab: EditCardSheet.EditTab
     @State private var fieldEditor: FieldEditorState? = nil
+    // 标题/收藏的本地编辑态:ctx.editDraft 不再逐键广播,
+    // 文本类控件持有本地状态才能即时回显(写入仍静默同步回 draft)
+    @State private var titleDraft: String
+    @State private var favoriteDraft: Bool
+    @FocusState private var titleFocused: Bool
+    /// 关闭表单(清掉 ctx.editDraft);保存路径先 upsert 再关闭
+    var onClose: () -> Void = {}
+
+    init(draft: Binding<EditCardModel>, tab: Binding<EditCardSheet.EditTab>, onClose: @escaping () -> Void) {
+        self._draft = draft
+        self._tab = tab
+        self.onClose = onClose
+        self._titleDraft = State(initialValue: draft.wrappedValue.card.title)
+        self._favoriteDraft = State(initialValue: draft.wrappedValue.card.favorite)
+    }
 
     private var cardBinding: Binding<Card> {
         Binding(get: { draft.card }, set: { draft.card = $0 })
     }
     private var titleBinding: Binding<String> {
-        Binding(get: { draft.card.title }, set: { draft.card.title = $0 })
+        Binding(get: { titleDraft }, set: { titleDraft = $0; draft.card.title = $0 })
     }
     private var favoriteBinding: Binding<Bool> {
-        Binding(get: { draft.card.favorite }, set: { draft.card.favorite = $0 })
+        Binding(get: { favoriteDraft }, set: { favoriteDraft = $0; draft.card.favorite = $0 })
     }
 
     var body: some View {
@@ -123,8 +138,12 @@ private struct EditCardBody: View {
             .help(L10n.t("select_color_command"))
 
             TextField(L10n.t("title_hint"), text: titleBinding)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.plain)
                 .font(.title3)
+                .padding(.horizontal, 8)
+                .frame(height: 30)
+                .editFieldChrome(focused: titleFocused)
+                .focused($titleFocused)
 
             Button {
                 ctx.activeSheet = .selectTemplate
@@ -272,6 +291,26 @@ struct FieldEditorSheet: View {
     }
 }
 
+/// 编辑表单字段框统一样式:plain 输入 + 自绘边框(聚焦高亮)。
+/// 系统 roundedBorder 的聚焦圈(Tahoe)每次聚焦都要创建/销毁
+/// _NSKeyboardFocusClipView 并做整树布局,点击时有可感知顿挫;
+/// 自绘描边由 @FocusState 直接驱动,瞬时响应。
+fileprivate extension View {
+    func editFieldChrome(focused: Bool, height: CGFloat = 24) -> some View {
+        self
+            .padding(.horizontal, 8)
+            .frame(height: height)
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(focused ? Color.accentColor.opacity(0.85) : Color.white.opacity(0.14),
+                            lineWidth: focused ? 2 : 1)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(Color.black.opacity(0.22)))
+                    // 装饰层必须放行点击,否则会挡住输入框的聚焦与编辑
+                    .allowsHitTesting(false)
+            )
+    }
+}
+
 private struct FieldEditRow: View {
     @EnvironmentObject var ctx: AppContext
     @Binding var field: Field
@@ -279,6 +318,29 @@ private struct FieldEditRow: View {
     var onDelete: () -> Void
     @State private var revealed = false
     @FocusState private var valueFocused: Bool
+    // 本地编辑草稿:打字即时回显(行内重渲染),并静默写回 field 绑定。
+    // 行按 Field.id(UUID)标识,外部整体替换 fields 时行会重建,草稿自然刷新。
+    @State private var nameDraft: String
+    @State private var valueDraft: String
+    @FocusState private var nameFocused: Bool
+
+    /// 字段框统一样式:plain + 自绘边框。系统 roundedBorder 的聚焦圈(Tahoe)
+    /// 每次聚焦都要创建/销毁 _NSKeyboardFocusClipView 并做整树布局,点击时
+    /// 有可感知顿挫;自绘描边由 @FocusState 直接驱动,瞬时响应。
+    private func fieldBorder(_ focused: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 5)
+            .stroke(focused ? Color.accentColor.opacity(0.85) : Color.white.opacity(0.14),
+                    lineWidth: focused ? 2 : 1)
+            .background(RoundedRectangle(cornerRadius: 5).fill(Color.black.opacity(0.22)))
+    }
+
+    init(field: Binding<Field>, onEdit: @escaping () -> Void, onDelete: @escaping () -> Void) {
+        self._field = field
+        self.onEdit = onEdit
+        self.onDelete = onDelete
+        self._nameDraft = State(initialValue: field.wrappedValue.name)
+        self._valueDraft = State(initialValue: field.wrappedValue.value)
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -286,14 +348,23 @@ private struct FieldEditRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 22)
 
-            TextField(L10n.t("field_name_prompt"), text: $field.name)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 130)
+            TextField(L10n.t("field_name_prompt"), text: $nameDraft)
+                .onChange(of: nameDraft) { field.name = nameDraft }
+                .onChange(of: field.name) { if field.name != nameDraft { nameDraft = field.name } }
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 8)
+                .frame(width: 130, height: 24)
+                .editFieldChrome(focused: nameFocused)
+                .focused($nameFocused)
 
             if field.type.isOneTimePassword {
-                TextField(L10n.db("one_time_password_field"), text: $field.value)
-                    .textFieldStyle(.roundedBorder)
+                TextField(L10n.db("one_time_password_field"), text: $valueDraft)
+                    .onChange(of: valueDraft) { field.value = valueDraft }
+                    .textFieldStyle(.plain)
                     .font(.system(.body, design: .monospaced))
+                    .padding(.horizontal, 8)
+                    .frame(height: 24)
+                    .editFieldChrome(focused: valueFocused)
                 if let cfg = try? TOTP.parse(field.value),
                    let code = try? TOTP.code(config: cfg) {
                     Text(code)
@@ -303,11 +374,15 @@ private struct FieldEditRow: View {
             } else if field.type.isHidden {
                 HStack(spacing: 4) {
                     TextField(L10n.t("field_value_prompt"),
-                              text: $field.value)
-                        .textFieldStyle(.roundedBorder)
+                              text: $valueDraft)
+                        .onChange(of: valueDraft) { field.value = valueDraft }
+                        .textFieldStyle(.plain)
                         .font(.system(.body, design: .monospaced))
+                        .padding(.horizontal, 8)
+                        .frame(height: 24)
+                        .editFieldChrome(focused: valueFocused)
                         .focused($valueFocused)
-                    if revealed || field.value.isEmpty == false {
+                    if revealed || valueDraft.isEmpty == false {
                         if revealed {
                             Button {
                                 revealed = false
@@ -326,12 +401,13 @@ private struct FieldEditRow: View {
                     }
                 }
             } else {
-                TextField(L10n.t("field_value_prompt"), text: $field.value)
-                    .textFieldStyle(.roundedBorder)
+                TextField(L10n.t("field_value_prompt"), text: $valueDraft)
+                    .onChange(of: valueDraft) { field.value = valueDraft }
+                    .editFieldChrome(focused: valueFocused)
             }
 
-            if field.type == .password && !field.value.isEmpty {
-                StrengthIndicatorView(strength: PasswordStrength.score(field.value))
+            if field.type == .password && !valueDraft.isEmpty {
+                StrengthIndicatorView(strength: PasswordStrength.score(valueDraft))
                     .frame(maxWidth: 160)
             }
 
@@ -343,6 +419,7 @@ private struct FieldEditRow: View {
                         Button(name) {
                             field.value = PasswordGenerator.instance.password(
                                 length: PasswordSettings.shared.passwordLength, type: t)
+                            valueDraft = field.value
                             PasswordGenerator.instance.addPasswordToHistory(field.value)
                         }
                     }
@@ -361,7 +438,10 @@ private struct FieldEditRow: View {
                 Divider()
                 if field.hasHistory {
                     ForEach(field.history.sorted { $0.time > $1.time }) { h in
-                        Button("\(h.value)") { field.value = h.value }
+                        Button("\(h.value)") {
+                            field.value = h.value
+                            valueDraft = h.value
+                        }
                     }
                     Divider()
                 }

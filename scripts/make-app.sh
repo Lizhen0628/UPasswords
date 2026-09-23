@@ -43,6 +43,10 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
     <string>APPL</string>
     <key>CFBundleExecutable</key>
     <string>UPasswords</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
@@ -54,6 +58,15 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+
+# 应用图标(程序坞/Finder/锁屏展示用)
+if [ -f "Resources/AppIcon.icns" ]; then
+  cp "Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
+fi
+# 菜单栏三钥匙 template 图
+if [ -f "Resources/MenuBarKeys.png" ]; then
+  cp "Resources/MenuBarKeys.png" "$CONTENTS/Resources/MenuBarKeys.png"
+fi
 
 echo "==> $APP"
 du -sh "$APP"

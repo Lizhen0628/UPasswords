@@ -52,9 +52,19 @@ struct UPasswordsApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// 菜单栏状态图标(程序坞之外的常驻入口):钥匙模板图 + 快捷菜单
+    private var statusItem: NSStatusItem?
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         Log.bootstrap()
         Log.info("app", "application will finish launching")
+    }
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        setupStatusItem()
+    }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { showMainWindow() }   // 点程序坞图标时若无窗口则重新拉起
+        return true
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         Log.debug("app", "last window closed → keeping app in dock (lock_if_window_closed)")
@@ -66,5 +76,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         Log.info("app", "application will terminate → flushing session save")
         AppContext.shared.save()
+    }
+
+    // MARK: - 菜单栏状态图标
+
+    private func setupStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        guard let button = item.button else { return }
+        // 三钥匙 template 图(与程序坞图标同款设计);找不到资源时退回 SF 钥匙符号
+        if let url = Bundle.main.url(forResource: "MenuBarKeys", withExtension: "png"),
+           let img = NSImage(contentsOf: url) {
+            img.size = NSSize(width: 18, height: 18)
+            img.isTemplate = true   // 自动适配菜单栏深/浅色
+            button.image = img
+        } else {
+            let cfg = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+            if let img = NSImage(systemSymbolName: "key.fill", accessibilityDescription: "UPasswords")?
+                .withSymbolConfiguration(cfg) {
+                img.isTemplate = true
+                button.image = img
+            }
+        }
+        let menu = NSMenu()
+        let show = NSMenuItem(title: "显示 UPasswords", action: #selector(showMainWindow), keyEquivalent: "")
+        show.target = self
+        menu.addItem(show)
+        menu.addItem(.separator())
+        let lock = NSMenuItem(title: L10n.t("lock_command"), action: #selector(lockNow), keyEquivalent: "")
+        lock.target = self
+        menu.addItem(lock)
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "退出 UPasswords",
+                                action: #selector(NSApplication.terminate(_:)),
+                                keyEquivalent: "q"))
+        item.menu = menu
+        statusItem = item
+        Log.debug("app", "status item installed")
+    }
+
+    @MainActor @objc private func showMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        for w in NSApp.windows where w.isVisible && w.frame.width > 200 {
+            w.makeKeyAndOrderFront(self)
+        }
+    }
+
+    @MainActor @objc private func lockNow() {
+        AppContext.shared.lock()
+        showMainWindow()
     }
 }
