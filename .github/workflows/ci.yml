@@ -9,7 +9,7 @@ jobs:
   build-and-test:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Swift version
         run: swift --version
       - name: Build
@@ -19,7 +19,7 @@ jobs:
       - name: Bundle .app (release)
         run: ./scripts/make-app.sh dist
       - name: Upload app artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: UPasswords-app
           path: dist/UPasswords.app
