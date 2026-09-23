@@ -49,6 +49,7 @@ final class WindowChromeManager: NSObject {
     private var kvoTokens: [NSKeyValueObservation] = []
     private var fastTimer: Timer?
     private var slowTimer: Timer?
+    private var fastTicksRemaining = 0
 
     private func log(_ s: String) {
         // 开发期排障主通道:写统一日志文件(release dist 也生效),终端可见 stderr。
@@ -130,18 +131,29 @@ final class WindowChromeManager: NSObject {
 
     private func startTimers() {
         fastTimer?.invalidate()
-        var ticks = 0
-        fastTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] timer in
-            ticks += 1
-            Task { @MainActor in self?.enforce() }
-            if ticks >= 40 { timer.invalidate() }   // 前 10s 高频
-        }
-        if slowTimer == nil {
-            // 之后 1s 永久低频自愈,代价可忽略
-            slowTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-                Task { @MainActor in self?.enforce() }
+        fastTicksRemaining = 40
+        fastTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            // [weak self] 必须写在 Task 的捕获列表里(常量绑定)。在外层闭包
+            // 声明的 weak self 是可变捕获,Task(@Sendable)引用它直接编译报错,
+            // CI 的 Swift 工具链会拒绝(本地旧工具链只降级为警告,容易漏)。
+            Task { @MainActor [weak self] in
+                self?.fastTick()
             }
         }
+        if slowTimer == nil {
+            slowTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.enforce()
+                }
+            }
+        }
+    }
+
+    /// 前 10s 高频自愈,之后交给 1s 慢速定时器。
+    @MainActor private func fastTick() {
+        fastTicksRemaining -= 1
+        enforce()
+        if fastTicksRemaining <= 0 { fastTimer?.invalidate() }
     }
 
     /// 幂等应用当前模式的全部 chrome 设置。

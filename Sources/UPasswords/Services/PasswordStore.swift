@@ -84,7 +84,7 @@ enum PasswordStore {
     }
 
     static func loadPassword(databaseName: String, biometric: Bool = false) -> String? {
-        var query: [String: Any] = [
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service(forDatabaseName: databaseName),
             kSecAttrAccount as String: biometric ? "biometric" : "database",
