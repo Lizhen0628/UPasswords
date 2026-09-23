@@ -109,10 +109,6 @@ struct SidebarView: View {
             .padding(.top, 7)
             .padding(.bottom, 4)
         }
-        // macOS 26 给侧栏滚动区顶部加了 ~30pt 玻璃条预留,把滚动区整体
-        // 上提回 70pt 条带下缘,否则首行被压到 ~120pt(参考图为 91pt)。
-        // 参考图实测:首行中心距窗口顶 91pt(70pt 条带 + 7pt 内边距 + 27/2)。
-        .scrollClipDisabled()
         .background(SidebarMaterial())
         .safeAreaInset(edge: .bottom) {
             setupCard
