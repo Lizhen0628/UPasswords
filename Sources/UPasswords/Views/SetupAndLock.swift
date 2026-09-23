@@ -2,6 +2,28 @@ import SwiftUI
 import AppKit
 import LocalAuthentication
 
+/// 窗口级隐藏标题栏(.windowStyle(.hiddenTitleBar))下,锁屏/向导窗的标题条:
+/// 红绿灯占位 + 居中标题 + 可拖动区。红绿灯由系统绘制在条带左上角。
+struct PhaseTitleBar: View {
+    var title: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                Spacer().frame(width: 76) // 红绿灯占位
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .frame(height: 27)
+            .background(WindowDragArea())
+            Divider()
+        }
+    }
+}
+
 /// LockWindowController — Safe 锁屏 1:1:普通标题栏小窗(500×380),
 /// 应用图标(黄圆+白盾+钥匙孔)居中;「输入密码:」左对齐 + 输入框与
 /// 「确定」同行 + 「显示密码」复选框;底部左侧 Touch ID、右侧「?」帮助。
@@ -18,6 +40,7 @@ struct LockWindowView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            PhaseTitleBar(title: L10n.tBranded("app_title"))
             Spacer()
 
             appIcon
@@ -98,6 +121,7 @@ struct LockWindowView: View {
             .padding(.bottom, 10)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea(.container, edges: .top)   // 标题条贴窗口顶(红绿灯叠在其上)
         .background(LockTextures.gradient(for: settings.lockTexture).ignoresSafeArea())
         .background(WindowChromeConfigurator(mode: .lock))
         .preferredColorScheme(nil)
@@ -190,9 +214,10 @@ struct SetupWindowView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            PhaseTitleBar(title: L10n.tBranded("app_title"))
             Text(L10n.t("database_setup_title"))
                 .font(.title2.bold())
-                .padding(.top, 32)
+                .padding(.top, 24)
             Text(L10n.tBranded("app_title"))
                 .font(.callout)
                 .foregroundStyle(.secondary)

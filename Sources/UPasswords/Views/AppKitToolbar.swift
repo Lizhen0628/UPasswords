@@ -177,15 +177,15 @@ final class WindowChromeManager: NSObject {
             }
             shiftLights(win, down: true)
         case .lock, .plain:
-            if win.titleVisibility != .visible { win.titleVisibility = .visible }
-            if win.titlebarAppearsTransparent { win.titlebarAppearsTransparent = false }
-            if win.styleMask.contains(.fullSizeContentView) { win.styleMask.remove(.fullSizeContentView) }
+            // 隐藏标题栏(.windowStyle(.hiddenTitleBar))下,标题条由 PhaseTitleBar
+            // 自绘。这里不再翻转 titleVisibility/transparent/fullSizeContentView——
+            // 那会和 SwiftUI 的窗口样式维护反向打架;只管可调尺寸与拖动。
             if mode == .lock, win.styleMask.contains(.resizable) { win.styleMask.remove(.resizable) }
             if !win.styleMask.contains(.resizable), mode == .plain { win.styleMask.insert(.resizable) }
             win.isMovableByWindowBackground = true
             if !win.isMovable {
                 win.isMovable = true
-                log("enforce: \(mode) → isMovable=true (standard titlebar)")
+                log("enforce: \(mode) → isMovable=true (standard drag)")
             }
             shiftLights(win, down: false)
             resizeForMode(win, animated: false)   // 窗口恢复可能改回尺寸,随自愈一起纠正
@@ -230,7 +230,7 @@ final class WindowChromeManager: NSObject {
                 log("lock-resize: saved=\(win.frame)")
             }
             let center = NSPoint(x: win.frame.midX, y: win.frame.midY)
-            win.setContentSize(Self.lockWindowSize)   // frame 由标题栏高度自动加出
+            win.setContentSize(Self.lockWindowSize)   // 隐藏标题栏:frame 即内容尺寸
             var f = win.frame
             f.origin = NSPoint(x: center.x - f.width / 2, y: center.y - f.height / 2)
             f = Self.clampedToVisible(f, window: win)

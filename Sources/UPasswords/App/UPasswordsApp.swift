@@ -23,8 +23,11 @@ struct UPasswordsApp: App {
                 .environmentObject(pwdSettings)
                 .environmentObject(ctx.settings)
         }
-        // 注意:不要加 .windowToolbarStyle——它与 SafeWindowConfigurator 的隐藏标题栏
-        // 方案冲突,会在自绘条带上方再渲染一个系统标题区(残留的居中窗口标题)。
+        // 注意:不要加 .windowToolbarStyle——它会再渲染一个系统标题区(残留的居中窗口标题)。
+        // .windowStyle(.hiddenTitleBar) 是根治方案:SwiftUI 重设窗口样式时会把
+        // 标题栏保持为隐藏/透明(与自绘条带一致),不再周期性翻转出系统材质带。
+        // 锁屏/向导窗的标题条改由 PhaseTitleBar 自绘(见 SetupAndLock.swift)。
+        .windowStyle(.hiddenTitleBar)
         .defaultSize(Self.bootSize)
         .commands { UPasswordsCommands() }
 
