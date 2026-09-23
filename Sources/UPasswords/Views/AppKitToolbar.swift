@@ -46,6 +46,7 @@ final class WindowChromeManager: NSObject {
     private var originalX: [ObjectIdentifier: CGFloat] = [:]
     private var savedMainFrame: NSRect?
     private var observed = false
+    private var kvoTokens: [NSKeyValueObservation] = []
     private var fastTimer: Timer?
     private var slowTimer: Timer?
 
@@ -84,6 +85,41 @@ final class WindowChromeManager: NSObject {
                      NSWindow.didEnterFullScreenNotification] {
             NotificationCenter.default.addObserver(self, selector: #selector(enforceDelayed), name: name, object: win)
         }
+        installChromeKVO(win)
+    }
+
+    /// SwiftUI 每次 view 更新都会把窗口标题栏外观重设回系统默认
+    /// (titlebarAppearsTransparent=false 等),系统标题栏材质带随即画在窗口顶部,
+    /// 盖住自绘条带——定时器自愈最多慢 1s,肉眼可见。这里 KVO 抓住每一次改动,
+    /// 立刻异步改回,把可见窗口压到一帧以内。
+    private func installChromeKVO(_ win: NSWindow) {
+        kvoTokens.removeAll()
+        kvoTokens.append(win.observe(\.titlebarAppearsTransparent, options: [.new]) { [weak self] _, change in
+            guard change.newValue == false else { return }   // true 是我们想要的状态
+            self?.chromeTampered(name: "titlebarAppearsTransparent")
+        })
+        kvoTokens.append(win.observe(\.titleVisibility, options: [.new]) { [weak self] _, change in
+            guard change.newValue == .visible else { return }
+            self?.chromeTampered(name: "titleVisibility")
+        })
+        kvoTokens.append(win.observe(\.styleMask, options: []) { [weak self] _, _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.mode == .main, let win = self.window else { return }
+                if !win.styleMask.contains(.fullSizeContentView) {
+                    self.log("kvo: fullSizeContentView removed → re-inserting")
+                    self.enforce()
+                }
+            }
+        })
+    }
+
+    /// KVO 回调:立即异步纠正(SwiftUI setter 栈内不能同步重入)。
+    nonisolated private func chromeTampered(name: String) {
+        Task { @MainActor [weak self] in
+            guard let self, self.mode == .main else { return }
+            self.log("kvo: \(name) flipped → instant re-fix")
+            self.enforce()
+        }
     }
 
     /// 立即 + 短延迟各执行一次(SwiftUI 常在本轮 runloop 稍后重置布局)
@@ -111,12 +147,24 @@ final class WindowChromeManager: NSObject {
     /// 幂等应用当前模式的全部 chrome 设置。
     func enforce() {
         guard let win = window else { return }
-        if win.toolbar != nil { win.toolbar = nil }
+        if win.toolbar != nil {
+            win.toolbar = nil
+            log("enforce: cleared non-nil toolbar (system injected?)")
+        }
         switch mode {
         case .main:
-            if win.titleVisibility != .hidden { win.titleVisibility = .hidden }
-            if !win.titlebarAppearsTransparent { win.titlebarAppearsTransparent = true }
-            if !win.styleMask.contains(.fullSizeContentView) { win.styleMask.insert(.fullSizeContentView) }
+            if win.titleVisibility != .hidden {
+                win.titleVisibility = .hidden
+                log("enforce: titleVisibility visible → hidden (someone reset it!)")
+            }
+            if !win.titlebarAppearsTransparent {
+                win.titlebarAppearsTransparent = true
+                log("enforce: titlebarAppearsTransparent false → true (someone reset it!)")
+            }
+            if !win.styleMask.contains(.fullSizeContentView) {
+                win.styleMask.insert(.fullSizeContentView)
+                log("enforce: fullSizeContentView missing → inserted (someone reset it!)")
+            }
             if !win.styleMask.contains(.resizable) { win.styleMask.insert(.resizable) }
             win.isMovableByWindowBackground = false   // 仅自绘条可拖动
             // 禁用系统拖拽:条带顶部 ~28pt 是系统的「标题栏区」,在圆钮上按下并
