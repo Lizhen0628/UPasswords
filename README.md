@@ -27,13 +27,13 @@ swift run            # 运行
 | `StrengthIndicator.crackTimeWithSeconds:` | `PasswordStrength.crackTime`（原版单位字符串） |
 | TOTP（`one_time_password` 字段） | `Services/TOTP.swift`（RFC 6238，SHA1/256/512，otpauth:// URI） |
 | `PasswordStore`（钥匙串） | `Services/PasswordStore.swift`（GenericPassword + `.userPresence` 快速解锁） |
-| `MainWindowController` + 三 ViewController | `Views/MainWindow.swift` — 按 nib 反解规格复刻：970×640 窗口、三栏 213/355/余量、`main_toolbar` 8 个纯图标按钮（add/sync ‖ sorting/generator/置顶/delete/lock/preferences）+ 弹性空隙 |
-| `LabelListViewController`（源列表式可折叠分组行 + 计数徽章，nib: LabelListGroupCell/LabelListCell 25pt）+ 18 个 `*Label` 特殊侧栏项 | `Views/MainWindow.swift` SidebarView + `Models/SidebarModels.swift`（全部项目/收藏/历史/密码/一次性代码/笔记/文件/图片/密钥/信用卡/弱密码/相同密码/已泄露/即将到期/已过期/已归档/回收站/模板） |
-| `EditCardWindowController` + 4 个 `EditCard*Tab` + 5 种 Cell | `Views/EditCardSheet.swift`（条目/笔记/图片/文件 4 选项卡 + 字段编辑器） |
-| `SetLabelsSheetController` 等 40+ `*SheetController` | `Views/CardSheets.swift` / `Views/DataSheets.swift`（逐个对应） |
+| `MainWindowController` + 三 ViewController | `Views/Main/`（RootView / SidebarView / CardListView / CardDetailView）— 按 nib 反解规格复刻：970×640 窗口、三栏 213/355/余量、`main_toolbar` 8 个纯图标按钮（add/sync ‖ sorting/generator/置顶/delete/lock/preferences）+ 弹性空隙 |
+| `LabelListViewController`（源列表式可折叠分组行 + 计数徽章，nib: LabelListGroupCell/LabelListCell 25pt）+ 18 个 `*Label` 特殊侧栏项 | `Views/Main/SidebarView.swift` + `Models/SidebarModels.swift`（全部项目/收藏/历史/密码/一次性代码/笔记/文件/图片/密钥/信用卡/弱密码/相同密码/已泄露/即将到期/已过期/已归档/回收站/模板） |
+| `EditCardWindowController` + 4 个 `EditCard*Tab` + 5 种 Cell | `Views/Sheets/EditCardSheet.swift`（条目/笔记/图片/文件 4 选项卡 + 字段编辑器） |
+| `SetLabelsSheetController` 等 40+ `*SheetController` | `Views/Sheets/`（SheetFactory + 按域分组的弹窗文件，逐个对应） |
 | `SelectSymbolViewController` / `SymbolModel`（46 TIFF） | `Models/SymbolModel.swift`（同名词表 + SF Symbol 自绘渲染 + IIN 卡组织识别） |
 | `SelectTextureSheetController`（texture_1..17.jpg） | `LockTextures`（17 种程序化渐变，不复制原图） |
-| `LockWindowController`（nib: 500×350 窗口、代码构建内容） / `LockedState` | `Views/SetupAndLock.swift`（500×350 纹理窗口）+ 自动锁定计时/后台锁定 |
+| `LockWindowController`（nib: 500×350 窗口、代码构建内容） / `LockedState` | `Views/Setup/SetupAndLock.swift`（500×350 纹理窗口）+ 自动锁定计时/后台锁定 |
 | `SetupWindowController` / `SetupPlanViewController`（8 项任务） | `SetupWindowView` / `SetupPlanSheet`（侧栏“初始化 n/8”） |
 | `ImportFormat` 族（64 适配器） | `Services/ImportExport.swift` — 18 种：SafeInCloud XML、Chrome/Brave/Edge/Opera/Firefox、LastPass、Bitwarden CSV+JSON、Dashlane、1Password、Safari、NordPass、Proton Pass、KeePass、Keeper、RoboForm、通用 CSV |
 | `ExportCardsTask` / `ExportAsSheetController` | XML / CSV / TXT 导出（含明文警告） |
@@ -50,6 +50,10 @@ swift run            # 运行
 - 密码/Touch ID 副本存 Keychain（`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`）
 - 自动备份：`~/Library/Application Support/UPasswords/Backups/<名称>/`（加密备份）
 - XML 交换格式与 SafeInCloud 完全兼容，可互导
+- 日志：`~/Library/Application Support/UPasswords/Logs/UPasswords.log`（超 1MB 自动轮转为
+  `.old.log`）。DEBUG 构建记录 debug 级，release 默认 info 级；排查问题时可用
+  `UP_LOG_LEVEL=debug` 环境变量或 `defaults write com.upasswords.UPasswords log.level -string debug`
+  提升详细程度。日志只记录操作/对象名/长度/错误，绝不记录密码与字段内容
 
 ## 如实标注的等价实现（与原版差异）
 
@@ -74,16 +78,23 @@ swift run            # 运行
 UPasswords/
 ├── Package.swift                  SPM（macOS 14+，可执行目标 + 测试目标）
 ├── Sources/UPasswords/
-│   ├── App/                       入口 / AppContext / 设置 / 菜单 / 本地化助手
+│   ├── App/                       入口 / AppDelegate / StatusItemController /
+│   │                              AppContext(+列表/动作/同步扩展) / 设置 / 菜单 / 本地化
 │   ├── Models/                    X* 模型族、模板、符号、侧栏、排序
-│   ├── Services/                  加密、XML、生成器、强度、TOTP、钥匙串、
+│   ├── Services/                  加密、XML、生成器、强度、TOTP、钥匙串、日志、
 │   │                              存储、备份、云同步、导入导出、泄露检查
-│   ├── Views/                     主窗口、编辑器、锁定/初始化、全部 Sheet、设置
-│   └── Resources/{zh-Hans,en}.lproj/   Localizable + Database 字符串
-├── Tests/UPasswordsTests/         51 项测试
+│   ├── Views/                     Main(主窗口) / Window(chrome+工具栏) / Sheets(全部弹窗) /
+│   │                              Setup(锁定/初始化) / Preferences(设置) / Components(共享组件)
+│   └── Resources/                 {zh-Hans,en}.lproj 字符串 + 菜单栏图标
+├── Tests/UPasswordsTests/         52 项测试
 ├── scripts/make-app.sh            .app 打包
 └── .github/workflows/ci.yml       build + test
 ```
+
+## 开发规范
+
+Swift 代码开发规范（命名/格式/可选值/错误处理/并发/性能 + 本项目特定约定与提交自查清单）
+见 [Agent.md](Agent.md)，所有贡献者与编码 Agent 必须遵守。
 
 ## 许可
 

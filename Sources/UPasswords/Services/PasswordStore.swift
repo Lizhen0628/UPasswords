@@ -8,10 +8,6 @@ import LocalAuthentication
 enum PasswordStore {
     static func service(forDatabaseName name: String) -> String { "UPasswords-\(name)" }
 
-    static func hasPassword(databaseName: String) -> Bool {
-        loadPassword(databaseName: databaseName, biometric: false) != nil
-    }
-
     static func savePassword(_ password: String, databaseName: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

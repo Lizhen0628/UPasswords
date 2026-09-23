@@ -46,4 +46,10 @@ enum L10n {
     static func tBranded(_ key: String) -> String {
         t(key).replacingOccurrences(of: "Safe", with: brand())
     }
+
+    /// Key with a fallback for keys absent from the original tables.
+    static func t(_ key: String, fallback: String) -> String {
+        let v = activeBundle.localizedString(forKey: key, value: fallback, table: "Localizable")
+        return v == key ? fallback : v
+    }
 }

@@ -26,6 +26,7 @@ struct WebDavSettings: Codable, Equatable {
     }
 }
 
+/// 云同步类型(CloudType);仅 none/webdav 在本复刻中可用(见 functional)。
 enum CloudType: String, CaseIterable, Identifiable {
     case none, webdav, gdrive, dropbox, onedrive, icloud
     var id: String { rawValue }
@@ -45,6 +46,7 @@ enum CloudType: String, CaseIterable, Identifiable {
     var functional: Bool { self == .none || self == .webdav }
 }
 
+/// 同步失败错误域,文案沿用原版字符串表。
 enum SyncError: LocalizedError {
     case badUrl
     case http(Int)

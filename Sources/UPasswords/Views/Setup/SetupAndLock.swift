@@ -50,7 +50,7 @@ struct LockWindowView: View {
 
             Spacer().frame(height: 10)
 
-            Text("“UPasswords” 已锁定")
+            Text(L10n.tBranded("lock_window_locked_title"))
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(.white)
 
@@ -104,6 +104,7 @@ struct LockWindowView: View {
             // 与 Safe 一致:进入锁屏自动弹出一次 Touch ID(需已保存生物识别副本)
             if !touchIDAsked, ctx.touchIDAvailable, settings.fastUnlock, ctx.hasBiometricItem {
                 touchIDAsked = true
+                // 存量 GCD:onAppear 在主线程,延时等首帧稳定后回调仍在主队列
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     ctx.unlockWithTouchID()
                 }
@@ -173,9 +174,9 @@ struct LockWindowView: View {
     /// 说明文字:支持触控 ID 时与参考文案一致。
     private var subtitle: String {
         if ctx.touchIDAvailable && settings.fastUnlock {
-            return "使用触控 ID 或输入 UPasswords 的密码解锁。"
+            return L10n.tBranded("lock_window_unlock_touch_id_text")
         }
-        return "输入 UPasswords 的密码解锁。"
+        return L10n.tBranded("lock_window_unlock_text")
     }
 
     private var placeholder: String {
@@ -308,25 +309,5 @@ struct SetupWindowView: View {
         } catch let err {
             self.error = err.localizedDescription
         }
-    }
-}
-
-struct LabeledRow<Content: View>: View {
-    let label: String
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        HStack {
-            Text(label).frame(width: 110, alignment: .leading)
-            content.frame(maxWidth: .infinity)
-        }
-    }
-}
-
-extension L10n {
-    /// Key with a fallback for keys absent from the original tables.
-    static func t(_ key: String, fallback: String) -> String {
-        let v = activeBundle.localizedString(forKey: key, value: fallback, table: "Localizable")
-        return v == key ? fallback : v
     }
 }

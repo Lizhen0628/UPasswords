@@ -536,12 +536,13 @@ struct SelectTemplateSheet: View {
     }
 
     private func apply(_ spec: Templates.Spec) {
-        guard ctx.editDraft != nil else { return }
-        let card = Templates.makeCard(from: spec, id: ctx.editDraft!.card.id)
-        ctx.editDraft!.card.title = L10n.db(spec.titleKey)
-        ctx.editDraft!.card.symbol = spec.symbol
-        ctx.editDraft!.card.autofillEnabled = spec.autofill
-        ctx.editDraft!.card.fields = card.fields
+        guard var draft = ctx.editDraft else { return }
+        let card = Templates.makeCard(from: spec, id: draft.card.id)
+        draft.card.title = L10n.db(spec.titleKey)
+        draft.card.symbol = spec.symbol
+        draft.card.autofillEnabled = spec.autofill
+        draft.card.fields = card.fields
+        ctx.editDraft = draft
         dismiss()
     }
 }
@@ -573,3 +574,55 @@ struct ColorGrid: View {
         }
     }
 }
+
+// MARK: - Password history (HistorySheetController + HistoryViewController)
+
+struct PasswordHistorySheet: View {
+    @EnvironmentObject var ctx: AppContext
+    @Environment(\.dismiss) var dismiss
+
+    var body: some View {
+        SheetShell(
+            title: L10n.t("password_history_command"),
+            minWidth: 520,
+            minHeight: 460,
+            okTitle: L10n.t("close_button"),
+            onCancel: { dismiss() },
+            onOk: { dismiss() },
+            content: {
+                let entries = ctx.allHistoryEntries
+                Group {
+                    if entries.isEmpty {
+                        Text(L10n.t("user_empty_state"))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        List {
+                            ForEach(Array(entries.enumerated()), id: \.offset) { _, e in
+                                HStack {
+                                    CardIconView(symbol: e.card.symbol, color: e.card.color, size: 24)
+                                    VStack(alignment: .leading) {
+                                        Text("\(e.card.title) — \(e.field.name)").font(.callout)
+                                        Text(e.entry.value).font(.callout.monospaced()).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Text(e.entry.time.date.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    Button {
+                                        ClipboardModel.shared.copy(e.entry.value)
+                                    } label: {
+                                        Image(systemName: "doc.on.doc")
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                            }
+                        }
+                        // 滚动容器需显式高度,否则在 Sheet 里塌缩为 0
+                        .frame(height: 320)
+                    }
+                }
+            }
+        )
+    }
+}
+

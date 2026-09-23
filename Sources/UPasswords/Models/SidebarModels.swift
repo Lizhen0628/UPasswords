@@ -95,18 +95,9 @@ enum SpecialLabel: String, CaseIterable, Identifiable {
     }
 }
 
+/// 侧栏分节(原版分组顺序:safe/labels/security/special/可选项)。
 enum SidebarSection: String, CaseIterable {
     case safe, labels, security, special, optionalItems
-
-    var groupKey: String? {
-        switch self {
-        case .safe: return "safe_group"
-        case .labels: return "labels_group"
-        case .security: return "security_group"
-        case .special: return "special_group"
-        case .optionalItems: return nil
-        }
-    }
 }
 
 /// Colored group header icons of the original sidebar (LabelListGroupCell).
@@ -146,8 +137,12 @@ enum SidebarSelection: Hashable {
     }
     func hash(into h: inout Hasher) {
         switch self {
-        case .special(let s): h.combine(0); h.combine(s)
-        case .label(let i): h.combine(1); h.combine(i)
+        case .special(let s):
+            h.combine(0)
+            h.combine(s)
+        case .label(let i):
+            h.combine(1)
+            h.combine(i)
         }
     }
 }

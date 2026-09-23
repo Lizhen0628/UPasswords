@@ -1,11 +1,16 @@
 import Foundation
 import SwiftUI
 import Combine
-import LocalAuthentication
 
 /// Central session controller — the SwiftUI counterpart of `DatabaseManager`
 /// (Services/DatabaseManager.h) plus the card-list strategies the original
 /// implements through `CardListStrategy` subclasses per sidebar label.
+///
+/// 职责拆分(同类型 extension,便于按域浏览):
+/// - 本文件:会话状态、启动引导、锁定/解锁生命周期、持久化、自动锁
+/// - AppContext+CardList:侧栏卡片列表策略、搜索、最近打开
+/// - AppContext+Actions:卡片/标签 CRUD、初始化清单、历史
+/// - AppContext+Sync:修改密码、备份、WebDAV 同步
 @MainActor
 final class AppContext: ObservableObject {
     enum Phase: Equatable {
@@ -36,12 +41,9 @@ final class AppContext: ObservableObject {
         didSet {
             let opened = oldValue == nil && editDraft != nil
             let closed = oldValue != nil && editDraft == nil
-            if opened || closed { objectWillChange.send() }
-            // 探针:只记录长度不记录内容(隐私)。用于定位编辑表单的显示延迟。
-            let probe = editDraft?.card.fields.first?.value.count ?? -1
-            let oldProbe = oldValue?.card.fields.first?.value.count ?? -1
-            if probe != oldProbe || opened || closed {
-                Log.debug("ui", "editDraft write: field0.len=\(probe) (was \(oldProbe)) opened=\(opened) closed=\(closed)")
+            if opened || closed {
+                objectWillChange.send()
+                Log.info("ui", "editDraft \(opened ? "open" : "close") cardId=\(editDraft?.card.id ?? oldValue?.card.id ?? -1) isNew=\(editDraft?.isNew ?? false)")
             }
         }
     }
@@ -64,7 +66,8 @@ final class AppContext: ObservableObject {
     }
 
     /// In-memory password, present only while unlocked.
-    nonisolated(unsafe) private(set) var password: String = ""
+    /// 仅生命周期代码(unlock/lock/erase/changePassword)可写入。
+    nonisolated(unsafe) var password: String = ""
 
     let settings = AppSettings.shared
     let store = DatabaseStore.shared
@@ -93,6 +96,7 @@ final class AppContext: ObservableObject {
             }
             databaseName = "TestDB"
             phase = .locked
+            // 存量 GCD:主线程延时,回调仍在主队列,无需回主线程
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
                 guard let self, self.phase == .locked else { return }
                 // 二进制重建后钥匙串 ACL 会拒绝读取,回退到建库密码
@@ -101,6 +105,23 @@ final class AppContext: ObservableObject {
                     Log.warn("keychain", "stored password unreadable (ACL/signature change?) → fallback to build password")
                 }
                 try? self.unlock(name: self.databaseName, password: pw)
+                // UP_SCREENSHOT_EDITOR=<templateId>:解锁后直接打开该模板的新卡编辑表单
+                if let specId = ProcessInfo.processInfo.environment["UP_SCREENSHOT_EDITOR"].flatMap(Int.init),
+                   let spec = Templates.spec(id: specId) {
+                    // 存量 GCD:主线程延时,回调仍在主队列,无需回主线程
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        NSApp.activate(ignoringOtherApps: true)
+                        // 主窗口搬到当前空间(同 BOOT=1),全屏应用占据当前空间时截图才可见
+                        for w in NSApp.windows where w.frame.width > 800 {
+                            w.setFrameOrigin(NSPoint(x: 120, y: 140))
+                            w.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+                            w.makeKeyAndOrderFront(nil)
+                        }
+                        var m = EditCardModel(card: Templates.makeCard(from: spec, id: AppContext.shared.newCardId()))
+                        m.isNew = true
+                        AppContext.shared.editDraft = m
+                    }
+                }
             }
             return
         }
@@ -127,6 +148,7 @@ final class AppContext: ObservableObject {
                     FileHandle.standardError.write(Data("[UP_SCREENSHOT_BOOT] create failed: \(error)\n".utf8))
                 }
                 // createDatabase 内部已 unlock + 弹出 setupPlan
+                // 存量 GCD:主线程延时,回调仍在主队列,无需回主线程
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     NSApp.activate(ignoringOtherApps: true)
                     for w in NSApp.windows where w.frame.width > 800 {
@@ -138,6 +160,17 @@ final class AppContext: ObservableObject {
                 Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
                     NSApp.setActivationPolicy(.regular)
                     NSApp.activate(ignoringOtherApps: true)
+                }
+                // UP_SCREENSHOT_EDITOR=<templateId>:解锁后直接打开该模板的新卡编辑表单
+                if let specId = ProcessInfo.processInfo.environment["UP_SCREENSHOT_EDITOR"].flatMap(Int.init) {
+                    // 存量 GCD:主线程延时,回调仍在主队列,无需回主线程
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+                        NSApp.activate(ignoringOtherApps: true)
+                        guard let spec = Templates.spec(id: specId) else { return }
+                        var m = EditCardModel(card: Templates.makeCard(from: spec, id: AppContext.shared.newCardId()))
+                        m.isNew = true
+                        AppContext.shared.editDraft = m
+                    }
                 }
                 return
             }
@@ -247,14 +280,18 @@ final class AppContext: ObservableObject {
         }
         Log.info("keychain", "Touch ID unlock requested for \"\(databaseName)\"")
         PasswordStore.biometricPassword(databaseName: databaseName) { [weak self] pw in
-            guard let self else { return }
-            if let pw {
-                DispatchQueue.main.async {
-                    do { try self.unlock(name: self.databaseName, password: pw) }
-                    catch { Log.warn("keychain", "Touch ID unlock failed at load: \(error)") }
-                }
-            } else {
+            guard let pw else {
                 Log.warn("keychain", "Touch ID evaluation failed or cancelled")
+                return
+            }
+            // evaluatePolicy 完成回调在系统私有队列;经 @MainActor 任务回主线程再解锁
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    try self.unlock(name: self.databaseName, password: pw)
+                } catch {
+                    Log.warn("keychain", "Touch ID unlock failed at load: \(error)")
+                }
             }
         }
     }
@@ -300,425 +337,6 @@ final class AppContext: ObservableObject {
             .sink { [weak self] _ in self?.save() }
     }
 
-    // MARK: - Recent (RecentModel)
-
-    private static let recentKey = "recent.cardIds"
-
-    var recentIds: [Int] {
-        UserDefaults.standard.array(forKey: Self.recentKey) as? [Int] ?? []
-    }
-
-    func pushRecent(_ cardId: Int) {
-        var ids = UserDefaults.standard.array(forKey: Self.recentKey) as? [Int] ?? []
-        ids.removeAll { $0 == cardId }
-        ids.insert(cardId, at: 0)
-        if ids.count > 20 { ids.removeLast(ids.count - 20) }
-        UserDefaults.standard.set(ids, forKey: Self.recentKey)
-        objectWillChange.send()
-    }
-
-    func clearRecent() {
-        UserDefaults.standard.removeObject(forKey: Self.recentKey)
-        objectWillChange.send()
-    }
-
-    // MARK: - Setup plan
-
-    func setupTaskDone(_ task: SetupPlanTask) -> Bool {
-        UserDefaults.standard.bool(forKey: "setup.done.\(task.rawValue)")
-    }
-    func markSetupTaskDone(_ task: SetupPlanTask) {
-        UserDefaults.standard.set(true, forKey: "setup.done.\(task.rawValue)")
-        objectWillChange.send()
-    }
-    private func markSetupTaskDoneIf(_ task: SetupPlanTask, when cond: Bool) {
-        if cond { markSetupTaskDone(task) }
-    }
-    var setupCompletedCount: Int { SetupPlanTask.allCases.filter(setupTaskDone).count }
-
-    // MARK: - Card list strategies (CardListStrategy)
-
-    /// The card list for the current sidebar selection + search — mirrors the
-    /// per-special-label strategies (ArchiveCardListStrategy, TrashCardListStrategy, …).
-    func cards(for selection: SidebarSelection, search: String) -> [Card] {
-        let searchWords = search.lowercased()
-            .split(separator: " ").map(String.init).filter { !$0.isEmpty }
-        var cards: [Card]
-        switch selection {
-        case .special(let sp):
-            cards = strategyCards(for: sp)
-        case .label(let labelId):
-            cards = database.activeCards.filter { $0.labelIds.contains(labelId) && !$0.archived }
-        }
-        if !searchWords.isEmpty {
-            cards = cards.filter { satisfiesSearch($0, words: searchWords) }
-        }
-        return settings.sortingValue.sort(cards, favoritesFirst: settings.favoritesAtTop)
-    }
-
-    private func strategyCards(for sp: SpecialLabel) -> [Card] {
-        let active = database.activeCards
-        switch sp {
-        case .allCards:
-            return active.filter { !$0.archived }
-        case .favorites:
-            return active.filter { $0.favorite && !$0.archived }
-        case .recent:
-            let ids = recentIds
-            return ids.compactMap { id in active.first { $0.id == id } }
-        case .passwords:
-            return active.filter { !$0.archived && $0.fields.contains { $0.type == .password } }
-        case .oneTimeCodes:
-            return active.filter { !$0.archived && $0.fields.contains { $0.type == .oneTimePassword } }
-        case .notes:
-            return active.filter { !$0.archived && $0.hasNotes && $0.fields.allSatisfy { !$0.type.isLogin && $0.type != .password } }
-        case .files:
-            return active.filter { !$0.archived && $0.hasFiles }
-        case .images:
-            return active.filter { !$0.archived && $0.hasImages }
-        case .passkeys:
-            return [] // passkeys are created in the mobile version (passkeys_empty_state)
-        case .creditCards:
-            return active.filter { !$0.archived && $0.symbol == "credit_card" }
-        case .weakPasswords:
-            return active.filter { !$0.archived && $0.hasWeakPasswords }
-        case .samePasswords:
-            let groups = SamePasswordsService.groups(cards: active)
-            let ids = Set(groups.values.flatMap { $0 })
-            return active.filter { ids.contains($0.id) }
-        case .compromised:
-            return active.filter { !$0.archived && $0.compromised }
-        case .expiring:
-            return active.filter { !$0.archived && !$0.trashed && $0.isExpiring }
-        case .expired:
-            return active.filter { !$0.archived && !$0.trashed && $0.isExpired }
-        case .archived:
-            return active.filter { $0.archived }
-        case .trash:
-            return database.cards.filter { $0.trashed }
-        case .templates:
-            return database.templateCards.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-        }
-    }
-
-    /// XCard.satisfiesToSearchWords:labelNames: — every word must hit title,
-    /// field name/value, notes or label names; passwords optionally included.
-    private func satisfiesSearch(_ card: Card, words: [String]) -> Bool {
-        words.allSatisfy { containsWord(card, word: $0) }
-    }
-
-    private func containsWord(_ card: Card, word: String) -> Bool {
-        if card.title.lowercased().contains(word) { return true }
-        if card.notes.lowercased().contains(word) { return true }
-        for f in card.fields {
-            if f.name.lowercased().contains(word) { return true }
-            if f.type.isSearchable {
-                if !f.type.isHidden || settings.searchPasswords {
-                    if f.value.lowercased().contains(word) { return true }
-                } else if f.value.lowercased().contains(word) {
-                    return true // hidden fields match on value but not shown in preview
-                }
-            }
-        }
-        if settings.searchByLabels {
-            for lid in card.labelIds {
-                if let l = database.label(id: lid), l.name.lowercased().contains(word) { return true }
-            }
-        }
-        return false
-    }
-
-    /// XCard.previewForSearchWords — the "title — matched snippet" row preview.
-    func searchPreview(for card: Card, word: String) -> String? {
-        let w = word.lowercased()
-        for f in card.fields where f.type.isSearchable {
-            if !f.type.isHidden || settings.searchPasswords {
-                if f.value.lowercased().contains(w) {
-                    return "\(f.name): …\(snippet(f.value, around: w))…"
-                }
-            }
-        }
-        if card.notes.lowercased().contains(w) {
-            return "…\(snippet(card.notes, around: w))…"
-        }
-        return nil
-    }
-
-    private func snippet(_ text: String, around w: String) -> String {
-        guard let r = text.range(of: w, options: .caseInsensitive) else { return String(text.prefix(30)) }
-        let start = text.index(r.lowerBound, offsetBy: -10, limitedBy: text.startIndex) ?? text.startIndex
-        let end = text.index(r.upperBound, offsetBy: 20, limitedBy: text.endIndex) ?? text.endIndex
-        return String(text[start..<end])
-    }
-
-    /// Sidebar badge counts (show_card_count_setting).
-    func count(for selection: SidebarSelection) -> Int {
-        cards(for: selection, search: "").count
-    }
-
-    // MARK: - Card CRUD (DatabaseManager actions)
-
-    func newCardId() -> Int { database.nextItemId() }
-
-    func instantiate(templateId: Int) -> Card {
-        if let spec = Templates.spec(id: templateId) {
-            return Templates.makeCard(from: spec, id: newCardId())
-        }
-        var c = Card(id: newCardId())
-        c.created = Date().millis
-        c.modified = c.created
-        return c
-    }
-
-    func upsertCard(_ card: Card) {
-        var c = card
-        c.modified = Date().millis
-        if let i = database.cards.firstIndex(where: { $0.id == c.id }) {
-            // keep old values in field history
-            for (j, f) in c.fields.enumerated() {
-                if let old = database.cards[i].fields.first(where: { $0.name == f.name && $0.type == f.type }) {
-                    c.fields[j].putHistoryValue(old.value, time: old.modifiedOr(c.modified))
-                }
-            }
-            database.cards[i] = c
-        } else {
-            database.cards.append(c)
-        }
-        selectedCardId = c.id
-        saveDebounced()
-    }
-
-    func trashCard(_ id: Int) {
-        guard let i = database.cards.firstIndex(where: { $0.id == id }) else { return }
-        database.cards[i].trashed = true
-        database.cards[i].modified = Date().millis
-        if selectedCardId == id { selectedCardId = nil }
-        saveDebounced()
-    }
-
-    func deleteCardPermanently(_ id: Int) {
-        database.deleteCardPermanently(id: id)
-        if selectedCardId == id { selectedCardId = nil }
-        saveDebounced()
-    }
-
-    func restoreCard(_ id: Int) {
-        guard let i = database.cards.firstIndex(where: { $0.id == id }) else { return }
-        database.cards[i].trashed = false
-        database.cards[i].archived = false
-        database.cards[i].modified = Date().millis
-        saveDebounced()
-    }
-
-    func archiveCard(_ id: Int) {
-        guard let i = database.cards.firstIndex(where: { $0.id == id }) else { return }
-        database.cards[i].archived = true
-        database.cards[i].modified = Date().millis
-        saveDebounced()
-    }
-
-    func unarchiveCard(_ id: Int) {
-        guard let i = database.cards.firstIndex(where: { $0.id == id }) else { return }
-        database.cards[i].archived = false
-        database.cards[i].modified = Date().millis
-        saveDebounced()
-    }
-
-    func toggleFavorite(_ id: Int) {
-        guard let i = database.cards.firstIndex(where: { $0.id == id }) else { return }
-        database.cards[i].favorite.toggle()
-        saveDebounced()
-    }
-
-    /// card-level `autofill="on|off"` XML attribute (ViewCardViewController checkbox).
-    func setCardAutofill(_ id: Int, on: Bool) {
-        guard let i = database.cards.firstIndex(where: { $0.id == id }) else { return }
-        database.cards[i].autofillEnabled = on
-        saveDebounced()
-    }
-
-    func duplicateCard(_ id: Int) {
-        guard let card = database.card(id: id) else { return }
-        var copy = card
-        copy.id = newCardId()
-        copy.title = card.title
-        copy.created = Date().millis
-        copy.modified = copy.created
-        copy.favorite = false
-        database.cards.append(copy)
-        selectedCardId = copy.id
-        saveDebounced()
-    }
-
-    func emptyTrash() {
-        let ids = database.cards.filter(\.trashed).map(\.id)
-        for id in ids { database.deleteCardPermanently(id: id) }
-        saveDebounced()
-    }
-
-    // MARK: - Label CRUD
-
-    func addLabel(name: String, color: String?) {
-        let id = database.nextItemId()
-        database.labels.append(CardLabel(id: id, name: name, color: color, timeStamp: Date().millis))
-        saveDebounced()
-    }
-
-    func renameCardLabel(id: Int, to name: String) {
-        guard let i = database.labels.firstIndex(where: { $0.id == id }) else { return }
-        database.labels[i].name = name
-        database.labels[i].timeStamp = Date().millis
-        saveDebounced()
-    }
-
-    func setLabelColor(id: Int, color: String?) {
-        guard let i = database.labels.firstIndex(where: { $0.id == id }) else { return }
-        database.labels[i].color = color
-        saveDebounced()
-    }
-
-    func toggleLabelPinned(id: Int) {
-        guard let i = database.labels.firstIndex(where: { $0.id == id }) else { return }
-        database.labels[i].pinToTop.toggle()
-        saveDebounced()
-    }
-
-    func deleteCardLabel(id: Int) {
-        database.labels.removeAll { $0.id == id }
-        for i in database.cards.indices {
-            database.cards[i].labelIds.removeAll { $0 == id }
-        }
-        if case .label(id) = selection { selection = .special(.allCards) }
-        saveDebounced()
-    }
-
-    /// setLabels on a card (SetLabelsSheetController).
-    func setLabels(cardId: Int, labelIds: [Int]) {
-        guard let i = database.cards.firstIndex(where: { $0.id == cardId }) else { return }
-        database.cards[i].labelIds = labelIds
-        database.cards[i].modified = Date().millis
-        saveDebounced()
-    }
-
-    /// SetLabelsViewController "create new label on the fly".
-    func addLabelAndAssign(name: String, color: String?, to cardId: Int) {
-        let id = database.nextItemId()
-        database.labels.append(CardLabel(id: id, name: name, color: color, timeStamp: Date().millis))
-        guard let i = database.cards.firstIndex(where: { $0.id == cardId }) else { return }
-        database.cards[i].labelIds.append(id)
-        database.cards[i].modified = Date().millis
-        saveDebounced()
-    }
-
-    // MARK: - Change password (SetPasswordSheetController / changePassword:)
-
-    func changePassword(current: String, new: String) throws {
-        guard current == password else {
-            Log.warn("db", "changePassword \"\(databaseName)\" failed: wrong current password")
-            throw DatabaseCipher.CipherError(message: L10n.t("wrong_password_error"))
-        }
-        // re-encrypt under the new password
-        try store.save(database, name: databaseName, password: new)
-        PasswordStore.savePassword(new, databaseName: databaseName)
-        if settings.fastUnlock && PasswordStore.biometricAvailable() {
-            PasswordStore.savePasswordForBiometric(new, databaseName: databaseName)
-        }
-        password = new
-        Log.info("db", "changePassword \"\(databaseName)\" ok (re-encrypted)")
-    }
-
-    // MARK: - Info
-
-    func dbsInfo() -> [DatabaseFile] { store.list() }
-
-    var allHistoryEntries: [(card: Card, field: Field, entry: HistoryEntry)] {
-        var out: [(card: Card, field: Field, entry: HistoryEntry)] = []
-        for c in database.cards where !c.template {
-            for f in c.fields {
-                for e in f.history { out.append((card: c, field: f, entry: e)) }
-            }
-        }
-        return out.sorted { l, r in l.entry.time > r.entry.time }
-    }
-
-    // MARK: - Backup / sync
-
-    func backupNow() {
-        save()
-        do {
-            try store.backup(name: databaseName, password: password)
-            Log.info("backup", "manual backup of \"\(databaseName)\" ok")
-            AppToast.shared.show(L10n.t("database_saved_message") + " " + L10n.t("backup_command"))
-        } catch {
-            Log.error("backup", "manual backup of \"\(databaseName)\" failed: \(error)")
-            AppToast.shared.show(error.localizedDescription)
-        }
-    }
-
-    private func scheduleAutoBackupIfNeeded() {
-        guard settings.autoBackupEnabled, settings.backupIntervalDays > 0 else { return }
-        let last = UserDefaults.standard.double(forKey: "backup.last.\(databaseName)")
-        let interval = Double(settings.backupIntervalDays) * 86400
-        let elapsed = Date().timeIntervalSince1970 - last
-        guard elapsed >= interval else {
-            Log.debug("backup", "auto-backup not due (elapsed \(Int(elapsed))s < interval \(Int(interval))s)")
-            return
-        }
-        do {
-            try store.backup(name: databaseName, password: password)
-            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "backup.last.\(databaseName)")
-            Log.info("backup", "auto backup of \"\(databaseName)\" ok")
-        } catch {
-            Log.error("backup", "auto backup of \"\(databaseName)\" failed: \(error)")
-        }
-    }
-
-    /// sync: — WebDavDriver download/merge/upload.
-    func sync() async {
-        guard settings.cloud == .webdav else {
-            if settings.cloud == .none {
-                syncState = .disabled
-                Log.debug("sync", "sync skipped: cloud disabled")
-                AppToast.shared.show(L10n.t("sync_disabled_state"))
-            } else {
-                Log.debug("sync", "sync skipped: cloud=\(settings.cloud) not configured")
-                AppToast.shared.show(L10n.t("not_configured_state"))
-            }
-            return
-        }
-        Log.info("sync", "sync \"\(databaseName)\" started (webdav)")
-        syncState = .syncing
-        save()
-        let driver = WebDavDriver(settings: settings.webdav, databaseName: databaseName)
-        do {
-            try await driver.testConnection()
-            Log.debug("sync", "webdav connection ok")
-            let remoteData = try await driver.download()
-            var local = database
-            if let remoteData {
-                let plain = try DatabaseCipher.decryptedData(remoteData, password: password)
-                let remote = try PasswordDatabase.parse(plain)
-                Log.info("sync", "remote: \(remote.cards.count) cards, \(remote.labels.count) labels; local: \(local.cards.count) cards — merging")
-                local.merge(with: remote)
-                database = local
-                save()
-            } else {
-                Log.info("sync", "no remote database yet — uploading local")
-            }
-            let out = try DatabaseCipher.encryptedData(database.xmlData(), password: password)
-            try await driver.upload(out)
-            lastSync = Date()
-            syncState = .idle
-            Log.info("sync", "sync \"\(databaseName)\" finished (uploaded \(out.count)B)")
-            AppToast.shared.show(L10n.t("last_sync_completed_prompt") + " " + DateFormatter.localizedString(from: lastSync!, dateStyle: .short, timeStyle: .short))
-        } catch {
-            lastSyncFailed = Date()
-            syncState = .error(error.localizedDescription)
-            Log.error("sync", "sync \"\(databaseName)\" failed: \(error)")
-            AppToast.shared.show("\(L10n.t("sync_error")): \(error.localizedDescription)")
-        }
-    }
-
     // MARK: - Auto-lock (LockedState + auto_lock_setting)
 
     private func installActivityMonitor() {
@@ -727,8 +345,10 @@ final class AppContext: ObservableObject {
         }
         // Any interaction with the app (typing, clicks, scrolling) counts as
         // activity for the idle timer — not just switching the selected card.
-        NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]) { event in
-            Task { @MainActor [weak self] in self?.touch() }
+        // 本地事件监视器总在主线程触发;直接记录,避免每个按键/滚动事件都
+        // 创建一次 Task(高频事件下造成不必要的调度开销)。
+        NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]) { [weak self] event in
+            MainActor.assumeIsolated { self?.touch() }
             return event
         }
         NSApplication.shared.publisher(for: \.isHidden)
@@ -753,92 +373,4 @@ final class AppContext: ObservableObject {
     }
 
     func touch() { lastActivity = Date() }
-}
-
-extension Field {
-    func modifiedOr(_ fallback: TimeInterval) -> TimeInterval { fallback }
-}
-
-/// Sheets catalog — one case per original *SheetController; associated values
-/// carry targets (label id, card id, field draft…).
-enum AppSheet: Identifiable, Hashable {
-    case addCard            // SelectTemplateSheetController (添加项目)
-    case addNote            // 添加笔记
-    case addLabel           // AddLabelSheetController
-    case editCardLabel(id: Int) // rename_label_title
-    case selectColorCardLabel(id: Int) // SelectColorViewController for labels
-    case addTemplate        // save_as_template (存为模板)
-    case sorting            // SortingSheetController
-    case generator          // PasswordOptionsSheetController
-    case labels(cardId: Int) // SetLabelsSheetController
-    case addField           // AddFieldSheetController
-    case editField          // EditFieldSheetController
-    case selectSymbol       // SelectSymbolViewController
-    case selectColor        // SelectColorViewController (cards)
-    case selectTexture      // SelectTextureSheetController
-    case selectTemplate     // template picker inside edit-card
-    case history            // HistorySheetController (recent)
-    case passwordHistory    // password_history_command
-    case exportAs           // ExportAsSheetController
-    case importData         // ImportSheetController + ImportSourceViewController
-    case databaseInfo       // DatabaseInfoSheetController
-    case compromised        // CompromisedPasswordsSheetController
-    case changePassword     // SetPasswordSheetController
-    case configureCloud     // ConfigureCloudSheetController
-    case eraseData          // 擦除数据 confirm
-    case manageDatabases    // ManageDatabasesViewController
-    case selectDatabase     // SelectDatabaseSheetController
-    case preferences        // 设置 window
-    case about              // AboutWindowController
-    case whatsNew           // WhatsNewSheetController
-    case premium            // PremiumSheetController
-    case setupPlan          // SetupPlanViewController
-    case enterPassword      // EnterPasswordSheetController (unlock)
-    case expiredCards       // expiring_cards_warning prompt
-    case restoreTemplates   // restore_templates_query
-
-    var id: String {
-        switch self {
-        case .addCard: return "addCard"
-        case .addNote: return "addNote"
-        case .addLabel: return "addLabel"
-        case .editCardLabel(let id): return "editLabel:\(id)"
-        case .selectColorCardLabel(let id): return "selectColorLabel:\(id)"
-        case .addTemplate: return "addTemplate"
-        case .sorting: return "sorting"
-        case .generator: return "generator"
-        case .labels(let id): return "labels:\(id)"
-        case .addField: return "addField"
-        case .editField: return "editField"
-        case .selectSymbol: return "selectSymbol"
-        case .selectColor: return "selectColor"
-        case .selectTexture: return "selectTexture"
-        case .selectTemplate: return "selectTemplate"
-        case .history: return "history"
-        case .passwordHistory: return "passwordHistory"
-        case .exportAs: return "exportAs"
-        case .importData: return "importData"
-        case .databaseInfo: return "databaseInfo"
-        case .compromised: return "compromised"
-        case .changePassword: return "changePassword"
-        case .configureCloud: return "configureCloud"
-        case .eraseData: return "eraseData"
-        case .manageDatabases: return "manageDatabases"
-        case .selectDatabase: return "selectDatabase"
-        case .preferences: return "preferences"
-        case .about: return "about"
-        case .whatsNew: return "whatsNew"
-        case .premium: return "premium"
-        case .setupPlan: return "setupPlan"
-        case .enterPassword: return "enterPassword"
-        case .expiredCards: return "expiredCards"
-        case .restoreTemplates: return "restoreTemplates"
-        }
-    }
-}
-
-extension AppContext {
-    var selectedCard: Card? {
-        selectedCardId.flatMap { database.card(id: $0) }
-    }
 }

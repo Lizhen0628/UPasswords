@@ -149,7 +149,8 @@ struct CardDetailView: View {
     private func notesSection(_ card: Card) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionTitle(L10n.t("notes_tab"))
-            Text(card.notes)
+            // 笔记里的 Markdown 标记(链接/加粗/斜体/删除线)渲染后展示,链接可直接点击
+            Text(AttributedString(NotesMarkdown.render(card.notes)))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)

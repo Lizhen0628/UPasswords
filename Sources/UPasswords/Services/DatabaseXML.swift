@@ -25,9 +25,6 @@ struct PasswordDatabase: Codable, Equatable {
 
     // MARK: - Adapter accessors (DatabaseAdapter.h)
 
-    var allCards: [Card] { cards }
-    var allLabels: [CardLabel] { labels }
-
     func card(id: Int) -> Card? { cards.first { $0.id == id } }
     func label(id: Int) -> CardLabel? { labels.first { $0.id == id } }
 
@@ -89,13 +86,9 @@ struct PasswordDatabase: Codable, Equatable {
     /// Registers a tombstone and removes the item (deleteCardWithId:).
     mutating func deleteCardPermanently(id: Int, now: Date = Date()) {
         cards.removeAll { $0.id == id }
-        var g = byIdGhost(id)
-        if g == nil {
-            g = Ghost(id: id, time: now.millis)
-        } else {
-            g!.time = now.millis
-        }
-        upsertGhost(g!)
+        var g = byIdGhost(id) ?? Ghost(id: id, time: now.millis)
+        g.time = now.millis
+        upsertGhost(g)
     }
 
     private func byIdGhost(_ id: Int) -> Ghost? { ghosts.first { $0.id == id } }

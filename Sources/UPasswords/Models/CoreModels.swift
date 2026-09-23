@@ -43,13 +43,9 @@ enum FieldType: String, CaseIterable, Codable, Identifiable {
         default: return false
         }
     }
-    var isPassword: Bool { self == .password || self == .pin || self == .secret }
     var isOneTimePassword: Bool { self == .oneTimePassword }
     var isLogin: Bool { self == .login || self == .email }
-    var isEmail: Bool { self == .email }
     var isNumber: Bool { self == .number }
-    var isDate: Bool { self == .date }
-    var isExpiry: Bool { self == .expiry }
     var isSearchable: Bool { self != .oneTimePassword }
     /// Password-like fields participate in weak/same/compromised analysis.
     var needsScoring: Bool { self == .password }
@@ -186,12 +182,9 @@ struct Card: Codable, Equatable, Identifiable {
 
     // XCard derived accessors ---------------------------------------------
     var isTemplate: Bool { template }
-    var isDeleted: Bool { trashed }
-    var isArchivedCard: Bool { archived && !trashed }
 
     var loginField: Field? { fields.first { $0.type.isLogin } }
     var passwordField: Field? { fields.first { $0.type == .password } }
-    var oneTimePasswordField: Field? { fields.first { $0.type == .oneTimePassword } }
     var websiteField: Field? { fields.first { $0.type == .website } }
 
     var login: String { loginField?.value ?? "" }
@@ -200,10 +193,6 @@ struct Card: Codable, Equatable, Identifiable {
     var hasNotes: Bool { !notes.isEmpty }
     var hasImages: Bool { !images.isEmpty }
     var hasFiles: Bool { !files.isEmpty }
-
-    var expiryDate: Date? {
-        expiration.map { Date(timeIntervalSince1970: $0 / 1000) }
-    }
 
     static func days(fromMillis ms: TimeInterval, to date: Date = Date()) -> Int {
         let d = Date(timeIntervalSince1970: ms / 1000)
@@ -237,4 +226,22 @@ struct Card: Codable, Equatable, Identifiable {
         if !notes.isEmpty { lines.append(notes) }
         return lines.joined(separator: "\n")
     }
+}
+
+// MARK: - Security flags (from XCard)
+
+extension Card {
+    /// Weak-password flag recomputed on demand (XCard.hasWeakPasswords).
+    var hasWeakPasswords: Bool {
+        fields.contains { $0.type.needsScoring && !$0.value.isEmpty && PasswordStrength.score($0.value).score <= 1 }
+    }
+
+    /// Offline compromised flag (fast mark; full HIBP check runs in the sheet).
+    var compromised: Bool {
+        fields.contains { $0.type.needsScoring && CompromisedService.offlineDemoSet.contains($0.value) }
+    }
+}
+
+extension Field {
+    func modifiedOr(_ fallback: TimeInterval) -> TimeInterval { fallback }
 }

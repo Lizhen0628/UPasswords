@@ -21,10 +21,7 @@ let package = Package(
         .testTarget(
             name: "UPasswordsTests",
             dependencies: ["UPasswords"],
-            path: "Tests/UPasswordsTests",
-            resources: [
-                .process("Fixtures")
-            ]
+            path: "Tests/UPasswordsTests"
         )
     ]
 )

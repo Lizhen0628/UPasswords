@@ -138,8 +138,6 @@ enum Templates {
         c.template = true
         return c
     }
-
-    static let templateIds: Set<Int> = Set(all.map(\.id))
 }
 
 extension Date {

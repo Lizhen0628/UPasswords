@@ -93,28 +93,6 @@ struct StrengthIndicatorView: View {
     }
 }
 
-/// Toast overlay used by all windows (text_copied_message etc.).
-struct ToastOverlay: View {
-    @EnvironmentObject var toast: AppToast
-
-    var body: some View {
-        VStack {
-            Spacer()
-            if let msg = toast.message {
-                Text(msg)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .shadow(radius: 4)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
-        .animation(.spring(duration: 0.25), value: toast.message)
-        .padding(.bottom, 24)
-        .allowsHitTesting(false)
-    }
-}
-
 extension View {
     /// Places the toast overlay + click-activity tracking on any root view.
     func withToastAndActivity() -> some View {
@@ -194,4 +172,19 @@ struct SidebarMaterial: NSViewRepresentable {
         return v
     }
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+// MARK: - 表单行(标签左对齐 110pt,内容填满)
+
+/// 设置/表单通用的「标签 + 内容」行。
+struct LabeledRow<Content: View>: View {
+    let label: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        HStack {
+            Text(label).frame(width: 110, alignment: .leading)
+            content.frame(maxWidth: .infinity)
+        }
+    }
 }

@@ -26,8 +26,9 @@ enum TOTP {
         var bits = 0
         var value = 0
         var out: [UInt8] = []
-        for ch in s.uppercased() where alphabet.contains(ch) {
-            value = (value << 5) | alphabet.firstIndex(of: ch)!
+        for ch in s.uppercased() {
+            guard let index = alphabet.firstIndex(of: ch) else { continue } // 跳过 '=' 等非字母表字符
+            value = (value << 5) | index
             bits += 5
             if bits >= 8 {
                 out.append(UInt8((value >> (bits - 8)) & 0xFF))

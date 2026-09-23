@@ -237,7 +237,7 @@ struct AutofillPane: View {
                 Text(L10n.t("install_extension_text"))
                 Label(L10n.t("use_for_autofill_button"), systemImage: "iphone")
                     .font(.headline)
-                Text("macOS autofill requires a Credential Provider extension and is not part of this replica; passwords can be copied from any field instead.")
+                Text(L10n.t("autofill_replica_note"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: 460, alignment: .leading)

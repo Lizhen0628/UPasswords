@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Mirrors `PasswordStrength` + `PasswordStrengthModel` + zxcvbn-style analysis
 /// (`_zxcvbn` symbol + dictionary.txt/adjacency_graphs.json in the original
@@ -148,7 +149,16 @@ struct PasswordStrength: Equatable {
 
     /// Convenience: the attacker always takes the cheapest strategy, so the
     /// effective entropy is min(pattern-search entropy, raw brute-force entropy).
+    ///
+    /// 结果经有界缓存(见 scoreCache):侧栏弱密码计数和详情页强度条每次渲染
+    /// 都会对所有密码字段重算,而 score 是纯函数,缓存后结果完全一致。
     static func score(_ password: String) -> PasswordStrength {
+        let key = cacheKey(for: password)
+        cacheLock.lock()
+        let hit = scoreCache[key]
+        cacheLock.unlock()
+        if let hit { return hit }
+
         let p = evaluate(password)
         let b = bruteEntropy(password)
         let entropy = min(p.entropy, b)
@@ -160,8 +170,31 @@ struct PasswordStrength: Equatable {
         case ..<80: s = 3
         default: s = 4
         }
-        return PasswordStrength(score: s, entropy: entropy)
+        let result = PasswordStrength(score: s, entropy: entropy)
+
+        cacheLock.lock()
+        if scoreCache[key] == nil {
+            scoreCache[key] = result
+            scoreCacheOrder.append(key)
+            if scoreCacheOrder.count > scoreCacheLimit {
+                scoreCache.removeValue(forKey: scoreCacheOrder.removeFirst())
+            }
+        }
+        cacheLock.unlock()
+        return result
     }
+
+    // MARK: - Score cache
+
+    /// 缓存键用密码的 SHA-256,避免在数据库之外再长期留存明文。
+    private static func cacheKey(for password: String) -> String {
+        SHA256.hash(data: Data(password.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var scoreCache: [String: PasswordStrength] = [:]
+    nonisolated(unsafe) private static var scoreCacheOrder: [String] = []  // FIFO 逐出
+    private static let scoreCacheLimit = 512
 }
 
 extension PasswordStrength {

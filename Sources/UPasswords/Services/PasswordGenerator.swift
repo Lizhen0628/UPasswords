@@ -42,6 +42,10 @@ final class PasswordGenerator {
 
     private(set) var history: [String] = []
     let dictionary: [String]
+    /// 生成历史容量上限(超出淘汰最旧记录)
+    private static let historyLimit = 20
+    /// 便于记忆密码的最大组词数(超过后截断,避免超长)
+    private static let memorableMaxWords = 6
 
     init() {
         // Compact embedded word list (original ships dictionary.txt for
@@ -72,10 +76,9 @@ final class PasswordGenerator {
         guard !p.isEmpty else { return }
         history.removeAll { $0 == p }
         history.insert(p, at: 0)
-        if history.count > 20 { history.removeLast(history.count - 20) }
+        if history.count > Self.historyLimit { history.removeLast(history.count - Self.historyLimit) }
     }
     func clearHistory() { history.removeAll() }
-    func eraseData() { history.removeAll() }
 
     // MARK: Alphabets
 
@@ -116,10 +119,11 @@ final class PasswordGenerator {
         guard !pools.isEmpty else { return "" }
         var chars: [Character] = []
         // guarantee at least one char from each pool when length allows
+        // (pools 已过滤非空,此处解包为逻辑保证)
         for pool in pools where chars.count < length {
             chars.append(pool.randomElement()!)
         }
-        let all = pools.joined()
+        let all = pools.joined()  // pools 非空 → all 非空
         while chars.count < length {
             chars.append(all.randomElement()!)
         }
@@ -127,6 +131,7 @@ final class PasswordGenerator {
     }
 
     func memorablePassword(length: Int) -> String {
+        // 三元表达式 else 分支已保证 separatorAlphabet 非空,解包为逻辑保证
         let sep = separatorAlphabet.isEmpty ? "-" : String(separatorAlphabet.randomElement()!)
         var words: [String] = []
         var total = 0
@@ -134,8 +139,8 @@ final class PasswordGenerator {
             let w = dictionaryWord(maxLength: max(3, length - total))
             if total > 0 { total += 1 }
             total += w.count
-            words.append(total <= length + 4 ? w : w)
-            if words.count >= 6 { break }
+            words.append(w)
+            if words.count >= Self.memorableMaxWords { break }
         }
         var pw = words.joined(separator: sep)
         if pw.count > length + 4 {
@@ -147,10 +152,5 @@ final class PasswordGenerator {
     func dictionaryWord(maxLength: Int) -> String {
         let candidates = dictionary.filter { $0.count <= max(3, maxLength) }
         return candidates.randomElement() ?? "word"
-    }
-
-    func randomNumber(maxLength: Int) -> String {
-        let n = Int.random(in: 0..<max(1, maxLength))
-        return String(n)
     }
 }

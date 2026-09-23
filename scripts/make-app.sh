@@ -63,10 +63,8 @@ PLIST
 if [ -f "Resources/AppIcon.icns" ]; then
   cp "Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 fi
-# 菜单栏三钥匙 template 图
-if [ -f "Resources/MenuBarKeys.png" ]; then
-  cp "Resources/MenuBarKeys.png" "$CONTENTS/Resources/MenuBarKeys.png"
-fi
+# 菜单栏三钥匙 template 图随 SPM 资源打入 UPasswords_UPasswords.bundle(见上),
+# 由 StatusItemController 经 Bundle.module 加载。
 
 echo "==> $APP"
 du -sh "$APP"

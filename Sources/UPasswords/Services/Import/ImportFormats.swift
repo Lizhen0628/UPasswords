@@ -1,134 +1,8 @@
 import Foundation
 
-/// Mirrors `ImportFormat` / `ImportFormatFactory` (App/Import/ImportFormat.h):
-/// a pluggable family of competitor password-manager importers. Each format
-/// converts raw text into `[Card]`.
-protocol ImportFormat {
-    var id: String { get }
-    var title: String { get }
-    var fileExtension: String { get }
-    func canParse(_ text: String) -> Bool
-    func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int
-}
-
-enum ImportError: LocalizedError {
-    case cannotParse
-    var errorDescription: String? { L10n.t("wrong_database_format_error") }
-}
-
-// MARK: - CSV engine (CsvFormat.h)
-
-enum CSV {
-    /// RFC 4180-ish parser supporting quotes and embedded separators.
-    static func rows(_ text: String) -> [[String]] {
-        var rows: [[String]] = []
-        var field = ""
-        var row: [String] = []
-        var inQuotes = false
-        var i = text.startIndex
-        let end = text.endIndex
-        while i < end {
-            let c = text[i]
-            if inQuotes {
-                if c == "\"" {
-                    let next = text.index(after: i)
-                    if next < end, text[next] == "\"" { field.append("\""); i = next }
-                    else { inQuotes = false }
-                } else {
-                    field.append(c)
-                }
-            } else if c == "\"" {
-                inQuotes = true
-            } else if c == "," || c == "\t" {
-                row.append(field); field = ""
-            } else if c == "\n" {
-                row.append(field); field = ""
-                if !(row.count == 1 && row[0].isEmpty) { rows.append(row) }
-                row = []
-            } else if c != "\r" {
-                field.append(c)
-            }
-            i = text.index(after: i)
-        }
-        row.append(field)
-        if !(row.count == 1 && row[0].isEmpty) { rows.append(row) }
-        return rows
-    }
-
-    static func escape(_ s: String) -> String {
-        "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\""
-    }
-}
-
-/// Shared CSV card extraction with header auto-detection — the behavior of the
-/// original `CsvFormat` (column names probed case-insensitively).
-struct CSVImporter: ImportFormat {
-    let id: String
-    let title: String
-    let fileExtension = "csv"
-    /// required/optional column aliases → field slot
-    let columnMap: [String: [String]]
-    let tabSeparated: Bool
-
-    init(id: String, title: String, tabSeparated: Bool = false,
-         columnMap: [String: [String]]) {
-        self.id = id
-        self.title = title
-        self.columnMap = columnMap
-        self.tabSeparated = tabSeparated
-    }
-
-    func canParse(_ text: String) -> Bool {
-        guard let header = CSV.rows(text).first else { return false }
-        let lower = header.map { $0.lowercased() }
-        return columnMap.values.contains { aliases in aliases.contains { lower.contains($0) } }
-    }
-
-    private func index(of aliases: [String], in header: [String]) -> Int? {
-        let lower = header.map { $0.lowercased().trimmingCharacters(in: .whitespaces) }
-        for a in aliases {
-            if let i = lower.firstIndex(of: a) { return i }
-        }
-        // prefix match fallback (e.g. "url" matches "url_login")
-        for a in aliases {
-            if let i = lower.firstIndex(where: { $0.hasPrefix(a) }) { return i }
-        }
-        return nil
-    }
-
-    func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int {
-        var rows = CSV.rows(text)
-        guard rows.count >= 2 else { throw ImportError.cannotParse }
-        let header = rows.removeFirst()
-        guard let nameIdx = index(of: columnMap["name"] ?? [], in: header) else { throw ImportError.cannotParse }
-        let loginIdx = index(of: columnMap["login"] ?? [], in: header)
-        let pwIdx = index(of: columnMap["password"] ?? [], in: header)
-        let urlIdx = index(of: columnMap["url"] ?? [], in: header)
-        let noteIdx = index(of: columnMap["notes"] ?? [], in: header)
-
-        var count = 0
-        for row in rows {
-            func col(_ i: Int?) -> String { i.map { $0 < row.count ? row[$0] : "" } ?? "" }
-            if col(nameIdx).isEmpty && col(loginIdx).isEmpty && col(pwIdx).isEmpty { continue }
-            var card = Card(id: db.nextItemId())
-            card.title = col(nameIdx).isEmpty ? (col(loginIdx).isEmpty ? "—" : col(loginIdx)) : col(nameIdx)
-            card.symbol = "key"
-            card.color = "gray"
-            card.created = now.millis
-            card.modified = now.millis
-            if !col(loginIdx).isEmpty { card.fields.append(Field(name: L10n.db("login_field"), type: .login, value: col(loginIdx), autofill: .username)) }
-            if !col(pwIdx).isEmpty { card.fields.append(Field(name: L10n.db("password_field"), type: .password, value: col(pwIdx), autofill: .currentPassword)) }
-            if !col(urlIdx).isEmpty { card.fields.append(Field(name: L10n.db("url_field"), type: .website, value: col(urlIdx), autofill: .url)) }
-            if !col(noteIdx).isEmpty { card.notes = col(noteIdx) }
-            db.cards.append(card)
-            count += 1
-        }
-        return count
-    }
-}
-
 // MARK: - Concrete formats (ImportFormatFactory)
 
+/// 导入源目录(ImportSourceViewController 数据),顺序即弹窗展示顺序。
 enum ImportFormatFactory {
     /// The import source catalog shown by ImportSourceViewController.
     static let all: [any ImportFormat] = [
@@ -152,11 +26,12 @@ enum ImportFormatFactory {
         CommonCsvFormat(),
     ]
 
+    /// - Returns: 目录中 id 匹配的导入器,无匹配返回 nil
     static func format(id: String) -> (any ImportFormat)? { all.first { $0.id == id } }
 }
 
 /// SafeInCloud XML (XmlFormat.h) — accepts full `<database>` docs or a bare
-/// list of `<card>` elements.
+/// list of `<card>` elements. 同名卡与模板不重复导入,id 冲突时改派新 id。
 struct SafeInCloudXMLFormat: ImportFormat {
     let id = "safeincloud-xml"
     let title = "XML (SafeInCloud)"
@@ -181,6 +56,7 @@ struct SafeInCloudXMLFormat: ImportFormat {
     }
 }
 
+/// Chrome/Brave/Edge/Opera/Firefox 导出的 CSV(列名基本一致,仅品牌名不同)。
 struct ChromeFormat: ImportFormat {
     let browser: String
     var id: String { "chrome-\(browser.lowercased())" }
@@ -204,6 +80,7 @@ struct ChromeFormat: ImportFormat {
     }
 }
 
+/// LastPass 导出的 CSV(extra 列映射到笔记)。
 struct LastPassFormat: ImportFormat {
     let id = "lastpass"
     let title = "LastPass"
@@ -218,6 +95,7 @@ struct LastPassFormat: ImportFormat {
     }
 }
 
+/// Bitwarden 导出的 CSV:folder 列映射为标签(不存在则创建)。
 struct BitwardenCsvFormat: ImportFormat {
     let id = "bitwarden-csv"
     let title = "Bitwarden (CSV)"
@@ -239,8 +117,10 @@ struct BitwardenCsvFormat: ImportFormat {
             if col(nIdx).isEmpty && col(uIdx).isEmpty { continue }
             var card = Card(id: db.nextItemId())
             card.title = col(nIdx).isEmpty ? col(uIdx) : col(nIdx)
-            card.symbol = "key"; card.color = "gray"
-            card.created = now.millis; card.modified = now.millis
+            card.symbol = "key"
+            card.color = "gray"
+            card.created = now.millis
+            card.modified = now.millis
             if !col(uIdx).isEmpty { card.fields.append(Field(name: L10n.db("login_field"), type: .login, value: col(uIdx), autofill: .username)) }
             if !col(pIdx).isEmpty { card.fields.append(Field(name: L10n.db("password_field"), type: .password, value: col(pIdx), autofill: .currentPassword)) }
             if !col(urlIdx).isEmpty { card.fields.append(Field(name: L10n.db("url_field"), type: .website, value: col(urlIdx), autofill: .url)) }
@@ -255,6 +135,8 @@ struct BitwardenCsvFormat: ImportFormat {
         return count
     }
 
+    /// 取同名标签,不存在则创建;folder/folderId → 标签的共用映射。
+    /// - Returns: 标签 id
     static func ensureLabel(named name: String, in db: inout PasswordDatabase, now: Date) -> Int {
         if let l = db.labels.first(where: { $0.name == name }) { return l.id }
         let id = db.nextItemId()
@@ -263,6 +145,8 @@ struct BitwardenCsvFormat: ImportFormat {
     }
 }
 
+/// Bitwarden 导出的 JSON:兼容未加密导出的 `items` 与 `vault.items` 两种形状,
+/// folderId 经 folders 表映射为标签,totp 列映射为一次性验证码字段。
 struct BitwardenJsonFormat: ImportFormat {
     let id = "bitwarden-json"
     let title = "Bitwarden (JSON)"
@@ -283,8 +167,10 @@ struct BitwardenJsonFormat: ImportFormat {
             let login = item["login"] as? [String: Any]
             var card = Card(id: db.nextItemId())
             card.title = t.isEmpty ? "—" : t
-            card.symbol = "key"; card.color = "gray"
-            card.created = now.millis; card.modified = now.millis
+            card.symbol = "key"
+            card.color = "gray"
+            card.created = now.millis
+            card.modified = now.millis
             if let u = login?["username"] as? String, !u.isEmpty {
                 card.fields.append(Field(name: L10n.db("login_field"), type: .login, value: u, autofill: .username))
             }
@@ -309,6 +195,7 @@ struct BitwardenJsonFormat: ImportFormat {
     }
 }
 
+/// Dashlane 导出的 CSV(login 列可兼容 username/email)。
 struct DashlaneCsvFormat: ImportFormat {
     let id = "dashlane-csv"
     let title = "Dashlane (CSV)"
@@ -323,6 +210,7 @@ struct DashlaneCsvFormat: ImportFormat {
     }
 }
 
+/// 1Password 导出的 CSV。
 struct OnePasswordCsvFormat: ImportFormat {
     let id = "1password-csv"
     let title = "1Password (CSV)"
@@ -337,6 +225,7 @@ struct OnePasswordCsvFormat: ImportFormat {
     }
 }
 
+/// Safari/Passwords.app 导出的 CSV。
 struct ApplePasswordsFormat: ImportFormat {
     let id = "apple-passwords"
     let title = "Safari / Apple Passwords"
@@ -351,6 +240,7 @@ struct ApplePasswordsFormat: ImportFormat {
     }
 }
 
+/// NordPass 导出的 CSV。
 struct NordPassFormat: ImportFormat {
     let id = "nordpass"
     let title = "NordPass"
@@ -365,6 +255,7 @@ struct NordPassFormat: ImportFormat {
     }
 }
 
+/// Proton Pass 导出的 CSV(username/email 双列名兼容)。
 struct ProtonPassFormat: ImportFormat {
     let id = "protonpass"
     let title = "Proton Pass"
@@ -379,6 +270,7 @@ struct ProtonPassFormat: ImportFormat {
     }
 }
 
+/// KeePass/KeePassXC 导出的 CSV(title/account 双列名兼容)。
 struct KeePassFormat: ImportFormat {
     let id = "keepass"
     let title = "KeePass / KeePassXC"
@@ -393,6 +285,7 @@ struct KeePassFormat: ImportFormat {
     }
 }
 
+/// Keeper 导出的 CSV。
 struct KeeperFormat: ImportFormat {
     let id = "keeper"
     let title = "Keeper"
@@ -407,6 +300,7 @@ struct KeeperFormat: ImportFormat {
     }
 }
 
+/// RoboForm 导出的 CSV(密码列名为 pwd)。
 struct RoboFormFormat: ImportFormat {
     let id = "roboform"
     let title = "RoboForm"
@@ -436,33 +330,5 @@ struct CommonCsvFormat: ImportFormat {
             "notes": ["note", "notes", "comment"],
         ])
         return try imp.parse(text, into: &db, now: now)
-    }
-}
-
-// MARK: - Export (ExportCardsTask / ExportAsSheetController)
-
-enum ExportFormat: String, CaseIterable, Identifiable {
-    case xml, csv, txt
-    var id: String { rawValue }
-    var name: String { L10n.t("\(rawValue)_format_text") }
-}
-
-enum ExportCardsTask {
-    static func export(_ cards: [Card], labels: [CardLabel], format: ExportFormat) -> String {
-        switch format {
-        case .xml:
-            var db = PasswordDatabase()
-            db.labels = labels
-            db.cards = cards
-            return String(data: db.xmlData(), encoding: .utf8) ?? ""
-        case .csv:
-            var rows = [["title", "login", "password", "website", "notes"]]
-            for c in cards {
-                rows.append([c.title, c.login, c.password, c.website, c.notes])
-            }
-            return rows.map { $0.map(CSV.escape).joined(separator: ",") }.joined(separator: "\n")
-        case .txt:
-            return cards.map { $0.asPlainText() }.joined(separator: "\n\n" + String(repeating: "—", count: 30) + "\n\n")
-        }
     }
 }
