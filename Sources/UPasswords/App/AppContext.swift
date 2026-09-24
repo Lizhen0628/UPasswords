@@ -108,6 +108,59 @@ final class AppContext: ObservableObject {
                     Log.warn("keychain", "stored password unreadable (ACL/signature change?) → fallback to build password")
                 }
                 try? self.unlock(name: self.databaseName, password: pw)
+                // UP_SCREENSHOT_CARD=first/short:解锁后造演示卡并选中(详情页截图自动化)。
+                // 幂等:各演示卡按标题判断,存在即跳过。
+                if let screenshotCard = ProcessInfo.processInfo.environment["UP_SCREENSHOT_CARD"],
+                   !screenshotCard.isEmpty,
+                   let spec = Templates.spec(id: 102) {
+                    // 演示值(非真实凭据);前两张卡共用同一密码以复现「重复使用的密码」警告
+                    if !database.cards.contains(where: { $0.title == "国金" }) {
+                        var a = Templates.makeCard(from: spec, id: newCardId())
+                        a.title = "国金"
+                        a.fields = a.fields.map { f in
+                            var f = f
+                            switch f.type {
+                            case .login: f.value = "8886800628"
+                            case .password: f.value = "Xk7#pQ2vTr0ub4dor"
+                            case .website: f.value = "example.com"
+                            default: break
+                            }
+                            return f
+                        }
+                        a.notes = "第二因子使用硬件密钥。"
+                        a.labelIds = [1]
+                        upsertCard(a)
+                        var b = Templates.makeCard(from: spec, id: newCardId())
+                        b.title = "国金备用"
+                        b.fields = b.fields.map { f in
+                            var f = f
+                            if f.type == .password { f.value = "Xk7#pQ2vTr0ub4dor" }
+                            return f
+                        }
+                        upsertCard(b)
+                        Log.info("ui", "screenshot demo cards created")
+                    }
+                    // 短密码卡:复现 ≤6 位全打点掩码与「弱密码」警告卡
+                    if !database.cards.contains(where: { $0.title == "短密码示例" }) {
+                        var c = Templates.makeCard(from: spec, id: newCardId())
+                        c.title = "短密码示例"
+                        c.fields = c.fields.map { f in
+                            var f = f
+                            if f.type == .password { f.value = "abc12" }
+                            return f
+                        }
+                        upsertCard(c)
+                        Log.info("ui", "screenshot demo short-password card created")
+                    }
+                    // UP_SCREENSHOT_CARD=short 选中短密码卡,其余选中「国金」
+                    let selectTitle = screenshotCard == "short" ? "短密码示例" : "国金"
+                    if let demo = database.cards.first(where: { $0.title == selectTitle }) {
+                        selectedCardId = demo.id
+                        Log.info("ui", "screenshot select demo cardId=\(demo.id)")
+                        // 截图自动化:顺带触发一次复制提示,验证 HUD 样式(2s 后自动消失)
+                        AppToast.shared.show(L10n.t("text_copied_message"))
+                    }
+                }
                 // UP_SCREENSHOT_EDITOR=<templateId>:解锁后直接打开该模板的新卡编辑表单
                 if let specId = ProcessInfo.processInfo.environment["UP_SCREENSHOT_EDITOR"].flatMap(Int.init),
                    let spec = Templates.spec(id: specId) {

@@ -112,6 +112,7 @@
 "crash_reporting_text" = "崩溃日志可以帮助尽快修复 bug 和崩溃";
 "create_database_title" = "创建数据库";
 "created_asc_text" = "创建时间升序";
+"created_date_text" = "创建日期";
 "created_desc_text" = "创建时间降序";
 "created_prompt" = "已创建:";
 "credit_cards_empty_state" = "这里还没有任何内容。点击“添加”按钮，在这里添加一张信用卡。";
@@ -285,6 +286,7 @@
 "minutes_abbr_text" = " 分钟";
 "minutes_text" = " 分钟";
 "modified_asc_text" = "修改时间升序";
+"modified_date_text" = "修改日期";
 "modified_desc_text" = "修改时间降序";
 "modified_prompt" = "修改时间：";
 "months_text" = " 个月";
@@ -320,6 +322,7 @@
 "off_text" = "关闭";
 "ok_button" = "确定";
 "once_text" = "一次";
+"open_website_help" = "打开网站";
 "operation_canceled_text" = "操作已取消。";
 "options_title" = "选项";
 "organize_fields_button" = "组织条目";
@@ -383,11 +386,12 @@
 "restore_templates_command" = "恢复模板";
 "restore_templates_query" = "还原默认模板？";
 "restoring_database_message" = "正在还原数据库…";
+"reused_password_warning_body" = "此密码还在其他条目中使用，应进行更改，以免一处泄露、多处受影响。";
+"reused_password_warning_title" = "重复使用的密码";
 "root_folder_setting" = "根目录";
 "root_folder_text" = "这是原有方式。将数据库存储在根木中。所需权限：完全访问所有用户文件。";
 "same_passwords_message" = "相同的密码已在这些地方使用：";
 "same_passwords_title" = "密码相同";
-"save_and_close_button" = "保存并关闭";
 "save_as_template_button" = "存为模板";
 "save_as_template_command" = "存为模板";
 "save_as_template_title" = "存为模板";

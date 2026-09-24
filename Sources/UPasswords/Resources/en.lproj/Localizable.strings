@@ -112,6 +112,7 @@
 "crash_reporting_text" = "Crash reporting helps fixing bugs and crashes as soon as possible.";
 "create_database_title" = "Create Database";
 "created_asc_text" = "Created ↑";
+"created_date_text" = "Date Created";
 "created_desc_text" = "Created ↓";
 "created_prompt" = "Created:";
 "credit_cards_empty_state" = "There's nothing here yet. Click the Plus button and add a credit card here.";
@@ -285,6 +286,7 @@
 "minutes_abbr_text" = "min";
 "minutes_text" = "minutes";
 "modified_asc_text" = "Modified ↑";
+"modified_date_text" = "Date Modified";
 "modified_desc_text" = "Modified ↓";
 "modified_prompt" = "Modified:";
 "months_text" = "months";
@@ -320,6 +322,7 @@
 "off_text" = "Off";
 "ok_button" = "OK";
 "once_text" = "Once";
+"open_website_help" = "Open Website";
 "operation_canceled_text" = "The operation was canceled.";
 "options_title" = "Options";
 "organize_fields_button" = "Organize fields";
@@ -383,11 +386,12 @@
 "restore_templates_command" = "Restore Templates";
 "restore_templates_query" = "Restore default templates?";
 "restoring_database_message" = "Restoring database…";
+"reused_password_warning_body" = "This password is also used in other items. Change it so one leaked account does not expose the others.";
+"reused_password_warning_title" = "Reused Password";
 "root_folder_setting" = "Root folder";
 "root_folder_text" = "This is the old way. The database is stored in the root folder. Required permissions: full access to all user files.";
 "same_passwords_message" = "Same password is used for:";
 "same_passwords_title" = "Same Passwords";
-"save_and_close_button" = "Save & close";
 "save_as_template_button" = "Save as template";
 "save_as_template_command" = "Save as Template";
 "save_as_template_title" = "Save As Template";

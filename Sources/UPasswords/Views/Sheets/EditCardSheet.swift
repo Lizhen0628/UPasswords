@@ -114,8 +114,16 @@ private struct EditCardBody: View {
         VStack(spacing: 0) {
             header(cardBinding)
             Divider()
-            EditTabBar(tab: $tab)
-                .padding(.vertical, 10)
+            // 原生 macOS 分段控件(系统外观/选中态/键盘导航全部交给系统)
+            Picker("", selection: $tab) {
+                ForEach(EditCardSheet.EditTab.allCases) { t in
+                    Text(t.name).tag(t)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 340)
+            .padding(.vertical, 10)
             Group {
                 switch tab {
                 case .fields: FieldsTab(card: cardBinding, fieldEditor: $fieldEditor)
@@ -137,6 +145,8 @@ private struct EditCardBody: View {
                 } else {
                     draft.card.fields.append(field)
                 }
+                // 增改字段是对 editDraft 的静默写入,手动失效以立即刷新行列表
+                ctx.objectWillChange.send()
             }
             .environmentObject(ctx)
         }
@@ -201,7 +211,6 @@ private struct EditCardBody: View {
                 ctx.activeSheet = .selectTemplate
             } label: {
                 Label(L10n.db("templates_label"), systemImage: "square.stack.3d.up")
-                    .font(.system(size: 13))
             }
             .buttonStyle(PanelButtonStyle())
             .help(L10n.t("select_template_title"))
@@ -210,9 +219,9 @@ private struct EditCardBody: View {
                 favoriteBinding.wrappedValue.toggle()
             } label: {
                 Image(systemName: favoriteDraft ? "star.fill" : "star")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(favoriteDraft ? Color.yellow : Color.secondary)
-                    .frame(width: 32, height: 32)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(favoriteDraft ? Color.yellow : Color.white.opacity(0.55))
+                    .frame(width: 28, height: 24)
             }
             .buttonStyle(PanelButtonStyle(padding: 0))
             .help(L10n.t("favorites_label"))
@@ -241,7 +250,7 @@ private struct EditCardBody: View {
             }
             .buttonStyle(PanelButtonStyle())
             .keyboardShortcut(.cancelAction)
-            Button(L10n.t("save_and_close_button")) {
+            Button(L10n.t("save_button")) {
                 Log.info("ui", "edit sheet save cardId=\(draft.card.id) isNew=\(draft.isNew) fields=\(draft.card.fields.count) notes.len=\(draft.card.notes.count)")
                 ctx.upsertCard(draft.card)
                 ctx.editDraft = nil
@@ -254,78 +263,36 @@ private struct EditCardBody: View {
     }
 }
 
-// MARK: - 面板按钮(圆角矩形 + 细描边)
+// MARK: - 面板按钮(与主界面底栏胶囊按钮同款:白 4.5% 实底、无描边、5pt 圆角)
 
-/// 次级按钮:半透明面板底 + 细描边(模板/取消/存为模板/收藏)。
+/// 次级按钮:配方对齐 CardDetailView.capsuleButton(白 4.5% 实底、无描边、
+/// 5pt 圆角、24pt 高、白 85% 文字),按下时底色加深给出反馈。
+/// 模板/取消/存为模板/收藏/行内复制均走此风格。
 fileprivate struct PanelButtonStyle: ButtonStyle {
-    var padding: CGFloat = 14
+    var padding: CGFloat = 12
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .font(.system(size: 13))
+            .foregroundStyle(Color.white.opacity(0.85))
             .padding(.horizontal, padding)
-            .frame(minHeight: 32)
-            .background(RoundedRectangle(cornerRadius: 8)
-                .fill(Color.white.opacity(configuration.isPressed ? 0.12 : 0.07)))
-            .overlay(RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(Color.white.opacity(0.13), lineWidth: 1))
-            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .frame(minHeight: 24)
+            .background(RoundedRectangle(cornerRadius: 5)
+                .fill(Color.white.opacity(configuration.isPressed ? 0.10 : 0.045)))
+            .contentShape(RoundedRectangle(cornerRadius: 5))
     }
 }
 
-/// 主操作按钮:强调色实底 + 白色半粗文字(保存并关闭)。
+/// 主操作按钮:强调色实底 + 白色半粗文字(保存),尺寸与次级按钮一致。
 fileprivate struct AccentButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
-            .padding(.horizontal, 16)
-            .frame(minHeight: 32)
-            .background(RoundedRectangle(cornerRadius: 8)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 24)
+            .background(RoundedRectangle(cornerRadius: 5)
                 .fill(Color.accentColor.opacity(configuration.isPressed ? 0.8 : 1)))
             .foregroundStyle(.white)
-            .contentShape(RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-/// 分段选项卡:居中胶囊容器,选中段强调色圆角块 + 白字,
-/// 未选中相邻段之间有细分隔线。仅替换视觉,选中状态仍走同一个 tab 绑定。
-fileprivate struct EditTabBar: View {
-    @Binding var tab: EditCardSheet.EditTab
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(EditCardSheet.EditTab.allCases.indices, id: \.self) { i in
-                let t = EditCardSheet.EditTab.allCases[i]
-                if i > 0, EditCardSheet.EditTab.allCases[i - 1] != tab, t != tab {
-                    Divider()
-                        .frame(height: 14)
-                        .opacity(0.25)
-                }
-                segment(t)
-            }
-        }
-        .padding(2)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.25)))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
-        .frame(maxWidth: .infinity)
-    }
-
-    private func segment(_ t: EditCardSheet.EditTab) -> some View {
-        let selected = tab == t
-        return Button {
-            tab = t
-        } label: {
-            Text(t.name)
-                .font(.system(size: 13, weight: selected ? .semibold : .regular))
-                .foregroundStyle(selected ? Color.white : Color.primary.opacity(0.7))
-                .padding(.horizontal, 22)
-                .frame(height: 26)
-                .background {
-                    if selected {
-                        RoundedRectangle(cornerRadius: 6).fill(Color.accentColor)
-                    }
-                }
-                .contentShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .buttonStyle(.plain)
+            .contentShape(RoundedRectangle(cornerRadius: 5))
     }
 }
 
@@ -349,13 +316,13 @@ private struct FieldsTab: View {
         VStack(spacing: 0) {
             sectionHeader
             Divider()
-            ForEach(Array($card.fields.enumerated()), id: \.element.id) { index, $field in
+            ForEach(Array(card.fields.enumerated()), id: \.element.id) { index, field in
                 FieldEditRow(
-                    field: $field,
+                    field: fieldBinding(for: field.id),
                     canMoveUp: index > 0,
                     canMoveDown: index < card.fields.count - 1,
                     onEdit: { fieldEditor = FieldEditorState(field: field) },
-                    onDelete: { card.fields.removeAll { $0.id == field.id } },
+                    onDelete: { deleteField(field) },
                     onMove: { offset in moveField(field, offset: offset) }
                 )
                 if index < card.fields.count - 1 {
@@ -424,11 +391,39 @@ private struct FieldsTab: View {
         .buttonStyle(.plain)
     }
 
+    /// 按 Field.id 定位的编辑绑定。禁止索引式绑定(Array($fields.enumerated()),
+    /// 底层是 fields[下标]):删除行的事务里 SwiftUI 仍可能解析被删行遗留的
+    /// 旧绑定,删末行时旧下标恰等于新长度 → Index out of range 闪退。
+    /// 这里 get/set 都按 id 重新查找;get 未命中(行已移除的瞬时回读)返回空字段,
+    /// set 未命中直接丢弃并记日志,杜绝越界与「已删行复活」。
+    private func fieldBinding(for id: UUID) -> Binding<Field> {
+        Binding(
+            get: { card.fields.first { $0.id == id } ?? Field(name: "") },
+            set: { newValue in
+                guard let i = card.fields.firstIndex(where: { $0.id == id }) else {
+                    Log.info("ui", "field write dropped (row removed) fieldId=\(id)")
+                    return
+                }
+                card.fields[i] = newValue
+            }
+        )
+    }
+
+    private func deleteField(_ field: Field) {
+        card.fields.removeAll { $0.id == field.id }
+        // editDraft 有意不逐键广播(见 AppContext.editDraft 注释),结构性增删/移位
+        // 后必须手动失效弹窗子树,否则行要等下一次无关交互才重渲染(看似失效)
+        ctx.objectWillChange.send()
+        Log.info("ui", "field deleted cardId=\(card.id) fieldId=\(field.id) name.len=\(field.name.count) remaining=\(card.fields.count)")
+    }
+
     private func moveField(_ field: Field, offset: Int) {
         guard let i = card.fields.firstIndex(where: { $0.id == field.id }) else { return }
         let j = i + offset
         guard card.fields.indices.contains(j) else { return }
         card.fields.swapAt(i, j)
+        ctx.objectWillChange.send()
+        Log.info("ui", "field moved cardId=\(card.id) fieldId=\(field.id) dir=\(offset)")
     }
 }
 
@@ -451,12 +446,14 @@ struct FieldEditorSheet: View {
             title: state.field.name.isEmpty ? L10n.t("add_field_title") : L10n.t("edit_field_title"),
             okDisabled: name.isEmpty,
             onAppearBody: {
-                name = state.field.name
                 type = state.field.type
                 autofill = state.field.autofill
+                // 新建字段:名称默认与类型名相同(用户可改)
+                name = state.field.name.isEmpty ? type.localizedName : state.field.name
             },
             onCancel: { dismiss() },
             onOk: {
+                Log.info("ui", "field editor ok name.len=\(name.count) type=\(type.rawValue) autofill=\(autofill.rawValue)")
                 var f = state.field
                 f.name = name
                 f.type = type
@@ -473,6 +470,13 @@ struct FieldEditorSheet: View {
                         Picker("", selection: $type) {
                             ForEach(FieldType.allCases) { t in
                                 Text(t.localizedName).tag(t)
+                            }
+                        }
+                        // 名称仍为空或等于上一类型默认名时跟随新类型;
+                        // 已输入自定义名称则不覆盖
+                        .onChange(of: type) { oldType, newType in
+                            if name.isEmpty || name == oldType.localizedName {
+                                name = newType.localizedName
                             }
                         }
                     }
@@ -566,13 +570,14 @@ private struct FieldEditRow: View {
 
             valueArea
 
-            // 行内复制按钮(doc.on.doc)
+            // 行内复制按钮(doc.on.doc):与主界面分享按钮同款(白 55% 图标 + 4.5% 底)
             Button {
                 ClipboardModel.shared.copy(valueDraft)
             } label: {
                 Image(systemName: "doc.on.doc")
                     .font(.system(size: 12))
-                    .frame(width: 30, height: 28)
+                    .foregroundStyle(Color.white.opacity(0.55))
+                    .frame(width: 28, height: 24)
             }
             .buttonStyle(PanelButtonStyle(padding: 0))
             .disabled(valueDraft.isEmpty)

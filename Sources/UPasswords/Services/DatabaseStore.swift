@@ -241,7 +241,7 @@ final class AppToast: ObservableObject {
         message = text
         dismissTask?.cancel()
         dismissTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
             self?.message = nil
         }
     }

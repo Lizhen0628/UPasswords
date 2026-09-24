@@ -193,11 +193,44 @@ extension View {
 
 private struct ToastActivityModifier: ViewModifier {
     @EnvironmentObject var ctx: AppContext
+    @EnvironmentObject var toast: AppToast
 
     func body(content: Content) -> some View {
         content
             .onTapGesture { ctx.touch() }
             .onMoveCommand { _ in ctx.touch() }
+            .overlay(alignment: .top) {
+                if let message = toast.message {
+                    ToastHud(text: message)
+                }
+            }
+            .animation(.spring(response: 0.32, dampingFraction: 0.82), value: toast.message)
+    }
+}
+
+/// Apple 风格 HUD 提示:窗口顶部居中的悬浮胶囊——毛玻璃材质 + 白字 +
+/// 勾图标,带描边与投影,缩放淡入;悬浮于内容之上,不挤压布局,
+/// 且允许点击穿透(不挡下方控件)。约 2s 后自动消失(见 AppToast.show)。
+private struct ToastHud: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 14, weight: .medium))
+            Text(text)
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 15)
+        .padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+        .shadow(color: .black.opacity(0.35), radius: 14, y: 5)
+        .padding(.top, 8)
+        .allowsHitTesting(false)
+        .transition(.move(edge: .top).combined(with: .opacity).combined(with: .scale(scale: 0.86, anchor: .top)))
     }
 }
 

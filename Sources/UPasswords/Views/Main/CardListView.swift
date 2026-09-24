@@ -6,15 +6,11 @@ import SwiftUI
 struct CardListView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var toast: AppToast
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
-            if toast.message != nil {
-                toastBar
-            }
             list
         }
         .background(Color.appBackground)
@@ -90,20 +86,6 @@ struct CardListView: View {
         .background(Color(red: 0.30, green: 0.66, blue: 0.96))   // 天蓝色
         .clipShape(Circle())
         .help(L10n.t("sync_command"))
-    }
-
-    /// clipboardToast — "Text copied to clipboard" bar at the top of the pane.
-    private var toastBar: some View {
-        HStack {
-            Spacer()
-            Label(toast.message ?? "", systemImage: "doc.on.doc")
-                .font(.system(size: 11))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(.ultraThinMaterial, in: Capsule())
-            Spacer()
-        }
-        .padding(.vertical, 4)
     }
 
     private var list: some View {
