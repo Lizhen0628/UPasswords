@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - Compromised passwords (CompromisedPasswordsSheetController)
+// MARK: - Compromised passwords
 
 struct CompromisedSheet: View {
     @EnvironmentObject var ctx: AppContext
@@ -51,7 +51,7 @@ struct CompromisedSheet: View {
                                 dismiss()
                             } label: {
                                 HStack {
-                                    CardIconView(symbol: card.symbol, color: card.color, size: 26)
+                                    CardIconView(symbol: card.symbol, color: card.color, size: 26, card: card)
                                     Text(card.title)
                                     Spacer()
                                     Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.red)
@@ -92,7 +92,7 @@ struct CompromisedSheet: View {
 }
 
 
-// MARK: - Configure cloud (ConfigureCloudSheetController + ConfigureCloudViewController)
+// MARK: - Configure cloud
 
 struct ConfigureCloudSheet: View {
     @EnvironmentObject var ctx: AppContext

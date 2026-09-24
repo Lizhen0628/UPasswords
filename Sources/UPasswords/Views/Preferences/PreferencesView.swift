@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// The Settings window — tabbed like the original's preferences panes:
+/// The Settings window — tabbed panes:
 /// Appearance / Security / AutoBackup / Autofill (+ lock screen / sync).
 struct PreferencesView: View {
     enum Tab: String, CaseIterable, Identifiable {
@@ -42,7 +42,7 @@ struct PreferencesView: View {
     }
 }
 
-// MARK: - Appearance (AppearanceViewController)
+// MARK: - Appearance
 
 struct AppearancePane: View {
     @EnvironmentObject var settings: AppSettings
@@ -77,7 +77,7 @@ struct AppearancePane: View {
     }
 }
 
-// MARK: - Security (SecurityViewController)
+// MARK: - Security
 
 struct SecurityPane: View {
     @EnvironmentObject var ctx: AppContext
@@ -144,7 +144,7 @@ struct SecurityPane: View {
     }
 }
 
-// MARK: - Auto backup (AutoBackupViewController)
+// MARK: - Auto backup
 
 struct AutoBackupPane: View {
     @EnvironmentObject var ctx: AppContext
@@ -226,7 +226,7 @@ struct AutoBackupPane: View {
     }
 }
 
-// MARK: - Autofill (AutofillViewController + SetAutofillSheetController)
+// MARK: - Autofill
 
 struct AutofillPane: View {
     var body: some View {
@@ -237,7 +237,7 @@ struct AutofillPane: View {
                 Text(L10n.t("install_extension_text"))
                 Label(L10n.t("use_for_autofill_button"), systemImage: "iphone")
                     .font(.headline)
-                Text(L10n.t("autofill_replica_note"))
+                Text(L10n.t("autofill_note"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: 460, alignment: .leading)
@@ -248,7 +248,7 @@ struct AutofillPane: View {
     }
 }
 
-// MARK: - Lock screen (SelectTextureSheetController settings)
+// MARK: - Lock screen
 
 struct LockScreenPane: View {
     @EnvironmentObject var settings: AppSettings
@@ -279,7 +279,7 @@ struct LockScreenPane: View {
     }
 }
 
-// MARK: - Cloud sync (ConfigureCloudViewController inside preferences)
+// MARK: - Cloud sync
 
 struct CloudPane: View {
     var body: some View {

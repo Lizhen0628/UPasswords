@@ -1,6 +1,6 @@
 // swift-tools-version:5.9
-// UPasswords — Swift 1:1 replica of Safe.app ("Passwords & Codes - safe", SafeInCloud 25.3.5)
-// Reverse-engineering basis: ../PasswordsCodes (interface-level ObjC restoration).
+// UPasswords — an independently developed password manager for macOS
+// (SwiftUI + AppKit, SPM executable target).
 
 import PackageDescription
 

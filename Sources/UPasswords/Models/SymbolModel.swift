@@ -1,9 +1,7 @@
 import SwiftUI
 
-/// Mirrors `SymbolModel` + `Symbol` (Views/Symbol.h): a catalog of card icons
-/// organized into selectable groupsss. The original ships TIFF assets; this
-/// replica draws the same symbol vocabulary with SF Symbols (original artwork
-/// is not redistributed).
+/// A catalog of card icons organized into selectable groups, drawn with
+/// SF Symbols.
 final class SymbolModel {
     static let shared = SymbolModel()
 
@@ -12,7 +10,7 @@ final class SymbolModel {
     /// symbol name → SF Symbol name for drawing
     private let sfMap: [String: String]
 
-    /// Original symbol names appearing in templates-database.xml and the binary.
+    /// Symbol names used by the built-in templates.
     private static let catalog: [(group: String, items: [(name: String, sf: String)])] = [
         ("internet_group", [
             ("web_site", "globe"), ("email", "envelope"), ("router", "wifi.router"), ("network", "network"),
@@ -102,7 +100,7 @@ final class SymbolModel {
 
     func groupName(_ key: String) -> String { L10n.db(key) }
 
-    /// Mirrors `SymbolModel.creditCardSymbolForNumber:` — brand detection by IIN.
+    /// Credit-card brand detection by the number's IIN.
     func creditCardSymbol(forNumber number: String) -> String {
         let digits = number.filter(\.isNumber)
         guard digits.count >= 2 else { return "credit_card" }

@@ -1,10 +1,8 @@
 import Foundation
 
-/// Mirrors `CloudDriver` / `WebDavDriver` / `WebDavSettings` (Services/) and
-/// `SyncTask` / `DatabaseSynchronizer`. Only the WebDAV driver is functional in
-/// this replica — Google Drive / Dropbox / OneDrive require vendor OAuth apps
-/// that cannot be provisioned here; those cloud entries remain visible in the
-/// UI (ConfigureCloudSheetController) but report `not_configured_state`.
+/// Cloud sync drivers. Only the WebDAV driver is functional — Google Drive /
+/// Dropbox / OneDrive require vendor OAuth credentials; those cloud entries
+/// remain visible in the UI but report `not_configured_state`.
 struct WebDavSettings: Codable, Equatable {
     var host: String = ""
     var port: Int = 443
@@ -26,7 +24,7 @@ struct WebDavSettings: Codable, Equatable {
     }
 }
 
-/// 云同步类型(CloudType);仅 none/webdav 在本复刻中可用(见 functional)。
+/// 云同步类型;仅 none/webdav 可用(见 functional)。
 enum CloudType: String, CaseIterable, Identifiable {
     case none, webdav, gdrive, dropbox, onedrive, icloud
     var id: String { rawValue }
@@ -42,11 +40,11 @@ enum CloudType: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Whether this replica can actually synchronize through this cloud.
+    /// Whether this cloud can actually synchronize.
     var functional: Bool { self == .none || self == .webdav }
 }
 
-/// 同步失败错误域,文案沿用原版字符串表。
+/// 同步失败错误域(文案走字符串表)。
 enum SyncError: LocalizedError {
     case badUrl
     case http(Int)

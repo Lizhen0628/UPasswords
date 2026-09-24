@@ -1,8 +1,8 @@
 import Foundation
 
-// MARK: - CSV engine (CsvFormat.h)
+// MARK: - CSV 引擎
 
-/// RFC 4180 风格 CSV/TSV 引擎(原版 CsvFormat.h 的复刻)。
+/// RFC 4180 风格 CSV/TSV 引擎。
 enum CSV {
     /// 解析文本为行×列;支持引号包裹、内嵌分隔符/换行,空行被跳过。
     /// - Parameter text: 原始 CSV/TSV 文本

@@ -1,9 +1,8 @@
 import SwiftUI
 
-/// 参考图采样的统一窗口底色(标题栏/侧栏/列表/详情一致,原应用为
-/// NSVisualEffectView windowBackground 材质色,比系统 windowBackgroundColor 略暖)。
+/// 统一窗口底色(标题栏/侧栏/列表/详情一致,比系统 windowBackgroundColor 略暖)。
 extension Color {
-    static let safeBackground = Color(red: 35.0/255.0, green: 34.0/255.0, blue: 32.0/255.0)
+    static let appBackground = Color(red: 35.0/255.0, green: 34.0/255.0, blue: 32.0/255.0)
 }
 
 /// Card color palette resolution (XML `color` attribute → SwiftUI color).
@@ -25,26 +24,75 @@ extension CardColor {
         }
     }
 
-    /// 无颜色时的默认卡片图标色:Safe 使用中性灰,而不是主题蓝。
+    /// 无颜色时的默认卡片图标色:中性灰,而不是主题蓝。
     static func color(named name: String?) -> Color {
         guard let name, let c = CardColor(rawValue: name) else { return Color(nsColor: .systemGray) }
         return c.color
     }
 }
 
-/// Mirrors `CardIcon` + `SymbolView` — renders a card's icon: custom symbol
-/// (SF Symbol mapping via SymbolModel), website favicon placeholder, or the
-/// credit-card brand symbol auto-detected from the number.
+/// Renders a card's icon. Resolution order
+/// (with `card` provided): ① Card.iconData（抓取/上传/URL 的 PNG）→ 圆形裁切;
+/// ② iconSource=builtin:<key> → 品牌方砖;③ 「使用网站图标」开启时按域名/标题
+/// 实时匹配品牌方砖（离线、即时,作为抓取失败的兜底）;④ 默认:符号+颜色圆形。
 struct CardIconView: View {
     let symbol: String?
     let color: String?
     var size: CGFloat = 32
     var creditCardNumber: String? = nil
+    /// 完整卡片上下文;模板行等无卡场景保持 nil,走符号圆底。
+    var card: Card? = nil
 
     var body: some View {
+        if let card, let resolved = resolve(card) {
+            resolved
+                .frame(width: size, height: size)
+        } else {
+            symbolCircle
+        }
+    }
+
+    // MARK: 解析
+
+    private enum Resolved {
+        case image(NSImage)
+        case brand(BrandIcons.Entry)
+    }
+
+    private func resolve(_ card: Card) -> AnyView? {
+        // ① 持久化的图标像素（website 抓取 / custom 上传 / url 下载）
+        if let data = card.iconData, !data.isEmpty, let img = IconService.cachedImage(forData: data) {
+            return AnyView(
+                Image(nsImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .background(Circle().fill(Color.white.opacity(0.9)))   // 透明底 favicon 在深色背景上可辨
+                    .clipShape(Circle())
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+            )
+        }
+        // ② 内置品牌:优先 Bundle 内同名 PNG 图稿,否则程序绘制方砖
+        if let key = card.iconBuiltinKey {
+            if let art = BrandIcons.bundledImage(for: key) {
+                return AnyView(Image(nsImage: art).resizable().aspectRatio(contentMode: .fill))
+            }
+            if let entry = BrandIcons.entry(for: key) {
+                return AnyView(BrandIconTileView(entry: entry, size: size))
+            }
+        }
+        // ③ 网站图标模式:域名/标题实时匹配品牌方砖（含抓取中/失败的品牌兜底展示）
+        let settingsUse = AppSettings.shared.useWebsiteIcons
+        if settingsUse, card.useWebsiteIcon || card.iconIsFromWebsite,
+           let entry = BrandIcons.match(host: IconService.host(fromWebsite: card.website), title: card.title) {
+            return AnyView(BrandIconTileView(entry: entry, size: size))
+        }
+        return nil
+    }
+
+    private var symbolCircle: some View {
         let sym = resolvedSymbol
         let base = CardColor.color(named: color)
-        Circle()
+        return Circle()
             .fill(base)
             .overlay(
                 Image(systemName: SymbolModel.shared.sfSymbol(for: sym))
@@ -60,6 +108,49 @@ struct CardIconView: View {
             return SymbolModel.shared.creditCardSymbol(forNumber: number)
         }
         return symbol
+    }
+}
+
+/// 品牌图标方砖:品牌色圆角矩形 + 白色 SF Symbol / 字母花押。
+/// （与 SymbolModel 同约定,不附带原厂商标图;图稿可经 BrandIcons.bundledImage 覆盖。）
+struct BrandIconTileView: View {
+    let entry: BrandIcons.Entry
+    var size: CGFloat = 32
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+            .fill(Color(hex: entry.hex))
+            .overlay { glyph.padding(size * 0.18) }
+            .overlay(
+                RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.16), lineWidth: 1)
+            )
+            .frame(width: size, height: size)
+    }
+
+    @ViewBuilder private var glyph: some View {
+        switch entry.glyph {
+        case .sf(let name):
+            Image(systemName: name)
+                .font(.system(size: size * 0.52, weight: .semibold))
+                .foregroundStyle(.white)
+        case .monogram(let text):
+            Text(text)
+                .font(.system(size: size * (text.count > 1 ? 0.34 : 0.5), weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+    }
+}
+
+extension Color {
+    init(hex: UInt32) {
+        self.init(.sRGB,
+                  red: Double((hex >> 16) & 0xFF) / 255,
+                  green: Double((hex >> 8) & 0xFF) / 255,
+                  blue: Double(hex & 0xFF) / 255,
+                  opacity: 1)
     }
 }
 
@@ -110,7 +201,7 @@ private struct ToastActivityModifier: ViewModifier {
     }
 }
 
-/// Standard chrome for the original's *SheetController dialogs: title bar,
+/// Standard chrome for sheet dialogs: title bar,
 /// content, cancel/OK row (keyboard-wired), optional search field.
 struct SheetShell<Content: View>: View {
     let title: String
@@ -161,8 +252,8 @@ struct SheetShell<Content: View>: View {
 }
 
 
-/// NSVisualEffectView matching the window background — the original sidebar
-/// is the same flat dark tone as the content panes (no translucent material).
+/// NSVisualEffectView matching the window background — the sidebar uses the
+/// same flat dark tone as the content panes (no translucent material).
 struct SidebarMaterial: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let v = NSVisualEffectView()

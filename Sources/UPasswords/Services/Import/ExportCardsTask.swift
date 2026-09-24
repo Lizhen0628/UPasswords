@@ -1,15 +1,15 @@
 import Foundation
 
-// MARK: - Export (ExportCardsTask / ExportAsSheetController)
+// MARK: - Export
 
-/// 导出格式(ExportAsSheetController 选项);name 走 Localizable `*_format_text`。
+/// 导出格式;name 走 Localizable `*_format_text`。
 enum ExportFormat: String, CaseIterable, Identifiable {
     case xml, csv, txt
     var id: String { rawValue }
     var name: String { L10n.t("\(rawValue)_format_text") }
 }
 
-/// 导出任务(ExportCardsTask):卡片集 → 指定格式文本。
+/// 导出任务:卡片集 → 指定格式文本。
 enum ExportCardsTask {
     /// - Parameters:
     ///   - cards: 待导出卡片(顺序保留)

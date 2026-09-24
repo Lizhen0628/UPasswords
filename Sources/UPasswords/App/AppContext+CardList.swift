@@ -35,10 +35,9 @@ extension AppContext {
         objectWillChange.send()
     }
 
-    // MARK: - Card list strategies (CardListStrategy)
+    // MARK: - Card list strategies
 
-    /// The card list for the current sidebar selection + search — mirrors the
-    /// per-special-label strategies (ArchiveCardListStrategy, TrashCardListStrategy, …).
+    /// The card list for the current sidebar selection + search.
     func cards(for selection: SidebarSelection, search: String) -> [Card] {
         settings.sortingValue.sort(filteredCards(for: selection, search: search),
                                    favoritesFirst: settings.favoritesAtTop)

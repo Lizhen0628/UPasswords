@@ -36,8 +36,8 @@ final class AppSettings: ObservableObject {
     /// empty_clipboard_setting seconds: 0=off 10 30 60 120.
     @Published var clipboardClearSeconds: Int { didSet { d.set(clipboardClearSeconds, forKey: "clipboard.clearSeconds") } }
 
-    // MARK: Lock screen (SelectTextureSheetController)
-    /// texture index 0..16 (original ships texture_1..17.jpg).
+    // MARK: Lock screen
+    /// texture index 0..16。
     @Published var lockTexture: Int { didSet { d.set(lockTexture, forKey: "lock.texture") } }
     @Published var lockWhiteText: Bool { didSet { d.set(lockWhiteText, forKey: "lock.whiteText") } }
 
@@ -101,8 +101,8 @@ final class AppSettings: ObservableObject {
     var cloud: CloudType { CloudType(rawValue: cloudType) ?? .none }
 }
 
-/// The 8 setup-plan tasks (SetupPlanViewController / SetupPlanModel) — keys are
-/// the original Localizable task strings; order matches the original list.
+/// The 8 first-run setup tasks — values are Localizable keys;
+/// order matches the setup checklist.
 enum SetupPlanTask: String, CaseIterable, Identifiable {
     case cloudSync = "cloud_sync_task"
     case importPasswords = "import_passwords_task"
@@ -130,8 +130,7 @@ enum SetupPlanTask: String, CaseIterable, Identifiable {
     }
 }
 
-/// 17 procedural lock-screen textures replacing the original texture_1..17.jpg
-/// (original artwork not redistributed; equivalent visual variety is drawn).
+/// 17 procedural lock-screen textures (programmatically drawn gradients).
 enum LockTextures {
     static let count = 17
 

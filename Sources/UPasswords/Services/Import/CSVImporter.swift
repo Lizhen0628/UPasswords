@@ -1,7 +1,7 @@
 import Foundation
 
-/// Shared CSV card extraction with header auto-detection — the behavior of the
-/// original `CsvFormat` (column names probed case-insensitively).
+/// Shared CSV card extraction with header auto-detection
+/// (column names probed case-insensitively).
 struct CSVImporter: ImportFormat {
     let id: String
     let title: String

@@ -1,7 +1,6 @@
 import Foundation
 
-/// Mirrors `FieldTypeSet` (Services/FieldTypeSet.h) — the 12 field types of the
-/// original database XML, plus the autofill token set (`AutofillSet`).
+/// The 12 field types of the database XML, plus the HTML-autofill token set.
 enum FieldType: String, CaseIterable, Codable, Identifiable {
     case login
     case password
@@ -18,7 +17,7 @@ enum FieldType: String, CaseIterable, Codable, Identifiable {
 
     var id: String { rawValue }
 
-    /// FieldTypeSet.nameOfValue — localized type name (database.strings `*_type`).
+    /// Localized type name (strings table `*_type`).
     var localizedName: String {
         switch self {
         case .login: return L10n.db("login_type")
@@ -36,7 +35,7 @@ enum FieldType: String, CaseIterable, Codable, Identifiable {
         }
     }
 
-    // XField predicates
+    // Type predicates
     var isHidden: Bool {
         switch self {
         case .password, .pin, .oneTimePassword, .secret: return true
@@ -66,9 +65,27 @@ enum FieldType: String, CaseIterable, Codable, Identifiable {
         case .secret: return "key.slash"
         }
     }
+
+    /// 编辑表单值输入框的占位提示(按字段类型给出针对性示例,替代千篇一律的「字段值:」)
+    var valuePlaceholder: String {
+        switch self {
+        case .login: return L10n.t("field_ph_login", fallback: "用户名或邮箱")
+        case .password: return L10n.t("field_ph_password", fallback: "输入密码")
+        case .pin: return L10n.t("field_ph_pin", fallback: "输入 PIN 码")
+        case .number: return L10n.t("field_ph_number", fallback: "输入数字")
+        case .date: return L10n.t("field_ph_date", fallback: "如 2026-01-01")
+        case .phone: return L10n.t("field_ph_phone", fallback: "输入电话号码")
+        case .website: return L10n.t("field_ph_website", fallback: "https://example.com")
+        case .email: return L10n.t("field_ph_email", fallback: "name@example.com")
+        case .oneTimePassword: return L10n.t("field_ph_otp", fallback: "粘贴 otpauth:// 链接或密钥")
+        case .text: return L10n.t("field_ph_text", fallback: "输入内容")
+        case .expiry: return L10n.t("field_ph_expiry", fallback: "如 2030-12-31")
+        case .secret: return L10n.t("field_ph_secret", fallback: "输入机密内容")
+        }
+    }
 }
 
-/// Mirrors `AutofillSet` — HTML autocomplete-aligned tokens from the original XML.
+/// HTML autocomplete-aligned tokens (XML `autofill` attribute).
 enum Autofill: String, CaseIterable, Codable, Identifiable {
     case off
     case username
@@ -82,7 +99,7 @@ enum Autofill: String, CaseIterable, Codable, Identifiable {
 
     var id: String { rawValue }
 
-    /// AutofillSet.nameOfValue — localized autofill name (database.strings `*_autofill`).
+    /// Localized autofill name (strings table `*_autofill`).
     var localizedName: String {
         switch self {
         case .off: return L10n.db("off_autofill")
@@ -98,15 +115,15 @@ enum Autofill: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-/// A single field value change, kept per-field like the original `XHistory`
+/// A single field value change, kept per-field
 /// (stored as JSON on the field: values + modification times).
 struct HistoryEntry: Codable, Equatable, Identifiable {
     var value: String
-    var time: TimeInterval // millis since epoch, matching original timestamps
+    var time: TimeInterval // millis since epoch
     var id: TimeInterval { time }
 }
 
-/// Mirrors `XField` (Models/XField.h).
+/// A single named field on a card.
 struct Field: Codable, Equatable, Identifiable {
     var id: UUID = UUID()
     var name: String
@@ -126,7 +143,7 @@ struct Field: Codable, Equatable, Identifiable {
     }
 }
 
-/// Attached binary payload (base64 in XML). Mirrors `XImage` / `XFile`.
+/// Attached binary payload (base64 in XML).
 struct Attachment: Codable, Equatable, Identifiable {
     var id: UUID = UUID()
     var name: String
@@ -135,7 +152,7 @@ struct Attachment: Codable, Equatable, Identifiable {
     var length: Int { data.count }
 }
 
-/// Mirrors `XLabel` (Models/XLabel.h) — a user label (`<label name id/>`).
+/// A user label (`<label name id/>`).
 struct CardLabel: Codable, Equatable, Identifiable {
     var id: Int
     var name: String
@@ -148,14 +165,14 @@ struct CardLabel: Codable, Equatable, Identifiable {
     static func == (l: CardLabel, r: CardLabel) -> Bool { l.id == r.id }
 }
 
-/// Mirrors `XGhost` — deletion tombstone used for convergent sync merges.
+/// Deletion tombstone used for convergent sync merges.
 struct Ghost: Codable, Equatable {
     var id: Int
     var time: TimeInterval // millis
 }
 
-/// Mirrors `XCard` (Models/XCard.h). Attribute names match the original XML
-/// one-to-one (title/id/symbol/color/template/autofill/favorite/archived/
+/// A card. Attribute names match the XML exchange format
+/// (title/id/symbol/color/template/autofill/favorite/archived/
 /// trashed/expiration/reminder/created/modified).
 struct Card: Codable, Equatable, Identifiable {
     var id: Int
@@ -174,6 +191,12 @@ struct Card: Codable, Equatable, Identifiable {
     var modified: TimeInterval = 0             // modified millis
     var useWebsiteIcon: Bool = false
     var watch: Bool = false                    // atWatch
+    /// 图标来源词表（IconService 常量）：website / custom / url:<…> / builtin:<key>。
+    /// nil = 未设置，走默认符号/颜色圆形图标。
+    var iconSource: String? = nil
+    /// 图标像素数据（≤128×128 PNG，XML 里 base64 存 <icon> 元素）。
+    /// builtin 来源不带数据（随 App 分发），其余来源均有数据。
+    var iconData: Data? = nil
     var fields: [Field] = []
     var notes: String = ""
     var labelIds: [Int] = []
@@ -217,6 +240,7 @@ struct Card: Codable, Equatable, Identifiable {
             + fields.reduce(0) { $0 + $1.value.utf8.count }
             + images.reduce(0) { $0 + $1.length }
             + files.reduce(0) { $0 + $1.length }
+            + (iconData?.count ?? 0)
     }
 
     /// XCard.asPlainText — plain-text dump used by TXT export.
@@ -240,6 +264,25 @@ extension Card {
     var compromised: Bool {
         fields.contains { $0.type.needsScoring && CompromisedService.offlineDemoSet.contains($0.value) }
     }
+}
+
+// MARK: - Icon source helpers (Card.iconSource vocabulary)
+
+extension Card {
+    /// iconSource="website" — 从卡片网址抓取的站点图标。
+    var iconIsFromWebsite: Bool { iconSource == IconService.sourceWebsite }
+    /// iconSource="custom" — 用户上传的图片文件。
+    var iconIsCustomUpload: Bool { iconSource == IconService.sourceCustom }
+    /// iconSource="url:<…>" — 用户提供的图片 URL 下载所得。
+    var iconIsFromUserURL: Bool { iconSource?.hasPrefix(IconService.sourceURLPrefix) ?? false }
+    /// iconSource="builtin:<key>" — 内置品牌图标目录的 key（无像素数据）。
+    var iconBuiltinKey: String? {
+        guard let s = iconSource, s.hasPrefix(IconService.sourceBuiltinPrefix) else { return nil }
+        return String(s.dropFirst(IconService.sourceBuiltinPrefix.count))
+    }
+
+    /// 用户显式指定的图标（上传/URL）始终显示，不受「使用网站图标」开关约束。
+    var iconIsUserExplicit: Bool { iconIsCustomUpload || iconIsFromUserURL }
 }
 
 extension Field {

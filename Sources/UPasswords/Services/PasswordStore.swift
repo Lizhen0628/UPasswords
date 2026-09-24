@@ -2,9 +2,8 @@ import Foundation
 import Security
 import LocalAuthentication
 
-/// Mirrors `PasswordStore` (Services/PasswordStore.h) — per-database keychain
-/// storage, with an optional biometry-protected entry for fast unlock
-/// (fast_unlock_setting / Touch ID).
+/// Per-database keychain storage, with an optional biometry-protected entry
+/// for fast unlock (Touch ID).
 enum PasswordStore {
     static func service(forDatabaseName name: String) -> String { "UPasswords-\(name)" }
 

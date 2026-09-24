@@ -1,10 +1,9 @@
 import Foundation
 import CryptoKit
 
-/// RFC 6238 TOTP for `one_time_password` fields (one_time_password_type).
+/// RFC 6238 TOTP for `one_time_password` fields.
 /// Accepts a bare base32 secret or a full `otpauth://` URI
-/// (secret / digits / period / algorithm / issuer), mirroring SafeInCloud's
-/// one-time-password field semantics.
+/// (secret / digits / period / algorithm / issuer).
 enum TOTP {
     struct Config: Equatable {
         var secret: [UInt8]

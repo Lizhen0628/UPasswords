@@ -2,7 +2,6 @@ import Foundation
 import AppKit
 
 /// Databases live in `~/Library/Application Support/UPasswords/Databases/<name>.upw`.
-/// Mirrors `DatabaseManager` + `DatabaseConfig` + `DatabaseService` plumbing.
 struct DatabaseFile: Codable, Identifiable, Equatable {
     var id: String { name }
     var name: String
@@ -129,7 +128,7 @@ final class DatabaseStore {
         }
     }
 
-    // MARK: - Auto backup (BackupDatabaseTask / AutoBackupModel)
+    // MARK: - Auto backup
 
     private func renameBackups(of old: String, to new: String) {
         let from = backupsDir.appendingPathComponent(old, isDirectory: true)
@@ -190,7 +189,7 @@ final class DatabaseStore {
     }
 }
 
-/// Mirrors `ClipboardModel` (Models/ClipboardModel.h): copy + auto-clear.
+/// Clipboard copy with auto-clear.
 @MainActor
 final class ClipboardModel: ObservableObject {
     static let shared = ClipboardModel()

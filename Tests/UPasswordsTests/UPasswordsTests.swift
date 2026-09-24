@@ -140,8 +140,8 @@ final class DatabaseXMLTests: XCTestCase {
         XCTAssertEqual(parsed.ghosts, [Ghost(id: 99, time: 1690000000000)])
     }
 
-    func testParseOriginalTemplateFormat() throws {
-        // Shape mirrors resources/templates-database.xml of Safe.app.
+    func testParseTemplateFormat() throws {
+        // Template card shape: label + template card with typed, autofill-mapped fields.
         let xml = """
         <?xml version="1.0" encoding="UTF-8"?>
         <database>

@@ -1,16 +1,16 @@
 import SwiftUI
 import AppKit
 
-/// Mirrors `EditCardModel` (Models/EditCardModel.h) — a working copy of the
-/// card plus per-target sub-state for the symbol/color/template pickers.
+/// A working copy of the card being edited, plus sub-state for the
+/// symbol/color/template pickers.
 struct EditCardModel: Identifiable {
     var id: Int { card.id }
     var card: Card
     var isNew: Bool = false
 }
 
-/// EditCardWindowController — tabbed editor (EditCardFieldsTab / NotesTab /
-/// ImagesTab / FilesTab) presented as a sheet over the main window.
+/// Tabbed card editor (fields / notes / images / files) presented as a sheet
+/// over the main window.
 struct EditCardSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Binding var draft: EditCardModel?
@@ -30,7 +30,7 @@ struct EditCardSheet: View {
         }
     }
 
-    /// 编辑窗背景:参考原版实测 RGB(35,35,33),比系统 windowBackgroundColor 更深;
+    /// 编辑窗背景:深色外观 RGB(35,35,33),比系统 windowBackgroundColor 更深;
     /// 浅色外观下跟随系统背景。
     static var windowBackground: Color {
         Color(nsColor: NSColor(name: nil) { appearance in
@@ -70,6 +70,8 @@ private struct EditCardBody: View {
     @Binding var draft: EditCardModel
     @Binding var tab: EditCardSheet.EditTab
     @State private var fieldEditor: FieldEditorState? = nil
+    @State private var iconPickerPresented = false
+    @State private var colorPickerPresented = false
     // 标题/收藏的本地编辑态:ctx.editDraft 不再逐键广播,
     // 文本类控件持有本地状态才能即时回显(写入仍静默同步回 draft)
     @State private var titleDraft: String
@@ -138,6 +140,30 @@ private struct EditCardBody: View {
             }
             .environmentObject(ctx)
         }
+        // 图标选择器:选择结果只补丁图标字段与符号,与字段编辑弹窗互不干扰
+        .sheet(isPresented: $iconPickerPresented) {
+            IconPickerSheet(initial: draft.card) { patch in
+                Log.info("ui", "icon patch cardId=\(draft.card.id) source=\(patch.iconSource ?? "nil") data.len=\(patch.iconData?.count ?? 0) symbol=\(patch.symbolName ?? "-")")
+                draft.card.iconSource = patch.iconSource
+                draft.card.iconData = patch.iconData
+                draft.card.useWebsiteIcon = patch.useWebsiteIcon
+                if let name = patch.symbolName { draft.card.symbol = name }
+            }
+        }
+        // 颜色/网站图标选择器:本地弹层,随编辑表单一起关闭(不再经 activeSheet
+        // 挂到根视图,避免编辑表单关闭后弹层残留、颜色错写其他卡片)
+        .sheet(isPresented: $colorPickerPresented) {
+            SelectColorSheet(
+                initialColor: draft.card.color,
+                initialUseWebsiteIcon: draft.card.useWebsiteIcon,
+                onApply: { color, useIcon in
+                    Log.info("ui", "color patch cardId=\(draft.card.id) color=\(color) websiteIcon=\(useIcon)")
+                    draft.card.color = color
+                    draft.card.useWebsiteIcon = useIcon
+                }
+            )
+            .environmentObject(ctx)
+        }
     }
 
     // MARK: Header (title / symbol / color / template / favorite)
@@ -145,16 +171,17 @@ private struct EditCardBody: View {
     private func header(_ card: Binding<Card>) -> some View {
         HStack(spacing: 12) {
             Button {
-                ctx.activeSheet = .selectSymbol
+                iconPickerPresented = true
             } label: {
                 CardIconView(symbol: card.wrappedValue.symbol,
-                             color: card.wrappedValue.color, size: 38)
+                             color: card.wrappedValue.color, size: 38,
+                             card: card.wrappedValue)
             }
             .buttonStyle(.plain)
-            .help(L10n.t("select_symbol_command"))
+            .help(L10n.t("icons_prompt"))
 
             Button {
-                ctx.activeSheet = .selectColor
+                colorPickerPresented = true
             } label: {
                 Circle()
                     .fill(CardColor.color(named: card.wrappedValue.color))
@@ -227,7 +254,7 @@ private struct EditCardBody: View {
     }
 }
 
-// MARK: - 参考图样式的面板按钮(圆角矩形 + 细描边)
+// MARK: - 面板按钮(圆角矩形 + 细描边)
 
 /// 次级按钮:半透明面板底 + 细描边(模板/取消/存为模板/收藏)。
 fileprivate struct PanelButtonStyle: ButtonStyle {
@@ -258,7 +285,7 @@ fileprivate struct AccentButtonStyle: ButtonStyle {
     }
 }
 
-/// 参考图的分段选项卡:居中胶囊容器,选中段强调色圆角块 + 白字,
+/// 分段选项卡:居中胶囊容器,选中段强调色圆角块 + 白字,
 /// 未选中相邻段之间有细分隔线。仅替换视觉,选中状态仍走同一个 tab 绑定。
 fileprivate struct EditTabBar: View {
     @Binding var tab: EditCardSheet.EditTab
@@ -405,7 +432,7 @@ private struct FieldsTab: View {
     }
 }
 
-/// AddFieldSheetController / EditFieldSheetController state (name/type/autofill).
+/// Field add/edit sheet state (name/type/autofill).
 struct FieldEditorState: Identifiable {
     let id = UUID()
     var field: Field
@@ -514,7 +541,7 @@ private struct FieldEditRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            // 参考图:类型圆形图标底
+            // 类型圆形图标底
             Circle()
                 .fill(Color.white.opacity(0.09))
                 .frame(width: 32, height: 32)
@@ -539,7 +566,7 @@ private struct FieldEditRow: View {
 
             valueArea
 
-            // 复制按钮(参考图行内 doc.on.doc 面板按钮)
+            // 行内复制按钮(doc.on.doc)
             Button {
                 ClipboardModel.shared.copy(valueDraft)
             } label: {
@@ -557,7 +584,7 @@ private struct FieldEditRow: View {
         .padding(.vertical, 10)
     }
 
-    /// 字段值区:自绘描边盒 + 行内按钮(眼睛/生成器在盒内,同参考图);
+    /// 字段值区:自绘描边盒 + 行内按钮(眼睛/生成器在盒内);
     /// 密码字段在盒下保留强度指示,TOTP 在盒内行尾显示当前验证码。
     @ViewBuilder
     private var valueArea: some View {
@@ -614,6 +641,10 @@ private struct FieldEditRow: View {
                 .help(L10n.t("generate_password_title"))
             }
 
+            if field.type.isOneTimePassword {
+                qrMenuButton
+            }
+
             if field.type.isOneTimePassword,
                let cfg = try? TOTP.parse(field.value),
                let code = try? TOTP.code(config: cfg) {
@@ -623,12 +654,12 @@ private struct FieldEditRow: View {
                     .padding(.trailing, 2)
             }
         }
-        .padding(.leading, 8)
-        .padding(.trailing, 4)
-        .frame(minHeight: 30)
-        .background(RoundedRectangle(cornerRadius: 7).fill(Color.black.opacity(0.22)))
-        .overlay(RoundedRectangle(cornerRadius: 7)
-            .strokeBorder(valueFocused ? Color.accentColor.opacity(0.85) : Color.white.opacity(0.14),
+        .padding(.leading, 10)
+        .padding(.trailing, 6)
+        .frame(minHeight: 32)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.045)))
+        .overlay(RoundedRectangle(cornerRadius: 8)
+            .strokeBorder(valueFocused ? Color.accentColor.opacity(0.85) : Color.white.opacity(0.09),
                           lineWidth: valueFocused ? 2 : 1)
             .allowsHitTesting(false))
     }
@@ -638,9 +669,9 @@ private struct FieldEditRow: View {
     private var input: some View {
         Group {
             if field.type.isHidden && !revealed {
-                SecureField(L10n.t("field_value_prompt"), text: $valueDraft)
+                SecureField(field.type.valuePlaceholder, text: $valueDraft)
             } else {
-                TextField(L10n.t("field_value_prompt"), text: $valueDraft)
+                TextField(field.type.valuePlaceholder, text: $valueDraft)
             }
         }
         .onChange(of: valueDraft) { field.value = valueDraft }
@@ -648,6 +679,63 @@ private struct FieldEditRow: View {
         .font(field.type.isHidden ? .system(size: 13, design: .monospaced) : .system(size: 13))
         .focused($valueFocused)
         .frame(maxWidth: .infinity)
+    }
+
+    /// 一次性代码:从屏幕截图/图片识别二维码填充
+    private var qrMenuButton: some View {
+        Menu {
+            Button(L10n.t("qr_from_screen", fallback: "从屏幕读取二维码")) {
+                readQRFromScreen()
+            }
+            Button(L10n.t("qr_from_image", fallback: "从图片识别二维码")) {
+                pickQRImage()
+            }
+        } label: {
+            Image(systemName: "qrcode.viewfinder")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(L10n.t("qr_menu_help", fallback: "从二维码填充一次性代码"))
+    }
+
+    private func readQRFromScreen() {
+        Task {
+            do {
+                let value = try await QRCodeService.readFromScreen()
+                applyOTP(value)
+            } catch {
+                Log.warn("ui", "otp qr screen read failed: \(String(describing: error))")
+                AppToast.shared.show(error.localizedDescription)
+            }
+        }
+    }
+
+    private func pickQRImage() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task {
+            do {
+                let value = try await QRCodeService.readFromImage(at: url)
+                applyOTP(value)
+            } catch {
+                Log.warn("ui", "otp qr image read failed: \(String(describing: error))")
+                AppToast.shared.show(error.localizedDescription)
+            }
+        }
+    }
+
+    private func applyOTP(_ value: String) {
+        field.value = value
+        valueDraft = value
+        Log.info("ui", "otp filled from qr value.len=\(value.count)")
+        AppToast.shared.show(L10n.t("qr_filled", fallback: "已从二维码填入一次性代码"))
     }
 
     private var moreMenu: some View {
@@ -684,7 +772,16 @@ private struct FieldEditRow: View {
     }
 }
 
-// MARK: - Notes tab (EditCardNotesTab) — 参考图卡片:标题头 + 工具条 + 编辑区 + 字数
+// MARK: - Notes tab — 卡片:标题头 + 工具条 + 编辑区 + 字数
+
+/// 笔记选区追踪:点击工具条按钮会让文本视图失焦、选区塌缩,导致
+/// 「选中文字 → 点 B/I/U/链接/列表」实际作用到空选区上(样式看似失效、
+/// 链接提示未选中)。协调器持续记录最近一次非空选区,按钮操作在
+/// 实时选区为空时回放到记录的选区上,操作完把焦点与选区还给文本视图。
+final class NotesSelectionTracker {
+    weak var textView: NotesTextView?
+    var selectedRange = NSRange(location: 0, length: 0)
+}
 
 private struct NotesTab: View {
     @Binding var card: Card
@@ -694,6 +791,7 @@ private struct NotesTab: View {
     // 链接以 Markdown [文字](URL) 形式持久化在平文笔记里,编辑器内渲染为可点击链接。
     @State private var notesDraft: String
     @State private var editorFocused = false
+    @State private var selectionTracker = NotesSelectionTracker()
 
     init(card: Binding<Card>) {
         self._card = card
@@ -713,10 +811,13 @@ private struct NotesTab: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
-        // 本地草稿 → card.notes 静默写回(保存路径不变);外部改动(模板/重开)反向同步
-        .onChange(of: notesDraft) { card.notes = notesDraft }
-        .onChange(of: card.notes) {
-            if card.notes != notesDraft { notesDraft = card.notes }
+        // 编辑器序列化回调已直写 card.notes(onSerialized);此处仅保留外部改动
+        // (模板/重开表单)的反向同步,并记录长度变化供排查回写丢失
+        .onChange(of: card.notes) { old, new in
+            if new != notesDraft {
+                notesDraft = new
+                Log.info("ui", "notes resync card.notes→notesDraft old.len=\(old.count) new.len=\(new.count)")
+            }
         }
     }
 
@@ -740,7 +841,7 @@ private struct NotesTab: View {
         .padding(14)
     }
 
-    /// 内嵌框:格式工具条 + 分割线 + 编辑区 + 字数(同参考图)
+    /// 内嵌框:格式工具条 + 分割线 + 编辑区 + 字数
     private var innerBox: some View {
         VStack(spacing: 0) {
             toolbar
@@ -764,7 +865,7 @@ private struct NotesTab: View {
             // B / I / U / S:对选中文本做即时字体变换(纯文本存储,格式不持久化)
             glyphButton("B") { toggleFontTrait(.boldFontMask) }
                 .font(.system(size: 14, weight: .bold))
-            glyphButton("I") { toggleFontTrait(.italicFontMask) }
+            glyphButton("I") { toggleItalic() }
                 .font(.system(size: 14, weight: .medium)).italic()
             glyphButton("U") { toggleUnderline() }
                 .font(.system(size: 14, weight: .medium)).underline()
@@ -839,7 +940,14 @@ private struct NotesTab: View {
                     // 占位层必须放行点击,否则会挡住文本框聚焦
                     .allowsHitTesting(false)
             }
-            NotesTextEditor(text: $notesDraft, onFocusChange: { editorFocused = $0 })
+            NotesTextEditor(text: $notesDraft, onFocusChange: { editorFocused = $0 },
+                            tracker: selectionTracker,
+                            onSerialized: { md in
+                                // 序列化结果同步直写卡片笔记(保存路径直接读取),
+                                // 不经 onChange 延迟传播
+                                notesDraft = md
+                                card.notes = md
+                            })
         }
         .frame(minHeight: 200)
         .padding(4)
@@ -847,56 +955,164 @@ private struct NotesTab: View {
 
     // MARK: 工具条动作(作用于当前焦点 NSTextView;笔记为纯文本,格式即时生效但不入库)
 
-    private var focusedTextView: NSTextView? {
-        NSApp.keyWindow?.firstResponder as? NSTextView
+    /// 工具条作用目标:非空选区优先——先看实时,点击按钮导致失焦/选区塌缩时
+    /// 回放追踪器记录的选区;两者都为空才是光标模式(长度 0)。
+    private var selectionTarget: (view: NotesTextView, range: NSRange)? {
+        let live = NSApp.keyWindow?.firstResponder as? NotesTextView
+        if let tv = live, tv.selectedRange.length > 0 {
+            Log.info("ui", "notes selection target: live len=\(tv.selectedRange.length)")
+            return (tv, tv.selectedRange)
+        }
+        if let tv = selectionTracker.textView, tv.window != nil,
+           selectionTracker.selectedRange.length > 0 {
+            Log.info("ui", "notes selection target: replay len=\(selectionTracker.selectedRange.length)")
+            return (tv, selectionTracker.selectedRange)
+        }
+        if let tv = live {
+            Log.info("ui", "notes selection target: caret (live empty)")
+            return (tv, tv.selectedRange)
+        }
+        Log.warn("ui", "notes selection target: none")
+        return nil
+    }
+
+    /// 属性编辑协议:改 textStorage 前必须先 shouldChangeText(登记 undo、
+    /// 标记失效范围),改完 didChangeText 才会触发重绘与保存回写。
+    /// 没有这个协议 NSTextView 不知道哪里变了——数据其实已改但屏幕不刷新。
+    private func applyAttributeEdit(_ tv: NotesTextView, range: NSRange, _ change: (NSTextStorage) -> Void) {
+        guard let storage = tv.textStorage else {
+            Log.warn("ui", "notes attr edit aborted: no textStorage range.len=\(range.length)")
+            return
+        }
+        guard tv.shouldChangeText(in: range, replacementString: nil) else {
+            Log.warn("ui", "notes attr edit vetoed: shouldChangeText=false range.len=\(range.length)")
+            return
+        }
+        change(storage)
+        tv.didChangeText()
+    }
+
+    /// 工具条操作收尾:把焦点与选区还给文本视图,保证连续操作
+    /// 与下一次实时选区可用。
+    private func finishToolbarEdit(_ tv: NotesTextView, restoredRange: NSRange) {
+        tv.window?.makeFirstResponder(tv)
+        tv.setSelectedRange(restoredRange)
     }
 
     private func toggleFontTrait(_ trait: NSFontTraitMask) {
-        guard let tv = focusedTextView, let storage = tv.textStorage else { return }
+        guard let target = selectionTarget else { return }
+        let tv = target.view
+        let range = target.range
         let fm = NSFontManager.shared
-        let range = tv.selectedRange
         let convert = { (font: NSFont) -> NSFont in
             fm.traits(of: font).contains(trait)
                 ? fm.convert(font, toNotHaveTrait: trait)
                 : fm.convert(font, toHaveTrait: trait)
         }
         if range.length == 0 {
+            // 光标模式:仅设置后续输入字体(文本视图持焦时才有意义)
             let font = tv.typingAttributes[.font] as? NSFont ?? .systemFont(ofSize: 13)
             tv.typingAttributes[.font] = convert(font)
+            Log.info("ui", "notes trait caret-mode trait=\(trait.rawValue)")
         } else {
-            storage.beginEditing()
-            storage.enumerateAttribute(.font, in: range, options: []) { value, subRange, _ in
-                storage.addAttribute(.font, value: convert(value as? NSFont ?? .systemFont(ofSize: 13)),
-                                     range: subRange)
+            applyAttributeEdit(tv, range: range) { storage in
+                storage.beginEditing()
+                storage.enumerateAttribute(.font, in: range, options: []) { value, subRange, _ in
+                    storage.addAttribute(.font, value: convert(value as? NSFont ?? .systemFont(ofSize: 13)),
+                                         range: subRange)
+                }
+                storage.endEditing()
             }
-            storage.endEditing()
+            Log.info("ui", "notes trait toggle range.len=\(range.length) trait=\(trait.rawValue)")
         }
+        finishToolbarEdit(tv, restoredRange: range)
+    }
+
+    /// 斜体:中文字体没有斜体字面(italic trait 被静默忽略),含中文的区段
+    /// 用楷体(Kaiti SC)替代——中文强调的通行惯例;纯西文用系统真斜体。
+    private func isItalicFont(_ font: NSFont?, text: String) -> Bool {
+        guard let font else { return false }
+        return NSFontManager.shared.traits(of: font).contains(.italicFontMask)
+            || font.fontName.lowercased().contains("kaiti")
+    }
+
+    private func toggleItalic() {
+        guard let target = selectionTarget else {
+            Log.warn("ui", "notes italic aborted: no selection target")
+            return
+        }
+        let tv = target.view
+        let range = target.range
+        if range.length == 0 {
+            // 光标模式:按光标前一字符的中西文决定后续输入的斜体字体
+            let length = tv.textStorage?.length ?? 0
+            let loc = max(0, min(range.location, length) - 1)
+            let prev = length > 0
+                ? (tv.textStorage!.string as NSString).substring(with: NSRange(location: loc, length: 1))
+                : ""
+            let on = isItalicFont(tv.typingAttributes[.font] as? NSFont, text: prev)
+            let nf = NotesMarkdown.italicFont(for: prev, size: 13, italic: !on)
+            tv.typingAttributes[.font] = nf
+            Log.info("ui", "notes italic caret-mode font=\(nf.fontName)")
+        } else {
+            var appliedFontName = "-"
+            applyAttributeEdit(tv, range: range) { storage in
+                let current = storage.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
+                let currentText = storage.attributedSubstring(from: range).string
+                let targetItalic = !isItalicFont(current, text: currentText)
+                storage.beginEditing()
+                storage.enumerateAttribute(.font, in: range, options: []) { value, subRange, _ in
+                    let f = value as? NSFont ?? .systemFont(ofSize: 13)
+                    let subText = storage.attributedSubstring(from: subRange).string
+                    let nf = NotesMarkdown.italicFont(for: subText, size: f.pointSize, italic: targetItalic)
+                    if subRange.location == range.location { appliedFontName = nf.fontName }
+                    storage.addAttribute(.font, value: nf, range: subRange)
+                }
+                storage.endEditing()
+            }
+            Log.info("ui", "notes italic apply range.len=\(range.length) font=\(appliedFontName)")
+        }
+        finishToolbarEdit(tv, restoredRange: range)
     }
 
     private func toggleUnderline() {
-        guard let tv = focusedTextView, let storage = tv.textStorage else { return }
-        let range = tv.selectedRange
-        let isOn = range.length > 0
-            && (storage.attribute(.underlineStyle, at: range.location, effectiveRange: nil) as? Int ?? 0) != 0
-        let style = isOn ? 0 : NSUnderlineStyle.single.rawValue
+        guard let target = selectionTarget else { return }
+        let tv = target.view
+        let range = target.range
         if range.length == 0 {
-            tv.typingAttributes[.underlineStyle] = style
+            let isOn = (tv.typingAttributes[.underlineStyle] as? Int ?? 0) != 0
+            tv.typingAttributes[.underlineStyle] = isOn ? 0 : NSUnderlineStyle.single.rawValue
+            Log.info("ui", "notes underline caret-mode")
         } else {
-            storage.addAttribute(.underlineStyle, value: style, range: range)
+            applyAttributeEdit(tv, range: range) { storage in
+                let isOn = (storage.attribute(.underlineStyle, at: range.location, effectiveRange: nil)
+                    as? Int ?? 0) != 0
+                storage.addAttribute(.underlineStyle, value: isOn ? 0 : NSUnderlineStyle.single.rawValue,
+                                     range: range)
+            }
+            Log.info("ui", "notes underline toggle range.len=\(range.length)")
         }
+        finishToolbarEdit(tv, restoredRange: range)
     }
 
     private func toggleStrikethrough() {
-        guard let tv = focusedTextView, let storage = tv.textStorage else { return }
-        let range = tv.selectedRange
-        let isOn = range.length > 0
-            && (storage.attribute(.strikethroughStyle, at: range.location, effectiveRange: nil) as? Int ?? 0) != 0
-        let style = isOn ? 0 : NSUnderlineStyle.single.rawValue
+        guard let target = selectionTarget else { return }
+        let tv = target.view
+        let range = target.range
         if range.length == 0 {
-            tv.typingAttributes[.strikethroughStyle] = style
+            let isOn = (tv.typingAttributes[.strikethroughStyle] as? Int ?? 0) != 0
+            tv.typingAttributes[.strikethroughStyle] = isOn ? 0 : NSUnderlineStyle.single.rawValue
+            Log.info("ui", "notes strike caret-mode")
         } else {
-            storage.addAttribute(.strikethroughStyle, value: style, range: range)
+            applyAttributeEdit(tv, range: range) { storage in
+                let isOn = (storage.attribute(.strikethroughStyle, at: range.location, effectiveRange: nil)
+                    as? Int ?? 0) != 0
+                storage.addAttribute(.strikethroughStyle, value: isOn ? 0 : NSUnderlineStyle.single.rawValue,
+                                     range: range)
+            }
+            Log.info("ui", "notes strike toggle range.len=\(range.length)")
         }
+        finishToolbarEdit(tv, restoredRange: range)
     }
 
     /// 撤销/重做:沿响应者链投递给文本视图自身的 undoManager
@@ -918,9 +1134,10 @@ private struct NotesTab: View {
     }
 
     private func toggleList(_ kind: ListKind) {
-        guard let tv = focusedTextView, let storage = tv.textStorage else { return }
+        guard let target = selectionTarget, let storage = target.view.textStorage else { return }
+        let tv = target.view
         let ns = tv.string as NSString
-        let selRange = tv.selectedRange
+        let selRange = target.range
         let clamped = NSRange(location: min(selRange.location, ns.length), length: 0)
         let pRange = ns.paragraphRange(for: selRange.length > 0 ? selRange : clamped)
         let lines = ns.substring(with: pRange).components(separatedBy: "\n")
@@ -962,14 +1179,21 @@ private struct NotesTab: View {
         }
         storage.endEditing()
         tv.didChangeText()
+        finishToolbarEdit(tv, restoredRange: pRange)
         Log.info("ui", "notes list \(removing ? "remove" : "apply") paragraphs=\(lines.count)")
     }
 
     /// 链接:弹窗取 URL,给选中文字加 .link 属性(Cmd+点击可打开)
     @MainActor private func addLink() {
-        guard let tv = focusedTextView else { return }
-        let range = tv.selectedRange
+        guard let target = selectionTarget else {
+            Log.info("ui", "notes link aborted: no selection target")
+            AppToast.shared.show(L10n.t("link_select_hint", fallback: "请先选中要添加链接的文字"))
+            return
+        }
+        let tv = target.view
+        let range = target.range
         guard range.length > 0 else {
+            Log.info("ui", "notes link aborted: empty selection")
             AppToast.shared.show(L10n.t("link_select_hint", fallback: "请先选中要添加链接的文字"))
             return
         }
@@ -982,13 +1206,27 @@ private struct NotesTab: View {
         alert.addButton(withTitle: L10n.t("cancel_button"))
         alert.window.initialFirstResponder = input
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        guard let url = URL(string: input.stringValue.trimmingCharacters(in: .whitespaces)),
-              input.stringValue.contains(".") else {
+        // 无 scheme 时补 https://,让 "example.com" 这类输入也能成链
+        var spec = input.stringValue.trimmingCharacters(in: .whitespaces)
+        if !spec.isEmpty, !spec.contains("://") { spec = "https://" + spec }
+        guard let url = URL(string: spec), url.host != nil else {
+            Log.warn("ui", "notes link invalid url input.len=\(spec.count)")
             AppToast.shared.show(L10n.t("link_invalid_hint", fallback: "链接格式无效"))
             return
         }
-        tv.textStorage?.addAttribute(.link, value: url, range: range)
-        tv.didChangeText()
+        applyAttributeEdit(tv, range: range) { storage in
+            storage.addAttribute(.link, value: url, range: range)
+            // 可编辑文本视图不会自动给 .link 文本上样式,显式加链接色与下划线
+            storage.addAttribute(.foregroundColor, value: NSColor.controlAccentColor, range: range)
+            storage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
+        }
+        finishToolbarEdit(tv, restoredRange: range)
+        let linked = tv.textStorage?.attribute(.link, at: range.location, effectiveRange: nil) != nil
+        Log.info("ui", "notes link added range.len=\(range.length) verified=\(linked)")
+        if let storage = tv.textStorage {
+            let mdNow = NotesMarkdown.serialize(storage)
+            Log.info("ui", "notes link serialize link-in-md=\(mdNow.contains("](")) md.len=\(mdNow.count)")
+        }
     }
 }
 
@@ -1050,7 +1288,7 @@ private struct ImagesTab: View {
         if panel.runModal() == .OK {
             for url in panel.urls {
                 if let data = try? Data(contentsOf: url) {
-                    // 150 KB image budget matches the original's guidance
+                    // 单张图片 150 KB 上限
                     card.images.append(Attachment(name: url.lastPathComponent, data: data))
                 }
             }
@@ -1128,10 +1366,17 @@ private struct FilesTab: View {
 fileprivate struct NotesTextEditor: NSViewRepresentable {
     @Binding var text: String   // markdown 平文(与 card.notes 同步)
     var onFocusChange: (Bool) -> Void = { _ in }
+    /// 选区追踪:协调器持续记录最近一次非空选区,供工具条回放(见 NotesSelectionTracker)
+    var tracker: NotesSelectionTracker? = nil
+    /// 序列化回调:编辑器内容每变更一次回调最新 markdown,宿主同步直写
+    /// card.notes——不再依赖 onChange 的延迟传播(该路径曾把旧值写回导致
+    /// 链接/样式在保存后丢失)。
+    var onSerialized: (String) -> Void = { _ in }
 
     func makeNSView(context: Context) -> NSScrollView {
         let tv = NotesTextView()
         tv.delegate = context.coordinator
+        tv.selectionTracker = tracker
         tv.font = .systemFont(ofSize: 13)
         tv.textColor = .labelColor
         tv.drawsBackground = false
@@ -1156,6 +1401,7 @@ fileprivate struct NotesTextEditor: NSViewRepresentable {
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         context.coordinator.text = $text
         context.coordinator.onFocusChange = onFocusChange
+        context.coordinator.onSerialized = onSerialized
         guard let tv = nsView.documentView as? NotesTextView else { return }
         // 绑定值与上次序列化结果不同 → 外部改动(重开表单/模板),整体重渲染;
         // 自己打字引起的差异已在 textDidChange 里同步,不动视图避免光标跳转
@@ -1165,24 +1411,35 @@ fileprivate struct NotesTextEditor: NSViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, onFocusChange: onFocusChange)
+        Coordinator(text: $text, onFocusChange: onFocusChange, tracker: tracker,
+                    onSerialized: onSerialized)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var text: Binding<String>
         var onFocusChange: (Bool) -> Void
+        weak var tracker: NotesSelectionTracker?
+        var onSerialized: (String) -> Void
         /// 当前渲染所用的 markdown,用于区分「外部改动」与「内部打字」
         var lastSerialized: String
 
-        init(text: Binding<String>, onFocusChange: @escaping (Bool) -> Void) {
+        init(text: Binding<String>, onFocusChange: @escaping (Bool) -> Void,
+             tracker: NotesSelectionTracker? = nil,
+             onSerialized: @escaping (String) -> Void = { _ in }) {
             self.text = text
             self.onFocusChange = onFocusChange
+            self.tracker = tracker
+            self.onSerialized = onSerialized
             self.lastSerialized = text.wrappedValue
         }
 
         func display(markdown: String, in tv: NotesTextView) {
             lastSerialized = markdown
             tv.textStorage?.setAttributedString(NotesMarkdown.render(markdown))
+            // 排查链接链路:重开/重渲染时确认链接 markdown 已持久化并进入渲染
+            if markdown.contains("](") {
+                Log.info("ui", "notes display markdown contains link md.len=\(markdown.count)")
+            }
         }
 
         func textDidChange(_ notification: Notification) {
@@ -1192,18 +1449,36 @@ fileprivate struct NotesTextEditor: NSViewRepresentable {
             if text.wrappedValue != md {
                 text.wrappedValue = md
             }
+            // 同步直写宿主卡片笔记(含链接时记录序列化特征)
+            onSerialized(md)
+            if md.contains("](") {
+                Log.info("ui", "notes serialize link present md.len=\(md.count)")
+            }
         }
 
         func textDidBeginEditing(_ notification: Notification) { onFocusChange(true) }
         func textDidEndEditing(_ notification: Notification) { onFocusChange(false) }
+
+        /// 记录最近一次非空选区(空选区不覆盖,供工具条按钮夺焦后回放)
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let tv = notification.object as? NotesTextView else { return }
+            tracker?.textView = tv
+            if tv.selectedRange.length > 0 {
+                tracker?.selectedRange = tv.selectedRange
+            }
+        }
     }
 }
 
 /// 普通点击命中链接即在浏览器打开(编辑态默认要 Cmd+点击,这里放宽)
 final class NotesTextView: NSTextView {
     var onOpenLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    /// 与工具条共享的选区追踪;文本内的点击/按键意味着用户重新定位,
+    /// 清掉回放记录,防止工具条把样式误应用到过期选区上。
+    var selectionTracker: NotesSelectionTracker? = nil
 
     override func mouseDown(with event: NSEvent) {
+        selectionTracker?.selectedRange = NSRange(location: 0, length: 0)
         let point = convert(event.locationInWindow, from: nil)
         guard let layoutManager, let container = textContainer else { return super.mouseDown(with: event) }
         let index = layoutManager.characterIndex(for: point, in: container,
@@ -1214,6 +1489,11 @@ final class NotesTextView: NSTextView {
             return
         }
         super.mouseDown(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        selectionTracker?.selectedRange = NSRange(location: 0, length: 0)
+        super.keyDown(with: event)
     }
 }
 

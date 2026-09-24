@@ -1,8 +1,8 @@
 import SwiftUI
 
-// MARK: - Sidebar (LabelListViewController: four collapsible groups —
-// Safe (database name, shield) / 标签 / 安全性 / 特殊 — with colored group
-// icons, neutral selection highlight and the 「显示」 optional-item menu)
+// MARK: - Sidebar (four collapsible groups — 数据库(数据库名,盾牌图标) /
+// 标签 / 安全性 / 特殊 — with colored group icons, neutral selection
+// highlight and the 「显示」 optional-item menu)
 
 struct SidebarView: View {
     @EnvironmentObject var ctx: AppContext
@@ -16,7 +16,7 @@ struct SidebarView: View {
         var id: String { key }
     }
 
-    /// Original row order inside each group.
+    /// Row order inside each group.
     private static let safeOrder: [SpecialLabel] = [.allCards, .favorites, .creditCards, .notes, .oneTimeCodes, .passkeys, .recent]
     private static let securityOrder: [SpecialLabel] = [.compromised, .weakPasswords, .samePasswords]
     private static let specialOrder: [SpecialLabel] = [.expiring, .expired, .archived, .templates, .trash]
@@ -50,8 +50,8 @@ struct SidebarView: View {
         }
     }
 
-    /// 侧栏底部块 — 全宽分隔线 + 居中「初始化 n/8」(SetupPlanViewController 入口)
-    /// + 居中的「显示」按钮。参考图实测:分隔线以下整条底色比侧栏深
+    /// 侧栏底部块 — 全宽分隔线 + 居中「初始化 n/8」入口
+    /// + 居中的「显示」按钮。分隔线以下整条底色比侧栏深
     /// (windowBackgroundColor 30,30,30),「显示」为深灰圆角按钮。
     private var setupCard: some View {
         VStack(spacing: 0) {
@@ -139,7 +139,7 @@ struct SidebarView: View {
         }
     }
 
-    /// Safe 分组行:固定顺序 + 通过「显示」菜单开启的可选行(密码插入
+    /// 「数据库」分组行:固定顺序 + 通过「显示」菜单开启的可选行(密码插入
     /// 在全部项目之后,文件/图片插入在笔记之后)。
     private var safeRows: [SpecialLabel] {
         var rows: [SpecialLabel] = []
@@ -166,7 +166,7 @@ struct SidebarView: View {
         return Button {
             if isOpen { expanded.remove(group.key) } else { expanded.insert(group.key) }
         } label: {
-            // 参考图实测:折叠箭头 ~26pt、组图标 ~44pt、组名 ~65pt(相对侧栏左缘)
+            // 折叠箭头 ~26pt、组图标 ~44pt、组名 ~65pt(相对侧栏左缘)
             HStack(spacing: 0) {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .bold))
@@ -196,7 +196,7 @@ struct SidebarView: View {
     }
 }
 
-/// 参考图的分隔凹槽:两侧 0.75pt 浅边线(white 10%)+ 中间 4pt 深槽 #1A1A1A,
+/// 分隔凹槽:两侧 0.75pt 浅边线(white 10%)+ 中间 4pt 深槽 #1A1A1A,
 /// 总宽/高 5.5pt。竖向用于列间;横向(horizontal: true)用于工具栏条带底缘。
 struct ColumnGroove: View {
     var horizontal = false
@@ -223,7 +223,7 @@ struct ColumnGroove: View {
     static let dark = Color(red: 26/255.0, green: 26/255.0, blue: 26/255.0)
 }
 
-/// LabelListCell — 16pt icon, name, right-aligned count (weight 1000 in nib).
+/// Sidebar row: 16pt icon, name, right-aligned count.
 struct SidebarRow: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
@@ -299,7 +299,7 @@ private struct SidebarRowButton: View {
 
     var body: some View {
         Button(action: action) {
-            // 参考图实测:行高 27pt;计数右缘 ~205pt,选中高亮为中性灰圆角矩形。
+            // 行高 27pt;计数右缘 ~205pt,选中高亮为中性灰圆角矩形。
             // 子行(组内选项)起始位置再右移一档(~65pt,与父级文字对齐),
             // 明确体现「组 → 子选项」层级。
             HStack(spacing: 7) {

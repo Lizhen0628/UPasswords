@@ -2,9 +2,8 @@ import Foundation
 import SwiftUI
 import Combine
 
-/// Central session controller — the SwiftUI counterpart of `DatabaseManager`
-/// (Services/DatabaseManager.h) plus the card-list strategies the original
-/// implements through `CardListStrategy` subclasses per sidebar label.
+/// Central session controller — owns the session state, database persistence
+/// and the card-list strategies per sidebar selection.
 ///
 /// 职责拆分(同类型 extension,便于按域浏览):
 /// - 本文件:会话状态、启动引导、锁定/解锁生命周期、持久化、自动锁
@@ -60,6 +59,10 @@ final class AppContext: ObservableObject {
     // 空闲追踪用,不进 UI。故意不用 @Published:活动监视器把每次键盘/鼠标
     // 事件都算作活动,若发布会在打字时逐键触发整棵视图树重渲染(输入卡顿)。
     var lastActivity: Date = Date()
+    // 网站图标抓取状态(逻辑在 AppContext+Icons.swift):
+    // 本会话已尝试抓取的卡片,防止反复请求失败站点;补抓串行任务句柄。
+    var iconFetchAttempted = Set<Int>()
+    var iconBackfillTask: Task<Void, Never>? = nil
 
     enum SyncState: Equatable {
         case disabled, idle, syncing, error(String)
@@ -139,7 +142,7 @@ final class AppContext: ObservableObject {
             settings.showWhatsNewAtStartup = false
             settings.autoLockSeconds = 0
             settings.fastUnlock = false
-            let name = "Safe"
+            let name = "UPasswords"
             if !store.exists(name) {
                 do {
                     // 走与向导「继续」相同的 createDatabase 路径,复现 setupPlan 弹窗
@@ -192,7 +195,7 @@ final class AppContext: ObservableObject {
         }
     }
 
-    // MARK: - Setup / lifecycle (SetupWindowController → DatabaseManager)
+    // MARK: - Setup / lifecycle
 
     func createDatabase(name: String, password: String, touchID: Bool) throws {
         Log.info("lifecycle", "createDatabase \"\(name)\" touchID=\(touchID) (password length \(password.count))")
@@ -226,6 +229,7 @@ final class AppContext: ObservableObject {
         selection = .special(.allCards)
         selectedCardId = database.activeCards.first?.id
         Log.info("lifecycle", "unlocked \"\(name)\": \(database.cards.count) cards, \(database.labels.count) labels")
+        scheduleIconBackfill()
         scheduleAutoBackupIfNeeded()
         markSetupTaskDoneIf(.cloudSync, when: settings.cloud != .none)
         markSetupTaskDoneIf(.autoBackup, when: settings.autoBackupEnabled)
@@ -233,7 +237,7 @@ final class AppContext: ObservableObject {
         announceStartupSheets()
     }
 
-    /// WhatsNewSheetController (whats_new.json) + expiring_cards_warning prompt.
+    /// 启动提示:What's New + 即将到期卡片提醒。
     private func announceStartupSheets() {
         let version = "1.0"
         if settings.showWhatsNewAtStartup && settings.lastWhatsNewVersion != version {
@@ -246,7 +250,7 @@ final class AppContext: ObservableObject {
         }
     }
 
-    /// LockWindowController + LockedState.enter
+    /// 进入锁定相位。
     func lock() {
         guard phase == .unlocked else { return }
         Log.info("lifecycle", "lock \"\(databaseName)\"")

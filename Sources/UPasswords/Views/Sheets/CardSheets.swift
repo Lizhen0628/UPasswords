@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - Add card (SelectTemplateSheetController)
+// MARK: - Add card
 
 struct AddCardSheet: View {
     @EnvironmentObject var ctx: AppContext
@@ -97,7 +97,7 @@ struct AddNoteSheet: View {
     }
 }
 
-// MARK: - Add / rename label (AddLabelSheetController / rename_label_title)
+// MARK: - Add / rename label
 
 struct AddLabelSheet: View {
     @EnvironmentObject var ctx: AppContext
@@ -187,7 +187,7 @@ struct SelectColorLabelSheet: View {
     }
 }
 
-// MARK: - Sorting (SortingSheetController)
+// MARK: - Sorting
 
 struct SortingSheet: View {
     @EnvironmentObject var settings: AppSettings
@@ -226,7 +226,7 @@ struct SortingSheet: View {
     }
 }
 
-// MARK: - Generator (PasswordOptionsSheetController + PasswordOptionsViewController)
+// MARK: - Generator
 
 struct GeneratorSheet: View {
     @EnvironmentObject var pwd: PasswordSettings
@@ -330,7 +330,7 @@ struct GeneratorSheet: View {
     }
 }
 
-// MARK: - Set labels (SetLabelsSheetController + SetLabelsViewController)
+// MARK: - Set labels
 
 struct SetLabelsSheet: View {
     @EnvironmentObject var ctx: AppContext
@@ -402,7 +402,7 @@ struct SetLabelsSheet: View {
     }
 }
 
-// MARK: - Symbol picker (SelectSymbolViewController + SymbolCellItem)
+// MARK: - Symbol picker
 
 struct SelectSymbolSheet: View {
     @EnvironmentObject var ctx: AppContext
@@ -462,31 +462,50 @@ struct SelectSymbolSheet: View {
     }
 }
 
-// MARK: - Color picker (SelectColorViewController)
+// MARK: - Color picker
 
+/// 颜色选择器(含「使用网站图标」开关)。两种呈现方式:
+/// - 编辑表单内本地呈现(传 onApply):结果回调给调用方,随编辑表单一起关闭,
+///   不会出现跨表单残留/错写其他卡片的孤儿弹层;
+/// - 经 ctx.activeSheet 呈现(列表右键等):结果写入 ctx.editDraft。
 struct SelectColorSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
+    var initialColor: String? = nil
+    var initialUseWebsiteIcon: Bool = false
+    var onApply: ((_ color: String, _ useWebsiteIcon: Bool) -> Void)? = nil
+
     @State private var selection: String = "gray"
+    @State private var useWebsiteIcon: Bool = false
 
     var body: some View {
         SheetShell(
             title: L10n.t("select_color_command"),
             onAppearBody: {
-                if let c = ctx.editDraft?.card.color { selection = c }
+                if onApply != nil {
+                    selection = initialColor ?? "gray"
+                    useWebsiteIcon = initialUseWebsiteIcon
+                } else {
+                    selection = ctx.editDraft?.card.color ?? "gray"
+                    useWebsiteIcon = ctx.editDraft?.card.useWebsiteIcon ?? false
+                }
             },
             onCancel: { dismiss() },
             onOk: {
-                ctx.editDraft?.card.color = selection
+                if onApply != nil {
+                    Log.info("ui", "color applied color=\(selection) websiteIcon=\(useWebsiteIcon)")
+                    onApply?(selection, useWebsiteIcon)
+                } else {
+                    Log.info("ui", "color applied to editDraft color=\(selection) websiteIcon=\(useWebsiteIcon)")
+                    ctx.editDraft?.card.color = selection
+                    ctx.editDraft?.card.useWebsiteIcon = useWebsiteIcon
+                }
                 dismiss()
             },
             content: {
                 VStack(alignment: .leading, spacing: 12) {
                     ColorGrid(selection: $selection, large: true)
-                    Toggle(L10n.t("use_website_icon_command"), isOn: Binding(
-                        get: { ctx.editDraft?.card.useWebsiteIcon ?? false },
-                        set: { ctx.editDraft?.card.useWebsiteIcon = $0 }
-                    ))
+                    Toggle(L10n.t("use_website_icon_command"), isOn: $useWebsiteIcon)
                 }
             }
         )
@@ -547,7 +566,7 @@ struct SelectTemplateSheet: View {
     }
 }
 
-// MARK: - SelectColorViewController grid
+// MARK: - Color grid
 
 struct ColorGrid: View {
     @Binding var selection: String
@@ -575,7 +594,7 @@ struct ColorGrid: View {
     }
 }
 
-// MARK: - Password history (HistorySheetController + HistoryViewController)
+// MARK: - Password history
 
 struct PasswordHistorySheet: View {
     @EnvironmentObject var ctx: AppContext
@@ -600,7 +619,7 @@ struct PasswordHistorySheet: View {
                         List {
                             ForEach(Array(entries.enumerated()), id: \.offset) { _, e in
                                 HStack {
-                                    CardIconView(symbol: e.card.symbol, color: e.card.color, size: 24)
+                                    CardIconView(symbol: e.card.symbol, color: e.card.color, size: 24, card: e.card)
                                     VStack(alignment: .leading) {
                                         Text("\(e.card.title) — \(e.field.name)").font(.callout)
                                         Text(e.entry.value).font(.callout.monospaced()).foregroundStyle(.secondary)

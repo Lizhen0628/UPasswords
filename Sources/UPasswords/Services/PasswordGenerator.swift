@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-/// Mirrors `PasswordSettings` (Services/PasswordSettings.h, ObservableModel singleton).
+/// Password generator settings, persisted to `UserDefaults`.
 final class PasswordSettings: ObservableObject {
     static let shared = PasswordSettings()
 
@@ -34,9 +34,9 @@ final class PasswordSettings: ObservableObject {
     }
 }
 
-/// Mirrors `PasswordGenerator` (Services/PasswordGenerator.h) — singleton with
-/// history, random / memorable / letters-and-numbers / digits-only modes and a
-/// word dictionary for memorable passwords.
+/// Password generator — singleton with history, random / memorable /
+/// letters-and-numbers / digits-only modes and a word dictionary for
+/// memorable passwords.
 final class PasswordGenerator {
     static let instance = PasswordGenerator()
 
@@ -48,8 +48,7 @@ final class PasswordGenerator {
     private static let memorableMaxWords = 6
 
     init() {
-        // Compact embedded word list (original ships dictionary.txt for
-        // memorable passwords and zxcvbn).
+        // Compact embedded word list for memorable passwords.
         let words = """
         apple anchor autumn brave breeze bridge bright bronze butter cabin candle canvas canyon carbon
         castle cedar cherry chess cinder clay cliff clover cobalt comet compass copper coral cosmic cotton

@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Export (ExportAsSheetController)
+// MARK: - Export
 
 struct ExportAsSheet: View {
     @EnvironmentObject var ctx: AppContext
@@ -44,7 +44,7 @@ struct ExportAsSheet: View {
     }
 }
 
-// MARK: - Import (ImportSheetController + ImportSourceViewController + ImportLogViewController)
+// MARK: - Import
 
 struct ImportSheet: View {
     @EnvironmentObject var ctx: AppContext

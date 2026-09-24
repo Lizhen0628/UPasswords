@@ -1,41 +1,41 @@
 import Foundation
 
-/// Sheets catalog — one case per original *SheetController; associated values
+/// Sheets catalog — one case per sheet; associated values
 /// carry targets (label id, card id, field draft…).
 /// 视图映射见 Views/Sheets/SheetFactory.swift。
 enum AppSheet: Identifiable, Hashable {
-    case addCard            // SelectTemplateSheetController (添加项目)
+    case addCard            // 添加项目
     case addNote            // 添加笔记
-    case addLabel           // AddLabelSheetController
+    case addLabel
     case editCardLabel(id: Int) // rename_label_title
-    case selectColorCardLabel(id: Int) // SelectColorViewController for labels
+    case selectColorCardLabel(id: Int) // 标签颜色选择
     case addTemplate        // save_as_template (存为模板)
-    case sorting            // SortingSheetController
-    case generator          // PasswordOptionsSheetController
-    case labels(cardId: Int) // SetLabelsSheetController
-    case addField           // AddFieldSheetController
-    case editField          // EditFieldSheetController
-    case selectSymbol       // SelectSymbolViewController
-    case selectColor        // SelectColorViewController (cards)
-    case selectTexture      // SelectTextureSheetController
+    case sorting
+    case generator
+    case labels(cardId: Int)
+    case addField
+    case editField
+    case selectSymbol
+    case selectColor        // 卡片颜色选择
+    case selectTexture
     case selectTemplate     // template picker inside edit-card
-    case history            // HistorySheetController (recent)
+    case history            // 最近历史
     case passwordHistory    // password_history_command
-    case exportAs           // ExportAsSheetController
-    case importData         // ImportSheetController + ImportSourceViewController
-    case databaseInfo       // DatabaseInfoSheetController
-    case compromised        // CompromisedPasswordsSheetController
-    case changePassword     // SetPasswordSheetController
-    case configureCloud     // ConfigureCloudSheetController
+    case exportAs
+    case importData
+    case databaseInfo
+    case compromised
+    case changePassword
+    case configureCloud
     case eraseData          // 擦除数据 confirm
-    case manageDatabases    // ManageDatabasesViewController
-    case selectDatabase     // SelectDatabaseSheetController
+    case manageDatabases
+    case selectDatabase
     case preferences        // 设置 window
-    case about              // AboutWindowController
-    case whatsNew           // WhatsNewSheetController
-    case premium            // PremiumSheetController
-    case setupPlan          // SetupPlanViewController
-    case enterPassword      // EnterPasswordSheetController (unlock)
+    case about
+    case whatsNew
+    case premium
+    case setupPlan
+    case enterPassword      // 解锁
     case expiredCards       // expiring_cards_warning prompt
     case restoreTemplates   // restore_templates_query
 
@@ -75,6 +75,17 @@ enum AppSheet: Identifiable, Hashable {
         case .enterPassword: return "enterPassword"
         case .expiredCards: return "expiredCards"
         case .restoreTemplates: return "restoreTemplates"
+        }
+    }
+
+    /// 由编辑表单内打开、编辑表单关闭时应当一并关闭的弹层
+    /// (否则会残留成孤儿弹层,其 OK 还可能错写下一个打开的编辑草稿)
+    var isEditSheetContext: Bool {
+        switch self {
+        case .selectColor, .selectSymbol, .selectTemplate:
+            return true
+        default:
+            return false
         }
     }
 }

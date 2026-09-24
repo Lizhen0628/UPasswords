@@ -1,8 +1,7 @@
 import Foundation
 
-/// The decrypted database: mirrors `XDatabase` (Models/XDatabase.h) plus
-/// `DatabaseAdapter`'s item indexes. XML element/attribute names are identical
-/// to the original `database.xml` format documented in the reverse notes:
+/// The decrypted database model plus item indexes. XML element/attribute
+/// layout of the exchange format:
 ///
 /// ```
 /// <database>
@@ -14,6 +13,7 @@ import Foundation
 ///     <label name id/>
 ///     <image name>base64</image>
 ///     <file name>base64</file>
+///     <icon source>base64</icon>        ← 本项目扩展:卡片图标(website/custom/url/builtin)
 ///   </card>
 ///   <ghost id time/>
 /// </database>
@@ -23,7 +23,7 @@ struct PasswordDatabase: Codable, Equatable {
     var cards: [Card] = []
     var ghosts: [Ghost] = []
 
-    // MARK: - Adapter accessors (DatabaseAdapter.h)
+    // MARK: - Item accessors
 
     func card(id: Int) -> Card? { cards.first { $0.id == id } }
     func label(id: Int) -> CardLabel? { labels.first { $0.id == id } }
@@ -35,7 +35,7 @@ struct PasswordDatabase: Codable, Equatable {
         cards.contains { $0.id == id } || labels.contains { $0.id == id } || ghosts.contains { $0.id == id }
     }
 
-    /// DatabaseAdapter fresh item id (max + 1, skipping used ids).
+    /// Fresh item id (max + 1, skipping used ids).
     mutating func nextItemId() -> Int {
         var id = 1
         while isUsedItemId(id) { id += 1 }
@@ -44,7 +44,7 @@ struct PasswordDatabase: Codable, Equatable {
 
     // MARK: - Factory
 
-    /// New database with the original's default labels and 15 built-in templates.
+    /// New database with the default labels and 15 built-in templates.
     static func createDefault(now: Date = Date()) -> PasswordDatabase {
         var db = PasswordDatabase()
         for (key, id, type) in Templates.defaultLabelKeys {
@@ -143,6 +143,13 @@ extension PasswordDatabase {
             for file in c.files {
                 s += "        <file name=\"\(XMLEscape(file.name))\">\(file.data.base64EncodedString())</file>\n"
             }
+            if let src = c.iconSource, !src.isEmpty {
+                if let d = c.iconData, !d.isEmpty {
+                    s += "        <icon source=\"\(XMLEscape(src))\">\(d.base64EncodedString())</icon>\n"
+                } else {
+                    s += "        <icon source=\"\(XMLEscape(src))\" />\n"
+                }
+            }
             s += "    </card>\n"
         }
         for g in ghosts {
@@ -178,8 +185,8 @@ enum DatabaseXMLError: LocalizedError {
 }
 
 extension PasswordDatabase {
-    /// Parses the original SafeInCloud XML exchange format (also used for the
-    /// encrypted payload inside the database container).
+    /// Parses the XML exchange format (also used for the encrypted payload
+    /// inside the database container); also accepts SafeInCloud XML for import.
     static func parse(_ data: Data) throws -> PasswordDatabase {
         let parser = DBXMLParser()
         let pp = XMLParser(data: data)
@@ -266,6 +273,8 @@ private final class DBXMLParser: NSObject, XMLParserDelegate {
         case "file":
             pendingAttachmentName = attrs["name"] ?? ""
             pendingAttachmentKind = .file
+        case "icon":
+            pendingIconSource = attrs["source"] ?? ""
         case "ghost":
             if let idStr = attrs["id"], let id = Int(idStr) {
                 ghosts.append(Ghost(id: id, time: TimeInterval(attrs["time"].flatMap(Double.init) ?? 0)))
@@ -282,6 +291,7 @@ private final class DBXMLParser: NSObject, XMLParserDelegate {
     private enum AttachmentKind { case image, file }
     private var pendingAttachmentName: String? = nil
     private var pendingAttachmentKind: AttachmentKind? = nil
+    private var pendingIconSource: String? = nil
 
     func parser(_ p: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
         switch name {
@@ -299,6 +309,12 @@ private final class DBXMLParser: NSObject, XMLParserDelegate {
                 let att = Attachment(name: attachName, data: d)
                 if kind == .image { currentCard?.images.append(att) } else { currentCard?.files.append(att) }
             }
+        case "icon":
+            if currentCard != nil, let src = pendingIconSource, !src.isEmpty {
+                let trimmed = textBuf.trimmingCharacters(in: .whitespacesAndNewlines)
+                currentCard?.iconSource = src
+                currentCard?.iconData = trimmed.isEmpty ? nil : Data(base64Encoded: trimmed)
+            }
         case "card":
             if let c = currentCard { cards.append(c) }
             currentCard = nil
@@ -307,6 +323,7 @@ private final class DBXMLParser: NSObject, XMLParserDelegate {
         }
         pendingAttachmentName = nil
         pendingAttachmentKind = nil
+        pendingIconSource = nil
         currentElement = ""
     }
 

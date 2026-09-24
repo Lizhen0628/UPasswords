@@ -1,9 +1,9 @@
-"about_command" = "About Safe";
+"about_command" = "About UPasswords";
 "about_title" = "About";
 "above_all_button" = "Above all";
 "actions_button" = "Actions";
 "activate_button" = "Activate";
-"activate_license_text" = "Enter your email address to activate your existing license for Safe.";
+"activate_license_text" = "Enter your email address to activate your existing license for UPasswords.";
 "add_button" = "Add";
 "add_card_button" = "Add card";
 "add_card_command" = "Add Card";
@@ -22,7 +22,7 @@
 "always_text" = "Always";
 "app_folder_setting" = "App folder";
 "app_folder_text" = "The database is stored in a hidden app folder. Required permissions: access only to the application data folder.";
-"app_title" = "Safe";
+"app_title" = "UPasswords";
 "appearance_title" = "Appearance";
 "archive_card_query" = "Archive card?";
 "archive_command" = "Archive";
@@ -31,7 +31,7 @@
 "ask_text" = "Ask";
 "attach_file_button" = "Attach file";
 "attach_file_error" = "The maximum allowed file size is 150 KB.";
-"attach_file_warning" = "Safe is not designed to store large file attachments. You can attach small files only: key files, certificates, text files, and so on. The maximum allowed file size is 150 KB.";
+"attach_file_warning" = "UPasswords is not designed to store large file attachments. You can attach small files only: key files, certificates, text files, and so on. The maximum allowed file size is 150 KB.";
 "attach_image_button" = "Attach image";
 "attach_image_warning" = "Numerous image attachments might considerably increase the database size and slow down the cloud synchronization. Do not overdo it.";
 "authenticate_button" = "Authenticate";
@@ -44,7 +44,7 @@
 "auto_backup_task" = "Setup automatic data backup";
 "auto_backup_title" = "Auto Backup";
 "auto_lock_setting" = "Auto-lock";
-"auto_start_text" = "To make Safe start automatically, right-click its icon at the Dock and select Options > Open at Login.";
+"auto_start_text" = "To make UPasswords start automatically, right-click its icon at the Dock and select Options > Open at Login.";
 "autofill_button" = "Autofill";
 "autofill_task" = "Setup autofill in browsers";
 "autofill_title" = "Autofill";
@@ -90,13 +90,13 @@
 "compromised_password_message" = "Card contains a compromised password.";
 "compromised_passwords_empty_state" = "Hundreds of millions of passwords have been compromised in data breaches. Check your passwords!";
 "compromised_passwords_found_text" = "Compromised passwords found:";
-"compromised_passwords_text" = "Safe uses the well-known and trusted website haveibeenpwned.com to check if any of your passwords have been compromised. This site has a database of over half a billion passwords that have been leaked. Safe does not send any of your passwords or their hashes to this site. Instead, a k-anonymity approach is used to ensure that your passwords are secure during verification. See links below for details.";
+"compromised_passwords_text" = "UPasswords uses the well-known and trusted website haveibeenpwned.com to check if any of your passwords have been compromised. This site has a database of over half a billion passwords that have been leaked. UPasswords does not send any of your passwords or their hashes to this site. Instead, a k-anonymity approach is used to ensure that your passwords are secure during verification. See links below for details.";
 "compromised_passwords_title" = "Compromised Passwords";
 "configure_button" = "Configure";
 "configure_cloud_command" = "Configure Cloud";
 "configure_cloud_sync_query" = "Configure cloud synchronization?";
 "confirm_email_query" = "Is email correct?";
-"confirm_export_query" = "Attention: Only XML export format can be imported back into Safe. Continue?";
+"confirm_export_query" = "Attention: Only XML export format can be imported back into UPasswords. Continue?";
 "confirm_password_prompt" = "Confirm password:";
 "confirm_restore_query" = "Replace current database with selected one? This operation cannot be undone!";
 "continue_button" = "Continue";
@@ -175,7 +175,7 @@
 "erase_data_text" = "This will erase all application's data and settings from your Mac. This will not erase any data from the cloud.";
 "error_title" = "Error";
 "exclude_similar_characters_prompt" = "Exclude similar characters:";
-"exit_app_query" = "Safe app should be running in background for the browser extension to work. Do you really want to exit?";
+"exit_app_query" = "UPasswords app should be running in background for the browser extension to work. Do you really want to exit?";
 "expired_empty_state" = "There will be expired cards here.";
 "expiring_cards_warning" = "Some cards are expiring soon. Show them?";
 "expiring_empty_state" = "There will be cards here that will soon expire.";
@@ -205,17 +205,17 @@
 "forgot_password_message" = "Forgot your password? Delete the database file and restart the app.";
 "found_text" = "Found text";
 "gdrive_cloud" = "Google Drive";
-"gdrive_root_folder_warning" = "This legacy synchronization method of syncing with Google Drive will be discontinued soon. We strongly recommend that you use the modern method of syncing to the Safe app folder in your Google Drive account.";
-"gdrive_switch_message_1" = "Your password database is currently syncing to the root folder of your Google Drive account. This legacy synchronization method will soon no longer be supported. Instead, you can switch to the modern method of syncing to the Safe app folder in your Google Drive account now. We strongly recommend doing this as early as possible to avoid any issues in the future.";
-"gdrive_switch_message_2" = "Attention! To properly synchronize data, you will need to make this switch on all your devices and computers on which Safe is installed.";
+"gdrive_root_folder_warning" = "This legacy synchronization method of syncing with Google Drive will be discontinued soon. We strongly recommend that you use the modern method of syncing to the UPasswords app folder in your Google Drive account.";
+"gdrive_switch_message_1" = "Your password database is currently syncing to the root folder of your Google Drive account. This legacy synchronization method will soon no longer be supported. Instead, you can switch to the modern method of syncing to the UPasswords app folder in your Google Drive account now. We strongly recommend doing this as early as possible to avoid any issues in the future.";
+"gdrive_switch_message_2" = "Attention! To properly synchronize data, you will need to make this switch on all your devices and computers on which UPasswords is installed.";
 "generate_password_title" = "Generate Password";
 "generator_button" = "Generator";
 "generator_command" = "Generator";
 "global_search_setting" = "Global search";
-"help_command" = "Safe Help";
+"help_command" = "UPasswords Help";
 "help_menu" = "Help";
 "hide_button" = "Hide";
-"hide_command" = "Hide Safe";
+"hide_command" = "Hide UPasswords";
 "hide_others_command" = "Hide Others";
 "hide_passwords_setting" = "Hide passwords";
 "history_title" = "History";
@@ -231,8 +231,8 @@
 "images_tab" = "Images";
 "import_command" = "Import…";
 "import_passwords_task" = "Import passwords from another app or browser";
-"install_extension_text" = "Install Safe extension for your browser:";
-"install_on_mobile_task" = "Install Safe on phone or tablet";
+"install_extension_text" = "Install UPasswords extension for your browser:";
+"install_on_mobile_task" = "Install UPasswords on phone or tablet";
 "instant_text" = "instant";
 "interface_prompt" = "Interface";
 "invalid_address_text" = "Invalid address";
@@ -326,7 +326,7 @@
 "organize_fields_title" = "Organize Fields";
 "otp_copied_message" = "One-time password copied";
 "out_of_sync_warning" = "Your data was not synchronized for some time already. Resolve the problem to avoid loss of your recent changes.";
-"passkeys_empty_state" = "There's nothing here yet. Create passkeys in the mobile version of Safe.";
+"passkeys_empty_state" = "There's nothing here yet. Create passkeys in the mobile version of UPasswords.";
 "password_attempts_setting" = "Password attempts:";
 "password_changed_message" = "Password changed";
 "password_history_command" = "Password History";
@@ -355,7 +355,7 @@
 "privacy_title" = "Privacy";
 "protocol_prompt" = "Protocol:";
 "purchase_button" = "Purchase";
-"quit_command" = "Quit Safe";
+"quit_command" = "Quit UPasswords";
 "random_text" = "Random";
 "rate_app_prompt" = "Rate app:";
 "recent_empty_state" = "The cards you've recently viewed will be listed here.";
@@ -490,7 +490,7 @@
 "warn_keychain_text_1" = "To enhance security, we've updated our developer credentials. Because of this, macOS will ask you to confirm access to your data stored in the keychain.";
 "warn_keychain_text_2" = "Shortly, you will see one or more system prompts asking for your Mac user password. This is a necessary, one-time security measure.";
 "warn_keychain_text_3" = "Please enter your password and click Always Allow to ensure the app continues to work smoothly. Thank you for your understanding!";
-"warn_keychain_title" = "Safe: Security Update Required";
+"warn_keychain_title" = "UPasswords: Security Update Required";
 "warning_title" = "Warning";
 "watch_empty_state" = "Add cards to your watch. To do this, open a card and click the 'Add to watch' button.";
 "weak_password_message" = "Card contains a weak password, which is easy to crack.";
@@ -527,15 +527,55 @@
 "add_link_tooltip" = "Add link";
 "link_select_hint" = "Select some text to add a link first.";
 "link_invalid_hint" = "Invalid link format.";
-"lock_window_locked_title" = "“Safe” is locked";
-"lock_window_unlock_touch_id_text" = "Use Touch ID or your Safe password to unlock.";
-"lock_window_unlock_text" = "Enter your Safe password to unlock.";
+"lock_window_locked_title" = "“UPasswords” is locked";
+"lock_window_unlock_touch_id_text" = "Use Touch ID or your UPasswords password to unlock.";
+"lock_window_unlock_text" = "Enter your UPasswords password to unlock.";
 "about_copyright" = "© 2026 UPasswords";
-"about_replica_note" = "Swift 1:1 replica study of Safe.app (SafeInCloud 25.3.5) — see README";
+"about_app_note" = "An independently developed, open-source password manager for macOS.";
 "whats_new_encryption_text" = "PBKDF2-SHA256 ×310,000 + AES-256-GCM";
 "whats_new_totp_text" = "TOTP (RFC 6238) one-time codes";
 "whats_new_sync_text" = "WebDAV cloud sync with item-level merge";
 "whats_new_import_text" = "18 import formats (Chrome/Bitwarden/LastPass/…)";
 "whats_new_strength_text" = "Password strength & compromised checks (k-anonymity)";
-"premium_replica_note" = "This replica has no store integration; Premium is informational only.";
-"autofill_replica_note" = "macOS autofill requires a Credential Provider extension and is not part of this replica; passwords can be copied from any field instead.";
+"premium_note" = "Premium is informational only — no App Store integration.";
+"autofill_note" = "macOS autofill requires a Credential Provider extension; passwords can be copied from any field instead.";
+
+/* Card icon picker (website favicon / built-in brands / custom upload) */
+"icon_fetch_button" = "Fetch Website Icon";
+"use_default_icon_button" = "Use Default Icon";
+"icon_builtin_section" = "Built-in Icons";
+"icon_url_placeholder" = "Image URL";
+"icon_load_url_button" = "Load";
+"icon_upload_button" = "Choose Image…";
+"icon_fetch_failed" = "Could not load a website icon.";
+"icon_url_invalid" = "Invalid image URL.";
+"icon_hint_default" = "Default icon drawn from symbol and color.";
+"icon_hint_no_website" = "This entry has no usable website field.";
+"icon_hint_website" = "Fetches the icon from the website URL; falls back to built-in brand icons.";
+"icon_hint_builtin" = "Built-in brand icon shipped with the app.";
+"icon_hint_custom" = "Custom image ready; it is stored in the database on save.";
+"icon_symbol_section" = "Symbol";
+"icon_hint_symbol" = "Use the selected classic symbol as the icon.";
+
+/* Per-field-type value placeholders (edit sheet) */
+"field_ph_login" = "Username or email";
+"field_ph_password" = "Enter password";
+"field_ph_pin" = "Enter PIN";
+"field_ph_number" = "Enter a number";
+"field_ph_date" = "e.g. 2026-01-01";
+"field_ph_phone" = "Enter phone number";
+"field_ph_website" = "https://example.com";
+"field_ph_email" = "name@example.com";
+"field_ph_otp" = "Paste otpauth:// link or key";
+"field_ph_text" = "Enter text";
+"field_ph_expiry" = "e.g. 2030-12-31";
+"field_ph_secret" = "Enter secret";
+
+/* QR code → one-time password */
+"qr_from_screen" = "Read QR from Screen";
+"qr_from_image" = "Recognize QR from Image";
+"qr_menu_help" = "Fill one-time code from QR code";
+"qr_not_found" = "No QR code found.";
+"qr_no_otp" = "The QR code does not contain a one-time code.";
+"qr_screen_permission" = "Grant Screen Recording permission in System Settings and try again.";
+"qr_filled" = "One-time code filled from QR.";

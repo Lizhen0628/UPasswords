@@ -25,6 +25,7 @@ extension AppContext {
         }
         selectedCardId = c.id
         saveDebounced()
+        scheduleIconFetchAfterSave(cardId: c.id)
     }
 
     func trashCard(_ id: Int) {
@@ -90,7 +91,7 @@ extension AppContext {
         saveDebounced()
     }
 
-    /// card-level `autofill="on|off"` XML attribute (ViewCardViewController checkbox).
+    /// Sets the card-level `autofill="on|off"` XML attribute.
     func setCardAutofill(_ id: Int, on: Bool) {
         guard let i = database.cards.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "setCardAutofill id=\(id) skipped: card not found")
@@ -175,7 +176,7 @@ extension AppContext {
         saveDebounced()
     }
 
-    /// setLabels on a card (SetLabelsSheetController).
+    /// Sets the labels attached to a card.
     func setLabels(cardId: Int, labelIds: [Int]) {
         guard let i = database.cards.firstIndex(where: { $0.id == cardId }) else {
             Log.warn("ui", "setLabels cardId=\(cardId) skipped: card not found")
@@ -187,7 +188,7 @@ extension AppContext {
         saveDebounced()
     }
 
-    /// SetLabelsViewController "create new label on the fly".
+    /// Creates a label on the fly and assigns it to the card.
     func addLabelAndAssign(name: String, color: String?, to cardId: Int) {
         let id = database.nextItemId()
         database.labels.append(CardLabel(id: id, name: name, color: color, timeStamp: Date().millis))

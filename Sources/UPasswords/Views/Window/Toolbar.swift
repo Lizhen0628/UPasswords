@@ -2,21 +2,21 @@
 //  Toolbar.swift
 //  UPasswords
 //
-//  自绘工具栏条带(Safe 布局:红绿灯区 | 数据库名标题 | 8 圆钮,参考图实测)。
+//  自绘工具栏条带(布局:红绿灯区 | 数据库名标题 | 8 圆钮)。
 //  窗口 chrome 管理见 WindowChrome.swift。
 //
 
 import SwiftUI
 import AppKit
 
-/// 主窗口自绘工具栏(原版 8 圆钮 + 数据库名标题,布局见文件头注释)。
-struct SafeTitleBarView: View {
+/// 主窗口自绘工具栏(8 圆钮 + 数据库名标题,布局见文件头注释)。
+struct MainToolbarView: View {
     @EnvironmentObject var ctx: AppContext
 
-    /// 参考图实测(2x 截图 ÷2):8 个圆钮中心距 574.75…943.75pt,
+    /// 8 个圆钮中心距 574.75…943.75pt(2x 截图 ÷2 实测),
     /// 相邻间隙(按条目宽 max(35.5, 标签宽) 折算)。
     /// 按钮顺序:密码生成器紧跟「添加」;间距全部统一。
-    private let specs: [SafeToolbarButtonSpec] = [
+    private let specs: [ToolbarButtonSpec] = [
         .add, .generator, .delete, .lock, .sync, .sorting, .aboveAll, .preferences,
     ]
     private static let buttonGap: CGFloat = 8
@@ -37,9 +37,9 @@ struct SafeTitleBarView: View {
                 ForEach(Array(specs.enumerated()), id: \.element.labelKey) { index, spec in
                     if index > 0 { Spacer().frame(width: Self.buttonGap) }
                     if spec.labelKey == "add_button" {
-                        SafeAddMenuButton()
+                        AddMenuButton()
                     } else {
-                        SafeToolbarButton(spec: spec, ctx: ctx)
+                        ToolbarButton(spec: spec, ctx: ctx)
                     }
                 }
             }
@@ -48,15 +48,15 @@ struct SafeTitleBarView: View {
         }
         .frame(height: 70)
         .background(WindowDragArea())
-        .background(Color.safeBackground)
+        .background(Color.appBackground)
         // 条带底缘凹槽:与列间竖向凹槽同款(0.75 边线 + 4 深槽 + 0.75 边线)
         .overlay(alignment: .bottom) { ColumnGroove(horizontal: true) }
     }
 }
 
-// MARK: - 按钮描述(8 项,与原应用工具栏一一对应)
+// MARK: - 按钮描述(8 项)
 
-struct SafeToolbarButtonSpec {
+struct ToolbarButtonSpec {
     let labelKey: String
     let helpKey: String
     let symbol: @MainActor () -> String
@@ -64,38 +64,38 @@ struct SafeToolbarButtonSpec {
     let isEnabled: @MainActor (AppContext) -> Bool
     let action: @MainActor (AppContext) -> Void
 
-    static let add = SafeToolbarButtonSpec(
+    static let add = ToolbarButtonSpec(
         labelKey: "add_button", helpKey: "add_card_command", symbol: { "plus.circle" },
         isActive: { _ in false }, isEnabled: { _ in true },
         action: { $0.activeSheet = .addCard })
-    static let delete = SafeToolbarButtonSpec(
+    static let delete = ToolbarButtonSpec(
         labelKey: "delete_button", helpKey: "delete_command", symbol: { "trash" },
         isActive: { _ in false }, isEnabled: { $0.selectedCardId != nil },
         action: { if let id = $0.selectedCardId { $0.trashCard(id) } })
-    static let lock = SafeToolbarButtonSpec(
+    static let lock = ToolbarButtonSpec(
         labelKey: "lock_button", helpKey: "lock_command", symbol: { "lock.fill" },
         isActive: { _ in false }, isEnabled: { _ in true },
         action: { $0.lock() })
-    static let sync = SafeToolbarButtonSpec(
+    static let sync = ToolbarButtonSpec(
         labelKey: "sync_button", helpKey: "sync_command",
         symbol: { "arrow.triangle.2.circlepath" },
         isActive: { _ in false }, isEnabled: { _ in true },
         action: { ctx in Task { await ctx.sync() } })
-    static let generator = SafeToolbarButtonSpec(
+    static let generator = ToolbarButtonSpec(
         labelKey: "generator_button", helpKey: "generator_command", symbol: { "key" },
         isActive: { _ in false }, isEnabled: { _ in true },
         action: { $0.activeSheet = .generator })
-    static let sorting = SafeToolbarButtonSpec(
+    static let sorting = ToolbarButtonSpec(
         labelKey: "sorting_button", helpKey: "sorting_command",
         symbol: { "arrow.up.arrow.down.square" },
         isActive: { _ in false }, isEnabled: { _ in true },
         action: { $0.activeSheet = .sorting })
-    static let aboveAll = SafeToolbarButtonSpec(
+    static let aboveAll = ToolbarButtonSpec(
         labelKey: "above_all_button", helpKey: "above_all_button",
         symbol: { WindowFloatState.shared.floating ? "pin.fill" : "pin" },
         isActive: { _ in WindowFloatState.shared.floating }, isEnabled: { _ in true },
         action: { _ in WindowFloatState.shared.toggle() })
-    static let preferences = SafeToolbarButtonSpec(
+    static let preferences = ToolbarButtonSpec(
         labelKey: "preferences_button", helpKey: "preferences_command", symbol: { "gearshape" },
         isActive: { _ in false }, isEnabled: { _ in true },
         action: { $0.activeSheet = .preferences })
@@ -114,11 +114,11 @@ struct SafeToolbarButtonSpec {
     }
 }
 
-// MARK: - 「添加」下拉菜单(参考原版:按类型直接建卡)
+// MARK: - 「添加」下拉菜单(按类型直接建卡)
 
 /// 「添加」按钮 = 下拉菜单:互联网帐户/信用卡/一次性代码/身份证护照/Note,
 /// 「其他」打开完整模板选择器。选中类型 → 按模板建卡并打开编辑表单。
-struct SafeAddMenuButton: View {
+struct AddMenuButton: View {
     @EnvironmentObject var ctx: AppContext
 
     var body: some View {
@@ -165,10 +165,10 @@ struct SafeAddMenuButton: View {
     }
 }
 
-// MARK: - 圆钮:35.5pt 白色描边圆环 + 16pt 白字形 + 10pt 灰 caption(参考图实测)
+// MARK: - 圆钮:35.5pt 白色描边圆环 + 16pt 白字形 + 10pt 灰 caption
 
-struct SafeToolbarButton: View {
-    let spec: SafeToolbarButtonSpec
+struct ToolbarButton: View {
+    let spec: ToolbarButtonSpec
     @ObservedObject var ctx: AppContext
     @ObservedObject private var floatState = WindowFloatState.shared
 
@@ -196,7 +196,7 @@ struct SafeToolbarButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        // 原应用工具栏按钮不做置灰(删除无选中时为安全空操作),与参考图亮度一致
+        // 工具栏按钮不做置灰(删除无选中时为安全空操作)
         .help(L10n.t(spec.helpKey))
     }
 }

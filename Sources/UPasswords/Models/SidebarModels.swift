@@ -1,10 +1,8 @@
 import Foundation
 
-/// Mirrors the `MLabel` special sidebar labels (Models/*Label.h):
-/// FavoritesLabel, RecentLabel, NotesLabel, FilesLabel, ImagesLabel,
-/// PasskeysLabel, SamePasswordsLabel, CompromisedPasswordsLabel,
-/// WeakPasswordsLabel, ArchivedLabel, TrashLabel, ExpiringLabel, ExpiredLabel,
-/// plus AllCards / Passwords / OneTimeCodes / CreditCards / Templates.
+/// The special sidebar entries (all cards / favorites / credit cards / notes /
+/// one-time codes / passkeys / recent, plus weak / same / compromised
+/// passwords, expiring / expired / archived / trash / templates).
 enum SpecialLabel: String, CaseIterable, Identifiable {
     case allCards = "all_cards_label"
     case favorites = "favorites_label"
@@ -51,7 +49,7 @@ enum SpecialLabel: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Sidebar grouping per the original app: Safe / 标签 / 安全性 / 特殊,
+    /// Sidebar grouping: 数据库 / 标签 / 安全性 / 特殊,
     /// plus optional items hidden until enabled through the 「显示」 menu.
     var section: SidebarSection {
         switch self {
@@ -66,7 +64,7 @@ enum SpecialLabel: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Icon tint matching the original sidebar (colored special marks).
+    /// Icon tint for colored special marks.
     var iconColor: String? {
         switch self {
         case .favorites: return "yellow"
@@ -75,7 +73,7 @@ enum SpecialLabel: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Empty-state text (Localizable `*_empty_state` keys of the original).
+    /// Empty-state text (Localizable `*_empty_state` keys).
     var emptyState: String {
         switch self {
         case .allCards: return L10n.t("user_empty_state")
@@ -95,12 +93,12 @@ enum SpecialLabel: String, CaseIterable, Identifiable {
     }
 }
 
-/// 侧栏分节(原版分组顺序:safe/labels/security/special/可选项)。
+/// 侧栏分节(分组顺序:safe/labels/security/special/可选项)。
 enum SidebarSection: String, CaseIterable {
     case safe, labels, security, special, optionalItems
 }
 
-/// Colored group header icons of the original sidebar (LabelListGroupCell).
+/// Colored group header icons of the sidebar.
 enum SidebarGroupStyle {
     case safe, labels, security, special
 
@@ -147,8 +145,7 @@ enum SidebarSelection: Hashable {
     }
 }
 
-/// Mirrors `SortingSet` (Services/SortingSet.h). Values = Localizable
-/// `*_asc_text` / `*_desc_text` keys of the original app.
+/// Sort options. Values = Localizable `*_asc_text` / `*_desc_text` keys.
 enum Sorting: String, CaseIterable, Identifiable {
     case titleAsc = "title_asc"
     case titleDesc = "title_desc"
@@ -181,8 +178,7 @@ enum Sorting: String, CaseIterable, Identifiable {
     }
 }
 
-/// Card color palette of `SelectColorViewController` — the original XML color
-/// attribute vocabulary.
+/// Card color palette — the XML color attribute vocabulary.
 enum CardColor: String, CaseIterable, Identifiable {
     case gray, blue, red, green, yellow, purple, orange, cyan, pink, brown, white, black
     var id: String { rawValue }

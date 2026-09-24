@@ -1,8 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// Entry point — AppDelegate keeps the dock menu / quit behaviors of the
-/// original NSApplicationDelegate (Services/AppDelegate.h).
+/// Entry point — AppDelegate keeps the dock menu / quit behaviors.
 @main
 struct UPasswordsApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate

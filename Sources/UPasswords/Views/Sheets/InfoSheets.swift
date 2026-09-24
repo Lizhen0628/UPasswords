@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - About (AboutWindowController)
+// MARK: - About
 
 struct AboutSheet: View {
     @EnvironmentObject var ctx: AppContext
@@ -21,7 +21,7 @@ struct AboutSheet: View {
                     Text("\(L10n.t("version_text")) 1.0 (1000)")
                         .font(.callout).foregroundStyle(.secondary)
                     Text(L10n.t("about_copyright")).font(.caption)
-                    Text(L10n.t("about_replica_note"))
+                    Text(L10n.t("about_app_note"))
                         .font(.caption2).foregroundStyle(.secondary)
                         .frame(maxWidth: 360)
                         .multilineTextAlignment(.center)
@@ -43,7 +43,7 @@ struct AboutSheet: View {
     }
 }
 
-// MARK: - What's new (WhatsNewSheetController + whats_new.json)
+// MARK: - What's new
 
 struct WhatsNewSheet: View {
     @EnvironmentObject var ctx: AppContext
@@ -80,7 +80,7 @@ struct WhatsNewSheet: View {
     }
 }
 
-// MARK: - Premium (PremiumSheetController — Adapty in the original)
+// MARK: - Premium
 
 struct PremiumSheet: View {
     @EnvironmentObject var ctx: AppContext
@@ -109,7 +109,7 @@ struct PremiumSheet: View {
                                 .buttonStyle(.link)
                         }
                     }
-                    Text(L10n.t("premium_replica_note"))
+                    Text(L10n.t("premium_note"))
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
@@ -117,7 +117,7 @@ struct PremiumSheet: View {
     }
 }
 
-// MARK: - Setup plan (SetupPlanViewController / SetupWindowController 8 items)
+// MARK: - Setup plan (8 first-run tasks)
 
 struct SetupPlanSheet: View {
     @EnvironmentObject var ctx: AppContext

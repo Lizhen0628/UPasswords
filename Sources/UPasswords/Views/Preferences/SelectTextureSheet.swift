@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - Select texture (SelectTextureSheetController + TextureCell)
+// MARK: - Select texture
 
 struct SelectTextureSheet: View {
     @EnvironmentObject var ctx: AppContext

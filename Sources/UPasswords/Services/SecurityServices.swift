@@ -1,10 +1,9 @@
 import Foundation
 import CryptoKit
 
-/// Compromised password check (CompromisedPasswordsSheetController /
-/// CompromisedPasswordsModel). The original checks haveibeenpwned.com with the
-/// k-anonymity range API: only the first 5 hex chars of the SHA-1 hash leave
-/// the machine. Falls back to an embedded offline demo set when offline.
+/// Compromised password check via haveibeenpwned.com's k-anonymity range API:
+/// only the first 5 hex chars of the SHA-1 hash leave the machine. Falls back
+/// to an embedded offline demo set when offline.
 enum CompromisedService {
     /// Offline demo set — most-common leaked passwords (subset).
     static let offlineDemoSet: Set<String> = [

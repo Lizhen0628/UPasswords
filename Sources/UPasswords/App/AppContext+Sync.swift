@@ -1,9 +1,9 @@
 import Foundation
 
-/// 修改密码(SetPasswordSheetController)、备份、WebDAV 云同步(sync:)。
+/// 修改密码、备份、WebDAV 云同步。
 extension AppContext {
 
-    // MARK: - Change password (SetPasswordSheetController / changePassword:)
+    // MARK: - Change password
 
     func changePassword(current: String, new: String) throws {
         guard current == password else {

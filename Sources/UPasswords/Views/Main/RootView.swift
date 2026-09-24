@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Phase router: SetupWindowController / LockWindowController / MainWindowController.
+/// Phase router: setup wizard / lock screen / main window.
 struct RootView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
@@ -33,7 +33,7 @@ struct RootView: View {
     }
 }
 
-/// MainWindowController — 参考图实测:970×819 窗口,70pt 自绘工具栏条带,
+/// 主窗口:970×819 窗口,70pt 自绘工具栏条带,
 /// 三列布局(侧栏 225pt / 5pt 凹槽 / 列表 266pt / 5pt 凹槽 / 详情),
 /// 不用 NavigationSplitView:其侧栏列在 macOS 26 带 30pt 玻璃内缩且无法关闭。
 struct MainWindowView: View {
@@ -43,7 +43,7 @@ struct MainWindowView: View {
     var body: some View {
         VStack(spacing: 0) {
             // 自绘 70pt 工具栏条带(系统 NSToolbar 在 macOS 26 必然附加玻璃胶囊,见 Window/Toolbar.swift)
-            SafeTitleBarView()
+            MainToolbarView()
             HStack(spacing: 0) {
                 SidebarView()
                     .frame(width: 225)
@@ -59,6 +59,14 @@ struct MainWindowView: View {
         .ignoresSafeArea(.all, edges: .top)   // 隐藏标题栏后仍有 ~8pt 残留安全区,条带需贴顶
         .background(WindowChromeConfigurator(mode: .main))
         .navigationTitle(ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName)
+        // 编辑表单关闭时,自动收掉仍挂在根视图上的编辑类弹层(颜色/符号/模板),
+        // 防止孤儿弹层残留并把结果错写到下一个打开的编辑草稿
+        .onChange(of: ctx.editDraft != nil) { wasOpen, isOpen in
+            if wasOpen, !isOpen, let sheet = ctx.activeSheet, sheet.isEditSheetContext {
+                Log.info("ui", "sheet auto-close with edit sheet: \(sheet.id)")
+                ctx.activeSheet = nil
+            }
+        }
         .sheet(item: Binding(
             get: { ctx.editDraft },
             set: { nv in

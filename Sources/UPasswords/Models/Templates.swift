@@ -1,8 +1,7 @@
 import Foundation
 
-/// The 15 built-in card templates, reproduced one-to-one from the original
-/// `Resources/database.xml` (see ../PasswordsCodes/resources/templates-database.xml).
-/// `@string/…` references are resolved through database.strings at access time.
+/// The 15 built-in card templates.
+/// `@string/…` references are resolved through the strings table at access time.
 enum Templates {
     struct Spec: Identifiable {
         let id: Int

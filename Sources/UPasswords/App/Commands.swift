@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// Main menu — mirrors MainMenu.nib structure from the reverse notes:
-/// 文件/编辑/工具/视图 + standard items, with the original selector names
-/// (addCard: addNote: addTemplate: addLabel: importData: exportData: …).
+/// Main menu: 文件/编辑/工具/视图 + standard items, with actions for
+/// addCard / addNote / addTemplate / addLabel / importData / exportData …
 ///
 /// Commands run outside the window's environment and actor isolation, so every
 /// action hops to the main actor before touching the session controller.

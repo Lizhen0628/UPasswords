@@ -2,9 +2,9 @@ import Foundation
 
 // MARK: - Concrete formats (ImportFormatFactory)
 
-/// 导入源目录(ImportSourceViewController 数据),顺序即弹窗展示顺序。
+/// 导入源目录,顺序即弹窗展示顺序。
 enum ImportFormatFactory {
-    /// The import source catalog shown by ImportSourceViewController.
+    /// The import source catalog shown by the import sheet.
     static let all: [any ImportFormat] = [
         SafeInCloudXMLFormat(),
         ChromeFormat(browser: "Chrome"),
@@ -30,7 +30,7 @@ enum ImportFormatFactory {
     static func format(id: String) -> (any ImportFormat)? { all.first { $0.id == id } }
 }
 
-/// SafeInCloud XML (XmlFormat.h) — accepts full `<database>` docs or a bare
+/// SafeInCloud XML — accepts full `<database>` docs or a bare
 /// list of `<card>` elements. 同名卡与模板不重复导入,id 冲突时改派新 id。
 struct SafeInCloudXMLFormat: ImportFormat {
     let id = "safeincloud-xml"

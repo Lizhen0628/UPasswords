@@ -25,7 +25,7 @@ struct PhaseTitleBar: View {
     }
 }
 
-/// LockWindowController — 系统锁定风格:应用图标 + Touch ID 徽章居中,
+/// 锁定窗 — 系统锁定风格:应用图标 + Touch ID 徽章居中,
 /// 「“xx” 已锁定」标题、说明文字、居中密码框(回车解锁),底部无按钮。
 struct LockWindowView: View {
     @EnvironmentObject var ctx: AppContext
@@ -76,7 +76,7 @@ struct LockWindowView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(.container, edges: .top)   // 标题条贴窗口顶(红绿灯叠在其上)
         .background(
-            // 参考图背景:顶 #393A39 → 底 #272A2B 的对角微渐变
+            // 背景:顶 #393A39 → 底 #272A2B 的对角微渐变
             LinearGradient(
                 colors: [Color(red: 0.224, green: 0.227, blue: 0.224),
                          Color(red: 0.153, green: 0.165, blue: 0.169)],
@@ -101,7 +101,7 @@ struct LockWindowView: View {
         #endif
         .onAppear {
             fieldFocused = true
-            // 与 Safe 一致:进入锁屏自动弹出一次 Touch ID(需已保存生物识别副本)
+            // 进入锁屏自动弹出一次 Touch ID(需已保存生物识别副本)
             if !touchIDAsked, ctx.touchIDAvailable, settings.fastUnlock, ctx.hasBiometricItem {
                 touchIDAsked = true
                 // 存量 GCD:onAppear 在主线程,延时等首帧稳定后回调仍在主队列
@@ -112,7 +112,7 @@ struct LockWindowView: View {
         }
     }
 
-    /// 居中密码框(参考实测:宽 190、总高 27、圆角 7、描边钢蓝 rgb(49,112,156)、
+    /// 居中密码框(宽 190、总高 27、圆角 7、描边钢蓝 rgb(49,112,156)、
     /// 填充 #252523、placeholder #5B5B59 居中),回车解锁。
     private var passwordField: some View {
         ZStack {
@@ -141,7 +141,7 @@ struct LockWindowView: View {
     }
 
     /// 应用图标(保留自家 logo)+ 右下角 Touch ID 徽章(仅设备支持时显示)。
-    /// 参考实测:方块 80×80 圆角 ~18,角标圆 53,粉 #FF375F,暗底 #1E1E1E,
+    /// 方块 80×80 圆角 ~18,角标圆 53,粉 #FF375F,暗底 #1E1E1E,
     /// 徽章中心相对方块中心偏移 (+39.5, +26.5)。
     private var iconCluster: some View {
         ZStack {
@@ -196,8 +196,8 @@ struct LockWindowView: View {
     }
 }
 
-/// SetupWindowController — first-run wizard: 初始化数据库 with the original's
-/// three options (create new / restore from cloud / restore from local file).
+/// First-run wizard: 初始化数据库,三选一
+/// (create new / restore from cloud / restore from local file).
 struct SetupWindowView: View {
     @EnvironmentObject var ctx: AppContext
 

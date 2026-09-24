@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Database info (DatabaseInfoSheetController)
+// MARK: - Database info
 
 struct DatabaseInfoSheet: View {
     @EnvironmentObject var ctx: AppContext
@@ -42,7 +42,7 @@ struct DatabaseInfoSheet: View {
 }
 
 
-// MARK: - Change password (SetPasswordSheetController)
+// MARK: - Change password
 
 struct ChangePasswordSheet: View {
     @EnvironmentObject var ctx: AppContext
@@ -121,7 +121,7 @@ struct EraseDataSheet: View {
     }
 }
 
-// MARK: - Manage databases (ManageDatabasesViewController)
+// MARK: - Manage databases
 
 struct ManageDatabasesSheet: View {
     @EnvironmentObject var ctx: AppContext
@@ -255,7 +255,7 @@ struct ManageDatabasesSheet: View {
     }
 }
 
-// MARK: - Select database (SelectDatabaseSheetController — from lock screen)
+// MARK: - Select database (from lock screen)
 
 struct SelectDatabaseSheet: View {
     @EnvironmentObject var ctx: AppContext

@@ -1,7 +1,7 @@
 import SwiftUI
 
-// MARK: - Card list (CardListViewController: search field inside the pane top,
-// yellow generator key + cloud sync circles at the right, 48pt rows)
+// MARK: - Card list (search field inside the pane top, generator + sync
+// buttons at the right, 48pt rows)
 
 struct CardListView: View {
     @EnvironmentObject var ctx: AppContext
@@ -17,7 +17,7 @@ struct CardListView: View {
             }
             list
         }
-        .background(Color.safeBackground)
+        .background(Color.appBackground)
         .overlay {
             if cards.isEmpty {
                 emptyState
@@ -29,7 +29,7 @@ struct CardListView: View {
         ctx.cards(for: ctx.selection, search: ctx.searchText)
     }
 
-    /// Search row(参考图实测):搜索框 25.5pt 高、同底色 + 极淡描边;右侧
+    /// Search row:搜索框 25.5pt 高、同底色 + 极淡描边;右侧
     /// 「盾牌 + 云朵」全黄连体胶囊 59.5×27.5pt(生成器 / 云同步)。
     private var header: some View {
         HStack(spacing: 0) {
@@ -121,7 +121,7 @@ struct CardListView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .onAppear {
-            // 与 Safe 一致:进入主界面后始终有选中项
+            // 进入主界面后始终有选中项
             if ctx.selectedCardId == nil { ctx.selectedCardId = cards.first?.id }
         }
         .onChange(of: ctx.selectedCardId) { _, id in
@@ -132,7 +132,7 @@ struct CardListView: View {
         }
     }
 
-    /// CardListViewController contextMenu — exact item list from the nib.
+    /// 列表右键菜单。
     @ViewBuilder
     private func cardContextMenu(_ card: Card) -> some View {
         Button(L10n.t("add_card_command")) { ctx.activeSheet = .addCard }
@@ -168,10 +168,7 @@ struct CardListView: View {
         Divider()
         Button(L10n.t("set_labels_command")) { ctx.activeSheet = .labels(cardId: card.id) }
         Button(L10n.t("use_website_icon_command")) {
-            if let i = ctx.database.cards.firstIndex(where: { $0.id == card.id }) {
-                ctx.database.cards[i].useWebsiteIcon.toggle()
-                ctx.saveDebounced()
-            }
+            ctx.toggleUseWebsiteIcon(cardId: card.id)
         }
         Button(L10n.t("select_symbol_command")) { ctx.activeSheet = .selectSymbol }
         Button(L10n.t("select_color_command")) { ctx.activeSheet = .selectColor }
@@ -209,7 +206,8 @@ struct CardListCellView: View {
     var body: some View {
         HStack(spacing: 0) {
             CardIconView(symbol: card.symbol, color: card.color, size: 35,
-                         creditCardNumber: card.fields.first { $0.type == .number }?.value)
+                         creditCardNumber: card.fields.first { $0.type == .number }?.value,
+                         card: card)
                 .padding(.leading, 7)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {

@@ -1,7 +1,6 @@
 import AppKit
 
-/// Application delegate — keeps the dock reopen / quit behaviors of the
-/// original NSApplicationDelegate (Services/AppDelegate.h).
+/// Application delegate — dock reopen / quit behaviors.
 /// 菜单栏常驻入口由 StatusItemController 承担。
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = StatusItemController()

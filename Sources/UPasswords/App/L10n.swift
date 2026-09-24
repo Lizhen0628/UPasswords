@@ -1,8 +1,6 @@
 import Foundation
 
-/// Localization helper. Keys and values are carried over verbatim from the
-/// original app's `Localizable.strings` / `database.strings` tables
-/// (see ../PasswordsCodes/resources/strings).
+/// Localization helper over the `Localizable` / `Database` strings tables.
 enum L10n {
     static let bundle: Bundle = .module
 
@@ -34,20 +32,16 @@ enum L10n {
         return v
     }
 
-    /// Resolves `@string/key` references used by the original templates XML.
+    /// Resolves `@string/key` references used by the built-in templates.
     static func resolve(_ raw: String) -> String {
         guard raw.hasPrefix("@string/") else { return raw }
         return db(String(raw.dropFirst("@string/".count)))
     }
 
-    /// Brand substitution: the original strings hardcode the "Safe" brand name.
-    static func brand() -> String { "UPasswords" }
+    /// 品牌相关文案(字符串表中品牌名直接为 UPasswords,与 t 一致,保留语义入口)。
+    static func tBranded(_ key: String) -> String { t(key) }
 
-    static func tBranded(_ key: String) -> String {
-        t(key).replacingOccurrences(of: "Safe", with: brand())
-    }
-
-    /// Key with a fallback for keys absent from the original tables.
+    /// Key with a fallback applied when the key is missing.
     static func t(_ key: String, fallback: String) -> String {
         let v = activeBundle.localizedString(forKey: key, value: fallback, table: "Localizable")
         return v == key ? fallback : v

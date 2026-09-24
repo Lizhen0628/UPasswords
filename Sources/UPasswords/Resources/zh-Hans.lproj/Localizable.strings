@@ -1,9 +1,9 @@
-"about_command" = "关于 Safe";
+"about_command" = "关于 UPasswords";
 "about_title" = "关于";
 "above_all_button" = "置顶";
 "actions_button" = "动作";
 "activate_button" = "激活";
-"activate_license_text" = "输入您的电子邮件地址以激活现有的 Safe 许可证。";
+"activate_license_text" = "输入您的电子邮件地址以激活现有的 UPasswords 许可证。";
 "add_button" = "添加";
 "add_card_button" = "添加项目";
 "add_card_command" = "添加项目";
@@ -22,7 +22,7 @@
 "always_text" = "始终";
 "app_folder_setting" = "应用程序文件夹";
 "app_folder_text" = "数据库存储在隐藏的应用程序文件夹中。 所需权限: 仅访问应用程序数据文件夹。";
-"app_title" = "Safe";
+"app_title" = "UPasswords";
 "appearance_title" = "外观";
 "archive_card_query" = "确认归档项目？";
 "archive_command" = "归档";
@@ -31,7 +31,7 @@
 "ask_text" = "提问";
 "attach_file_button" = "附加文件";
 "attach_file_error" = "允许的最大文件大小为 150 KB。";
-"attach_file_warning" = "Safe 不被用于存储大型文件附件。您可以附加的小文件有: 密钥文件、 证书、 文本文件等。允许的最大文件大小为 150 KB。";
+"attach_file_warning" = "UPasswords 不被用于存储大型文件附件。您可以附加的小文件有: 密钥文件、 证书、 文本文件等。允许的最大文件大小为 150 KB。";
 "attach_image_button" = "附加图片";
 "attach_image_warning" = "附加太多图片会显著增加数据库大小并减缓同步过程。请不要过度使用此功能。";
 "authenticate_button" = "身份验证";
@@ -44,7 +44,7 @@
 "auto_backup_task" = "设置数据自动备份";
 "auto_backup_title" = "自动备份";
 "auto_lock_setting" = "自动锁定";
-"auto_start_text" = "如需自动启动 Safe ，右击 Dock 上图标并选择 选项 > 在登录时启动";
+"auto_start_text" = "如需自动启动 UPasswords ，右击 Dock 上图标并选择 选项 > 在登录时启动";
 "autofill_button" = "自动填充";
 "autofill_task" = "在浏览器和 APP 中设置自动填充";
 "autofill_title" = "自动填充";
@@ -90,13 +90,13 @@
 "compromised_password_message" = "项目包含已泄露的密码。";
 "compromised_passwords_empty_state" = "已有数亿个密码在数据泄露事件中被泄露。立即检查您的密码！";
 "compromised_passwords_found_text" = "找到的已泄露密码数:";
-"compromised_passwords_text" = "Safe 使用 haveibeenpwned.com 来检查您的密码是否已泄密。此站点具有上百万个已泄露密码数据库。 Safe 不会将您的任何密码或校验信息发送至此站点，并使用 k-匿名算法来确保密码在验证期间安全。请参阅以下链接以获取详细信息。";
+"compromised_passwords_text" = "UPasswords 使用 haveibeenpwned.com 来检查您的密码是否已泄密。此站点具有上百万个已泄露密码数据库。 UPasswords 不会将您的任何密码或校验信息发送至此站点，并使用 k-匿名算法来确保密码在验证期间安全。请参阅以下链接以获取详细信息。";
 "compromised_passwords_title" = "已泄露密码";
 "configure_button" = "配置";
 "configure_cloud_command" = "配置同步信息";
 "configure_cloud_sync_query" = "配置云同步吗？";
 "confirm_email_query" = "请确认邮箱是否正确？";
-"confirm_export_query" = "注意：只有 XML 导出格式可以重新导入到 Safe。继续执行吗？";
+"confirm_export_query" = "注意：只有 XML 导出格式可以重新导入到 UPasswords。继续执行吗？";
 "confirm_password_prompt" = "确认密码：";
 "confirm_restore_query" = "使用已选数据库替换现有数据吗？此操作无法撤消！";
 "continue_button" = "继续";
@@ -175,7 +175,7 @@
 "erase_data_text" = "这将从您的电脑上删除所有应用程序数据和设置。但不会删除任何云端储存上的数据。";
 "error_title" = "错误";
 "exclude_similar_characters_prompt" = "排除相似字符：";
-"exit_app_query" = "浏览器扩展组件需要与后台运行的 Safe 桌面应用程序通讯。您想要完全退出吗？";
+"exit_app_query" = "浏览器扩展组件需要与后台运行的 UPasswords 桌面应用程序通讯。您想要完全退出吗？";
 "expired_empty_state" = "已过期的卡片会显示在这里。";
 "expiring_cards_warning" = "部分项目即将过期。是否展示？";
 "expiring_empty_state" = "即将过期的卡片会显示在这里。";
@@ -205,17 +205,17 @@
 "forgot_password_message" = "忘记密码了吗？请删除数据库文件，然后重新启动应用程序。";
 "found_text" = "搜索内容";
 "gdrive_cloud" = "Google 云端硬盘";
-"gdrive_root_folder_warning" = "这种旧的 Google Drive 同步方式即将停用。强烈建议您改用同步到 Google Drive 账户中 Safe 应用文件夹的现代方式。";
-"gdrive_switch_message_1" = "您的密码数据库目前正在同步到您的 Google Drive 帐户的根文件夹。此旧版同步方法即将不再受支持。您可以立即切换到现代同步方法，同步到 Google Drive 帐户中的 Safe 应用文件夹。我们强烈建议您尽早执行此操作，以避免将来出现任何问题。";
-"gdrive_switch_message_2" = "注意！为了正确同步数据，您需要在所有安装了 Safe 的设备和计算机上进行此切换。";
+"gdrive_root_folder_warning" = "这种旧的 Google Drive 同步方式即将停用。强烈建议您改用同步到 Google Drive 账户中 UPasswords 应用文件夹的现代方式。";
+"gdrive_switch_message_1" = "您的密码数据库目前正在同步到您的 Google Drive 帐户的根文件夹。此旧版同步方法即将不再受支持。您可以立即切换到现代同步方法，同步到 Google Drive 帐户中的 UPasswords 应用文件夹。我们强烈建议您尽早执行此操作，以避免将来出现任何问题。";
+"gdrive_switch_message_2" = "注意！为了正确同步数据，您需要在所有安装了 UPasswords 的设备和计算机上进行此切换。";
 "generate_password_title" = "生成密码";
 "generator_button" = "密码生成器";
 "generator_command" = "密码生成器";
 "global_search_setting" = "全局搜索";
-"help_command" = "Safe 帮助";
+"help_command" = "UPasswords 帮助";
 "help_menu" = "帮助";
 "hide_button" = "隐藏";
-"hide_command" = "隐藏 Safe";
+"hide_command" = "隐藏 UPasswords";
 "hide_others_command" = "隐藏其它界面";
 "hide_passwords_setting" = "隐藏密码";
 "history_title" = "历史";
@@ -231,8 +231,8 @@
 "images_tab" = "图片";
 "import_command" = "导入…";
 "import_passwords_task" = "从其他应用或浏览器中导入密码";
-"install_extension_text" = "请为您常用的浏览器安装 Safe 插件。";
-"install_on_mobile_task" = "在手机或平板电脑上安装 Safe";
+"install_extension_text" = "请为您常用的浏览器安装 UPasswords 插件。";
+"install_on_mobile_task" = "在手机或平板电脑上安装 UPasswords";
 "instant_text" = "瞬间";
 "interface_prompt" = "界面";
 "invalid_address_text" = "无效的地址";
@@ -326,7 +326,7 @@
 "organize_fields_title" = "组织条目";
 "otp_copied_message" = "动态口令已复制";
 "out_of_sync_warning" = "您的数据已经有一段时间没有同步了。解决此问题, 以避免丢失您最近的更改。";
-"passkeys_empty_state" = "这里还没有任何内容。请在 Safe 移动版中创建 Passkey。";
+"passkeys_empty_state" = "这里还没有任何内容。请在 UPasswords 移动版中创建 Passkey。";
 "password_attempts_setting" = "数据自毁前允许尝试错误的最大次数：";
 "password_changed_message" = "密码已修改";
 "password_history_command" = "密码历史记录";
@@ -355,7 +355,7 @@
 "privacy_title" = "隐私条款";
 "protocol_prompt" = "协议:";
 "purchase_button" = "购买";
-"quit_command" = "退出 Safe";
+"quit_command" = "退出 UPasswords";
 "random_text" = "完全随机";
 "rate_app_prompt" = "为应用评分：";
 "recent_empty_state" = "您最近查看过的卡片会列在这里。";
@@ -490,7 +490,7 @@
 "warn_keychain_text_1" = "为增强安全性，我们更新了开发者凭证。因此，macOS 将要求您确认访问存储在钥匙串中的数据。";
 "warn_keychain_text_2" = "稍后将出现一个或多个系统提示，要求输入 Mac 用户密码。这是一次性的必要安全措施。";
 "warn_keychain_text_3" = "请输入密码并点击“始终允许”，以确保应用继续正常工作。感谢您的理解！";
-"warn_keychain_title" = "Safe：需要安全更新";
+"warn_keychain_title" = "UPasswords：需要安全更新";
 "warning_title" = "警告";
 "watch_empty_state" = "将卡片添加到您的手表。只需打开一张卡片并点击“添加到手表”按钮。";
 "weak_password_message" = "此项目包含了极易被破解的弱密码";
@@ -527,15 +527,55 @@
 "add_link_tooltip" = "添加链接";
 "link_select_hint" = "请先选中要添加链接的文字";
 "link_invalid_hint" = "链接格式无效";
-"lock_window_locked_title" = "“Safe” 已锁定";
-"lock_window_unlock_touch_id_text" = "使用触控 ID 或输入 Safe 的密码解锁。";
-"lock_window_unlock_text" = "输入 Safe 的密码解锁。";
+"lock_window_locked_title" = "“UPasswords” 已锁定";
+"lock_window_unlock_touch_id_text" = "使用触控 ID 或输入 UPasswords 的密码解锁。";
+"lock_window_unlock_text" = "输入 UPasswords 的密码解锁。";
 "about_copyright" = "© 2026 UPasswords";
-"about_replica_note" = "Swift 1:1 复刻研究，对应 Safe.app（SafeInCloud 25.3.5）——详见 README";
+"about_app_note" = "一款独立开发的 macOS 开源密码管理器。";
 "whats_new_encryption_text" = "PBKDF2-SHA256 ×310,000 + AES-256-GCM 加密";
 "whats_new_totp_text" = "TOTP（RFC 6238）一次性验证码";
 "whats_new_sync_text" = "WebDAV 云同步（条目级合并）";
 "whats_new_import_text" = "18 种导入格式（Chrome/Bitwarden/LastPass/…）";
 "whats_new_strength_text" = "密码强度与泄露检查（k-匿名）";
-"premium_replica_note" = "本复刻版未接入商店，Premium 仅供说明。";
-"autofill_replica_note" = "macOS 自动填充需要凭据提供者扩展，不属于本复刻范围；密码可从任意字段复制。";
+"premium_note" = "Premium 仅为功能说明展示，未接入应用商店。";
+"autofill_note" = "macOS 自动填充需要凭据提供者扩展，暂未包含；密码可从任意字段复制。";
+
+/* 卡片图标选择器（网站图标 / 内置品牌 / 自定义上传） */
+"icon_fetch_button" = "获取网站图标";
+"use_default_icon_button" = "使用默认图标";
+"icon_builtin_section" = "内置图标";
+"icon_url_placeholder" = "图片 URL";
+"icon_load_url_button" = "载入";
+"icon_upload_button" = "选择图片…";
+"icon_fetch_failed" = "无法获取网站图标。";
+"icon_url_invalid" = "图片 URL 无效。";
+"icon_hint_default" = "使用符号与颜色绘制的默认图标。";
+"icon_hint_no_website" = "该条目没有可用的网址字段。";
+"icon_hint_website" = "从网站地址抓取图标，失败时使用内置品牌图标兜底。";
+"icon_hint_builtin" = "随应用分发的内置品牌图标。";
+"icon_hint_custom" = "自定义图片已就绪，保存后随数据库持久化。";
+"icon_symbol_section" = "符号";
+"icon_hint_symbol" = "使用选定的经典符号作为图标。";
+
+/* 字段值输入框按类型的占位提示(编辑表单) */
+"field_ph_login" = "用户名或邮箱";
+"field_ph_password" = "输入密码";
+"field_ph_pin" = "输入 PIN 码";
+"field_ph_number" = "输入数字";
+"field_ph_date" = "如 2026-01-01";
+"field_ph_phone" = "输入电话号码";
+"field_ph_website" = "https://example.com";
+"field_ph_email" = "name@example.com";
+"field_ph_otp" = "粘贴 otpauth:// 链接或密钥";
+"field_ph_text" = "输入内容";
+"field_ph_expiry" = "如 2030-12-31";
+"field_ph_secret" = "输入机密内容";
+
+/* 二维码 → 一次性代码 */
+"qr_from_screen" = "从屏幕读取二维码";
+"qr_from_image" = "从图片识别二维码";
+"qr_menu_help" = "从二维码填充一次性代码";
+"qr_not_found" = "未找到二维码。";
+"qr_no_otp" = "二维码中没有一次性代码。";
+"qr_screen_permission" = "请在系统设置中授予屏幕录制权限后重试。";
+"qr_filled" = "已从二维码填入一次性代码。";

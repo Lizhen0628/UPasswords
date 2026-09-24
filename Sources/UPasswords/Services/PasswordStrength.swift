@@ -1,24 +1,23 @@
 import Foundation
 import CryptoKit
 
-/// Mirrors `PasswordStrength` + `PasswordStrengthModel` + zxcvbn-style analysis
-/// (`_zxcvbn` symbol + dictionary.txt/adjacency_graphs.json in the original
-/// bundle). This is an independent pattern-matching estimator producing the
-/// same 0–4 score scale and crack-time strings (StrengthIndicator.crackTime).
+/// Password strength estimator: zxcvbn-style pattern matching (common
+/// passwords / repeats / keyboard sequences / dates / dictionary) producing a
+/// 0–4 score scale and crack-time strings.
 struct PasswordStrength: Equatable {
     let score: Int          // 0…4 (zxcvbn scale)
     let entropy: Double     // bits
-    var seconds: Double { // offline attack, 1e10 guesses/s — StrengthIndicator convention
+    var seconds: Double { // offline attack, 1e10 guesses/s
         pow(2.0, entropy) / 1e10
     }
 
-    /// XField.calcScore-compatible fast scoring for weak-password checks.
+    /// Fast scoring for weak-password checks.
     static func evaluate(_ password: String) -> PasswordStrength {
         guard !password.isEmpty else { return PasswordStrength(score: 0, entropy: 0) }
         var entropy = 0.0
         var guesses = 1.0
 
-        // Common-password dictionary (top of the original's dictionary.txt)
+        // Common-password dictionary
         let common: Set<String> = [
             "123456", "password", "123456789", "12345678", "12345", "qwerty", "111111", "1234567",
             "dragon", "123123", "abc123", "iloveyou", "sunshine", "princess", "admin", "welcome",
@@ -198,8 +197,7 @@ struct PasswordStrength: Equatable {
 }
 
 extension PasswordStrength {
-    /// StrengthIndicator.crackTimeWithSeconds: — localized crack-time text
-    /// using the original's unit strings (瞬间/秒/分钟/小时/天/月/年/世纪之久).
+    /// Localized crack-time text (瞬间/秒/分钟/小时/天/月/年/世纪之久).
     static func crackTime(seconds: Double) -> String {
         let minute = 60.0, hour = 3600.0, day = 86400.0
         let month = day * 30, year = day * 365, century = year * 100

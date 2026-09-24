@@ -2,7 +2,7 @@
 //  WindowChrome.swift
 //  UPasswords
 //
-//  Safe 工具栏的源码级 1:1 复刻 —— 最终方案:隐藏系统标题栏 + 全 SwiftUI 自绘。
+//  主窗口自绘工具栏方案:隐藏系统标题栏 + 全 SwiftUI 自绘。
 //
 //  调研结论(macOS 26 Tahoe 实测):
 //  1. SwiftUI .toolbar:无法控制条带高度,ToolbarItemGroup 附加溢出胶囊;
@@ -20,7 +20,7 @@ import AppKit
 
 // MARK: - 窗口 chrome 管理(标题栏模式 + 红绿灯位置,自愈式)
 
-/// 窗口外观模式:Safe 的锁屏/设置窗是普通标题栏小窗口,主窗口是隐藏标题栏 + 自绘条带。
+/// 窗口外观模式:锁屏/设置窗是普通标题栏小窗口,主窗口是隐藏标题栏 + 自绘条带。
 enum WindowChromeMode {
     case main   // 隐藏标题栏,红绿灯下移 19pt 与 66pt 条带对齐
     case lock   // 普通标题栏,窗口缩至 500×380
@@ -35,7 +35,7 @@ final class WindowChromeManager: NSObject {
     static let shared = WindowChromeManager()
 
     /// 红绿灯默认中心距窗口顶 ~14pt、距左 ~15pt(fullSizeContentView 模式);
-    /// 参考图红绿灯中心 (25.75, 25.75)pt → 下移 12pt、右移 11pt。
+    /// 红绿灯目标中心 (25.75, 25.75)pt → 下移 12pt、右移 11pt。
     static let trafficLightShift: CGFloat = 12
     static let trafficLightShiftX: CGFloat = 11
     static let lockWindowSize = NSSize(width: 500, height: 380)

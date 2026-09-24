@@ -1,10 +1,9 @@
 import SwiftUI
 
-/// ViewCardViewController — detail pane styled after the original: title block
-/// with a large circular icon (star badge at its bottom-left corner), form-style
-/// field rows (caption label above, value over a hairline underline, type icon
-/// at the right end), and a bottom action bar (编辑 / 设置标签 / 用于自动填充 /
-/// share).
+/// Detail pane: title block with a large circular icon (star badge at its
+/// bottom-left corner), form-style field rows (caption label above, value over
+/// a hairline underline, type icon at the right end), and a bottom action bar
+/// (编辑 / 设置标签 / 用于自动填充 / share).
 struct CardDetailView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
@@ -14,8 +13,8 @@ struct CardDetailView: View {
             if let card = currentCard {
                 detail(card)
             } else {
-                // 原应用空状态:纯深色空白,仅底部操作栏可见(按钮置灰)。
-                Color.safeBackground
+                // 空状态:纯深色空白,仅底部操作栏可见(按钮置灰)。
+                Color.appBackground
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -49,7 +48,7 @@ struct CardDetailView: View {
     }
 
     // MARK: Header — 左侧大标题+标签名(次要色),右侧独立星标 + 卡片图标
-    // (Safe 布局:图标无额外徽章,星标在图标左侧;无「设置标签」链接——在底部栏)
+    // (图标无额外徽章,星标在图标左侧;无「设置标签」链接——在底部栏)
 
     private func header(_ card: Card) -> some View {
         HStack(alignment: .top, spacing: 14) {
@@ -77,7 +76,8 @@ struct CardDetailView: View {
             }
             .buttonStyle(.plain)
             CardIconView(symbol: card.symbol, color: card.color, size: 64,
-                         creditCardNumber: card.fields.first { $0.type == .number }?.value)
+                         creditCardNumber: card.fields.first { $0.type == .number }?.value,
+                         card: card)
         }
     }
 
@@ -210,7 +210,7 @@ struct CardDetailView: View {
         }
     }
 
-    /// Safe 页脚:右对齐两行「修改时间：」「已创建：」(无字节数、无图标)
+    /// 详情页脚:右对齐两行「修改时间：」「已创建：」(无字节数、无图标)
     private func footer(_ card: Card) -> some View {
         VStack(alignment: .trailing, spacing: 3) {
             Text("\(L10n.t("modified_prompt")) \(fullDate(card.modified))")
@@ -243,9 +243,18 @@ struct CardDetailView: View {
         }
     }
 
-    /// Bottom action bar(参考图实测)— 编辑 50.5×23.5、设置标签 86.5×23.5、
+    /// Bottom action bar — 编辑 50.5×23.5、设置标签 86.5×23.5、
     /// 分享 40.5×23.5,深灰圆角填充,无边框线;无选中卡片时整栏置灰。
+    /// 窄窗口下详情栏放不完整行,ViewThatFits 降级为「仅复选框」,
+    /// 避免 Toggle 被挤压后渲染错位(复选框飘出底栏)。
     private func bottomBar(_ card: Card?) -> some View {
+        ViewThatFits(in: .horizontal) {
+            bottomBarRow(card, showAutofillLabel: true)
+            bottomBarRow(card, showAutofillLabel: false)
+        }
+    }
+
+    private func bottomBarRow(_ card: Card?, showAutofillLabel: Bool) -> some View {
         HStack(spacing: 13.5) {
             capsuleButton(L10n.t("edit_button"), enabled: card != nil) {
                 if let card { ctx.editDraft = EditCardModel(card: card) }
@@ -257,12 +266,7 @@ struct CardDetailView: View {
             .disabled(card == nil)
 
             if let card {
-                Toggle(L10n.t("use_for_autofill_button"), isOn: Binding(
-                    get: { ctx.database.card(id: card.id)?.autofillEnabled ?? false },
-                    set: { on in ctx.setCardAutofill(card.id, on: on) }
-                ))
-                .toggleStyle(.checkbox)
-                .font(.system(size: 12))
+                autofillToggle(card, showLabel: showAutofillLabel)
             }
 
             Spacer(minLength: 8)
@@ -286,7 +290,27 @@ struct CardDetailView: View {
         .padding(.leading, 17.5)
         .padding(.trailing, 21)
         .padding(.bottom, 12)
-        .background(Color.safeBackground)
+        .background(Color.appBackground)
+    }
+
+    /// 用于自动填充切换:fixedSize 保证不被压缩(macOS 26 复选框被压宽度时
+    /// 会整体渲染到栏外);紧凑档隐藏文字标签,悬浮提示兜底可发现性。
+    @ViewBuilder
+    private func autofillToggle(_ card: Card, showLabel: Bool) -> some View {
+        let base = Toggle(L10n.t("use_for_autofill_button"), isOn: Binding(
+            get: { ctx.database.card(id: card.id)?.autofillEnabled ?? false },
+            set: { on in ctx.setCardAutofill(card.id, on: on) }
+        ))
+        .toggleStyle(.checkbox)
+        .font(.system(size: 12))
+        .fixedSize()
+        if showLabel {
+            base
+        } else {
+            base
+                .labelsHidden()
+                .help(L10n.t("use_for_autofill_button"))
+        }
     }
 
     private func capsuleButton(_ title: String, enabled: Bool, action: @escaping () -> Void) -> some View {
@@ -304,7 +328,7 @@ struct CardDetailView: View {
     }
 }
 
-/// ViewCardFieldCell + PasswordCell + OneTimePasswordCell — Safe 布局:
+/// 字段行 + 密码行 + 一次性代码行布局:
 /// 上方小字字段名,下方值,细分隔线;右侧仅一个上下文图标(密码→眼睛,网址→地球),
 /// 复制/历史移到右键菜单。
 struct FieldRowView: View {
@@ -374,7 +398,7 @@ struct FieldRowView: View {
     @ViewBuilder
     private var valueView: some View {
         if field.type.isHidden && !revealed && settings.hidePasswords {
-            // Safe 密码行:圆点 + 强度条 + 「破解所需时间：」
+            // 密码行:圆点 + 强度条 + 「破解所需时间：」
             VStack(alignment: .leading, spacing: 6) {
                 Text(String(repeating: "•", count: max(6, min(field.value.count, 16))))
                     .font(.callout)

@@ -2,11 +2,7 @@ import Foundation
 import CryptoKit
 import CommonCrypto
 
-/// Mirrors `DatabaseCipher` (Services/DatabaseCipher.h).
-///
-/// The original binary's exact cipher parameters are not recoverable from the
-/// Mach-O (only `CCCryptor` / SHA references are visible). This replica uses
-/// the modern equivalent chosen by the reverse-engineering notes:
+/// Encrypted database container:
 /// PBKDF2-SHA256 × 310,000 + AES-256-GCM.
 ///
 /// Container layout (little-endian fixed fields + ciphertext):

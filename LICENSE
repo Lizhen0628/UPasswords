@@ -20,10 +20,3 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
----
-
-This project is an independently written interoperability study replicating the
-observable behavior of Safe.app ("Passwords & Codes - safe", SafeInCloud).
-It is not affiliated with, endorsed by, or derived from the source code of
-SafeInCloud / SAFEINCLOUD S.A.S. No original artwork, nib files, or resources
-from that application are included.
