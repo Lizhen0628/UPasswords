@@ -33,8 +33,9 @@ struct RootView: View {
     }
 }
 
-/// 主窗口:邮件式布局 —— 侧栏通高在最左(材质延伸到红绿灯之下),
-/// 右侧内容列 = 52pt 自绘工具栏 + 发丝分隔线 + (列表 266pt | 详情)。
+/// 主窗口:邮件式布局 —— 左侧悬浮侧栏卡片(顶部红绿灯条带 + 四周留边的
+/// 圆角玻璃卡片,材质明显深于内容区),右侧内容列 = 52pt 自绘工具栏 +
+/// 发丝分隔线 + (列表 266pt | 详情)。
 /// 不用 NavigationSplitView:其侧栏列在 macOS 26 带 30pt 玻璃内缩且无法关闭。
 struct MainWindowView: View {
     @EnvironmentObject var ctx: AppContext
@@ -44,7 +45,7 @@ struct MainWindowView: View {
         HStack(spacing: 0) {
             if settings.sidebarVisible {
                 SidebarView()
-                    .frame(width: 225)
+                    .frame(width: 233)
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
             VStack(spacing: 0) {

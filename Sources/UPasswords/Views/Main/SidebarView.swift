@@ -1,15 +1,22 @@
 import SwiftUI
 
-// MARK: - Sidebar (邮件式分节列表:通高材质侧栏,分节小标题 + 28pt 行,
-// 行内 SF Symbol 图标 + 右对齐计数,选中态为圆角灰底 + 蓝色图标;
-// 分节:数据库(账号位) / 标签 / 安全性 / 特殊,「显示」菜单挂在底部)
+// MARK: - Sidebar (邮件式悬浮侧栏:顶部红绿灯条带 + 四周留边的大圆角
+// 玻璃卡片,卡片材质比内容区明显更深;分节小标题 + 28pt 行,行内 SF Symbol
+// 图标 + 右对齐计数,选中态为圆角灰底 + 蓝色图标;「显示」菜单挂在卡片底部)
 
 struct SidebarView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
 
-    /// 顶部留空高度:红绿灯 + 可拖拽条带区(行内容从其下开始)。
-    private static let topStripHeight: CGFloat = 52
+    /// 顶部条带高度:与右侧工具栏同高,红绿灯悬浮于其上(窗口底色)。
+    private static let topBandHeight: CGFloat = 52
+    /// 悬浮卡片圆角与四周留边(卡片不贴边,产生浮层感)。
+    private static let cardCornerRadius: CGFloat = 20
+    private static let cardInsetLeading: CGFloat = 8
+    private static let cardInsetTrailing: CGFloat = 4
+    private static let cardInsetBottom: CGFloat = 8
+    /// 卡片底色加深系数:叠加黑罩,使侧栏与右侧两栏明显分层。
+    private static let cardTintOpacity: Double = 0.16
 
     /// Row order inside the first (database/account) section.
     private static let safeOrder: [SpecialLabel] = [.allCards, .favorites, .creditCards, .notes, .oneTimeCodes, .passkeys, .recent]
@@ -18,47 +25,66 @@ struct SidebarView: View {
     private static let optionalOrder: [SpecialLabel] = [.passwords, .files, .images]
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                // 数据库分节(与邮件的账号分节同位:标题即库名)
-                section(title: ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName) {
-                    ForEach(safeRows) { sp in
-                        SidebarRow(sp: sp)
-                    }
-                }
-                if !ctx.database.labels.isEmpty {
-                    section(title: L10n.db("labels_group")) {
-                        ForEach(sortedLabels) { label in
-                            SidebarLabelRow(label: label)
-                        }
-                    }
-                }
-                section(title: L10n.db("security_group")) {
-                    ForEach(Self.securityOrder) { sp in
-                        SidebarRow(sp: sp)
-                    }
-                }
-                section(title: L10n.db("special_group")) {
-                    ForEach(Self.specialOrder) { sp in
-                        SidebarRow(sp: sp)
-                    }
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.top, Self.topStripHeight + 4)
-            .padding(.bottom, 8)
-        }
-        .background(SidebarMaterial())
-        // 顶部条带:遮住滚过的行,并提供红绿灯旁的拖拽区
-        .overlay(alignment: .top) {
+        VStack(spacing: 0) {
+            // 红绿灯条带:窗口底色 + 可拖拽,卡片从其下悬浮开始
             WindowDragArea()
                 .frame(maxWidth: .infinity)
-                .frame(height: Self.topStripHeight)
-                .background(SidebarMaterial())
+                .frame(height: Self.topBandHeight)
+
+            // 悬浮玻璃卡片:圆角 + 深色材质 + 细描边 + 轻投影
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        // 数据库分节(与邮件的账号分节同位:标题即库名)
+                        section(title: ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName) {
+                            ForEach(safeRows) { sp in
+                                SidebarRow(sp: sp)
+                            }
+                        }
+                        if !ctx.database.labels.isEmpty {
+                            section(title: L10n.db("labels_group")) {
+                                ForEach(sortedLabels) { label in
+                                    SidebarLabelRow(label: label)
+                                }
+                            }
+                        }
+                        section(title: L10n.db("security_group")) {
+                            ForEach(Self.securityOrder) { sp in
+                                SidebarRow(sp: sp)
+                            }
+                        }
+                        section(title: L10n.db("special_group")) {
+                            ForEach(Self.specialOrder) { sp in
+                                SidebarRow(sp: sp)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.top, 2)
+                    .padding(.bottom, 8)
+                }
+                setupBlock
+            }
+            .background(
+                // 层序:玻璃材质在下,黑罩叠其上(behindWindow 材质不会被
+                // 窗口内容垫深),行内容在最前 → 卡片整体比右侧明显更深
+                ZStack {
+                    SidebarMaterial(cornerRadius: Self.cardCornerRadius)
+                    Color.black.opacity(Self.cardTintOpacity)
+                }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.07), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.22), radius: 9, y: 3)
+            .padding(.leading, Self.cardInsetLeading)
+            .padding(.trailing, Self.cardInsetTrailing)
+            .padding(.bottom, Self.cardInsetBottom)
+            .frame(maxHeight: .infinity, alignment: .top)
         }
-        .safeAreaInset(edge: .bottom) {
-            setupCard
-        }
+        .background(Color.appBackground)
     }
 
     // MARK: 分节(小标题 + 行)
@@ -106,9 +132,9 @@ struct SidebarView: View {
         }
     }
 
-    // MARK: 底部块 — 分隔线 + 居中「初始化 n/8」入口 + 居中的「显示」菜单
+    // MARK: 卡片底部块 — 分隔线 + 居中「初始化 n/8」入口 + 居中的「显示」菜单
 
-    private var setupCard: some View {
+    private var setupBlock: some View {
         VStack(spacing: 6) {
             Divider()
             Button {
@@ -129,10 +155,9 @@ struct SidebarView: View {
 
             showMenu
         }
-        .padding(.top, 10)
+        .padding(.top, 8)
         .padding(.bottom, 8)
         .frame(maxWidth: .infinity)
-        .background(SidebarMaterial().overlay(Divider(), alignment: .top))
     }
 
     /// 「显示」button — toggles the optional sidebar rows (密码/文件/图片).

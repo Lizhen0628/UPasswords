@@ -285,14 +285,23 @@ struct SheetShell<Content: View>: View {
 }
 
 
-/// NSVisualEffectView with the system sidebar material — 邮件式半透明侧栏,
+/// NSVisualEffectView with the system sidebar material — 邮件式半透明侧栏卡片,
 /// 与内容区的平底深色形成材质层次(与 Mail/访达 侧栏一致)。
+/// cornerRadius > 0 时在 NSView 层做连续曲率圆角(悬浮卡片的圆角玻璃)。
 struct SidebarMaterial: NSViewRepresentable {
+    var cornerRadius: CGFloat = 0
+
     func makeNSView(context: Context) -> NSVisualEffectView {
         let v = NSVisualEffectView()
         v.material = .sidebar
         v.blendingMode = .behindWindow
         v.state = .active
+        if cornerRadius > 0 {
+            v.wantsLayer = true
+            v.layer?.cornerRadius = cornerRadius
+            v.layer?.cornerCurve = .continuous
+            v.layer?.masksToBounds = true
+        }
         return v
     }
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
