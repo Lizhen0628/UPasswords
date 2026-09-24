@@ -53,6 +53,8 @@ final class AppSettings: ObservableObject {
     }
 
     // MARK: Misc
+    /// 主窗口侧栏显隐(工具栏左一按钮切换,布局记忆跨启动保留)。
+    @Published var sidebarVisible: Bool { didSet { d.set(sidebarVisible, forKey: "app.sidebarVisible") } }
     /// Optional sidebar rows (密码/文件/图片) shown through the 「显示」 menu.
     @Published var sidebarOptionalItems: [String] {
         didSet { d.set(sidebarOptionalItems.joined(separator: ","), forKey: "app.sidebarOptional") }
@@ -85,6 +87,7 @@ final class AppSettings: ObservableObject {
         backupIntervalDays = d.object(forKey: "backup.intervalDays") as? Int ?? 7
         cloudType = d.string(forKey: "sync.cloud") ?? CloudType.none.rawValue
         webdav = Self.loadCodable(WebDavSettings.self, key: "sync.webdav") ?? WebDavSettings()
+        sidebarVisible = d.object(forKey: "app.sidebarVisible") as? Bool ?? true
         sidebarOptionalItems = (d.string(forKey: "app.sidebarOptional") ?? "")
             .split(separator: ",").map(String.init).filter { !$0.isEmpty }
         showWhatsNewAtStartup = d.object(forKey: "whatsnew.atStartup") as? Bool ?? true

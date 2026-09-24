@@ -583,3 +583,11 @@
 "qr_no_otp" = "二维码中没有一次性代码。";
 "qr_screen_permission" = "请在系统设置中授予屏幕录制权限后重试。";
 "qr_filled" = "已从二维码填入一次性代码。";
+
+/* 邮件式主窗口 UI(工具栏/侧栏/列表) */
+"items_count_text" = "%lld 个项目";
+"no_selection_text" = "未选择项目";
+"toggle_sidebar_command" = "显示/隐藏侧栏";
+"date_today_text" = "今天";
+"date_yesterday_text" = "昨天";
+"other_button" = "其他";

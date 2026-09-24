@@ -2,59 +2,140 @@
 //  Toolbar.swift
 //  UPasswords
 //
-//  自绘工具栏条带(布局:红绿灯区 | 数据库名标题 | 8 圆钮)。
+//  邮件式自绘工具栏(布局:侧栏开关 | 标题+副标题 | 胶囊按钮组 | 搜索框)。
 //  窗口 chrome 管理见 WindowChrome.swift。
 //
 
 import SwiftUI
 import AppKit
 
-/// 主窗口自绘工具栏(8 圆钮 + 数据库名标题,布局见文件头注释)。
+/// 主窗口工具栏(52pt,邮件风格):左一为侧栏显隐开关,标题为当前侧栏选中项,
+/// 副标题为列表条数;右侧 4 组胶囊按钮 + 邮件式搜索框。
 struct MainToolbarView: View {
     @EnvironmentObject var ctx: AppContext
+    @EnvironmentObject var settings: AppSettings
 
-    /// 8 个圆钮中心距 574.75…943.75pt(2x 截图 ÷2 实测),
-    /// 相邻间隙(按条目宽 max(35.5, 标签宽) 折算)。
-    /// 按钮顺序:密码生成器紧跟「添加」;间距全部统一。
-    private let specs: [ToolbarButtonSpec] = [
-        .add, .generator, .delete, .lock, .sync, .sorting, .aboveAll, .preferences,
+    /// 胶囊按钮分组(组间留空隙,组内以发丝竖线分隔,同邮件回复/转发组)。
+    private static let groups: [[ToolbarButtonSpec]] = [
+        [.add, .generator],
+        [.sync, .sorting],
+        [.delete, .lock],
+        [.aboveAll, .preferences],
     ]
-    private static let buttonGap: CGFloat = 8
+    private static let groupGap: CGFloat = 8
+    private static let searchWidth: CGFloat = 150
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            Spacer().frame(width: 76) // 红绿灯占位
+        HStack(spacing: 10) {
+            sidebarToggleButton
 
-            Text(ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.92))
-                .padding(.leading, 32)
-                .padding(.top, 9)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(selectionTitle)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(0.95))
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.white.opacity(0.5))
+                    .lineLimit(1)
+            }
+            .frame(minWidth: 60)
+            .padding(.leading, 6)
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 12)
 
-            HStack(alignment: .top, spacing: 0) {
-                ForEach(Array(specs.enumerated()), id: \.element.labelKey) { index, spec in
-                    if index > 0 { Spacer().frame(width: Self.buttonGap) }
-                    if spec.labelKey == "add_button" {
-                        AddMenuButton()
-                    } else {
-                        ToolbarButton(spec: spec, ctx: ctx)
+            HStack(spacing: Self.groupGap) {
+                ForEach(Array(Self.groups.enumerated()), id: \.offset) { _, group in
+                    MailToolbarGroup {
+                        ForEach(Array(group.enumerated()), id: \.element.labelKey) { i, spec in
+                            if i > 0 { groupDivider }
+                            if spec.labelKey == "add_button" {
+                                AddMenuButton()
+                            } else {
+                                ToolbarButton(spec: spec, ctx: ctx)
+                            }
+                        }
                     }
                 }
             }
-            .padding(.top, 2)
-            .padding(.trailing, 8)
+
+            searchField
         }
-        .frame(height: 70)
+        .padding(.leading, 10)
+        .padding(.trailing, 12)
+        .frame(height: 52)
         .background(WindowDragArea())
         .background(Color.appBackground)
-        // 条带底缘凹槽:与列间竖向凹槽同款(0.75 边线 + 4 深槽 + 0.75 边线)
-        .overlay(alignment: .bottom) { ColumnGroove(horizontal: true) }
+    }
+
+    // MARK: 左区:侧栏开关 + 标题/副标题
+
+    private var sidebarToggleButton: some View {
+        Button {
+            settings.sidebarVisible.toggle()
+            Log.info("ui", "toolbar toggle sidebar visible=\(settings.sidebarVisible)")
+        } label: {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.75))
+                .frame(width: 28, height: 26)
+                .contentShape(Rectangle())
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.045)))
+        }
+        .buttonStyle(.plain)
+        .help(L10n.t("toggle_sidebar_command"))
+    }
+
+    private var selectionTitle: String {
+        switch ctx.selection {
+        case .special(let sp): return sp.name
+        case .label(let id): return ctx.database.label(id: id)?.name ?? L10n.tBranded("app_title")
+        }
+    }
+
+    /// 副标题:当前选择 + 搜索过滤后的条数(同邮件「过滤条件: 未读 (n 封邮件)」)。
+    private var subtitle: String {
+        let count = ctx.cards(for: ctx.selection, search: ctx.searchText).count
+        return String.localizedStringWithFormat(L10n.t("items_count_text"), count)
+    }
+
+    // MARK: 右区:邮件式搜索框
+
+    private var searchField: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.white.opacity(0.45))
+            TextField(L10n.t("search_text"), text: $ctx.searchText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(.white)
+            if !ctx.searchText.isEmpty {
+                Button {
+                    ctx.searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.white.opacity(0.45))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(width: Self.searchWidth, height: 26)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.055)))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.white.opacity(0.07), lineWidth: 1))
+    }
+
+    /// 组内按钮间的发丝竖线(邮件回复/转发组分隔样式)。
+    private var groupDivider: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.10))
+            .frame(width: 1, height: 16)
     }
 }
 
-// MARK: - 按钮描述(8 项)
+// MARK: - 按钮描述(8 项,纯图标无文字标签)
 
 struct ToolbarButtonSpec {
     let labelKey: String
@@ -114,6 +195,21 @@ struct ToolbarButtonSpec {
     }
 }
 
+// MARK: - 胶囊按钮组(发丝描边 + 组内发丝竖线分段,悬停逐段高亮)
+
+struct MailToolbarGroup<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(spacing: 0) {
+            content
+        }
+        .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.045)))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.white.opacity(0.10), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+}
+
 // MARK: - 「添加」下拉菜单(按类型直接建卡)
 
 /// 「添加」按钮 = 下拉菜单:互联网帐户/信用卡/一次性代码/身份证护照/Note,
@@ -123,30 +219,18 @@ struct AddMenuButton: View {
 
     var body: some View {
         Menu {
-            Button { addTemplate(102) } label: { Label("互联网帐户", systemImage: "globe") }
-            Button { addTemplate(101) } label: { Label("信用卡", systemImage: "creditcard") }
-            Button { addTemplate(120) } label: { Label("一次性代码", systemImage: "chart.pie.fill") }
-            Button { addTemplate(105) } label: { Label("身份证/护照", systemImage: "person.text.rectangle") }
-            Button { ctx.activeSheet = .addNote } label: { Label("Note", systemImage: "doc") }
-            Button { ctx.activeSheet = .addCard } label: { Label("其他", systemImage: "ellipsis.circle") }
+            Button { addTemplate(102) } label: { Label(L10n.db("web_account_template"), systemImage: "globe") }
+            Button { addTemplate(101) } label: { Label(L10n.db("credit_card_template"), systemImage: "creditcard") }
+            Button { addTemplate(120) } label: { Label(L10n.db("totp_template"), systemImage: "chart.pie.fill") }
+            Button { addTemplate(105) } label: { Label(L10n.db("id_passport_template"), systemImage: "person.text.rectangle") }
+            Button { ctx.activeSheet = .addNote } label: { Label(L10n.db("note_template"), systemImage: "doc") }
+            Button { ctx.activeSheet = .addCard } label: { Label(L10n.t("other_button"), systemImage: "ellipsis.circle") }
         } label: {
-            VStack(spacing: 4) {
-                ZStack {
-                    Circle()
-                        .stroke(Color.white.opacity(0.20), lineWidth: 1)
-                    Image(systemName: "plus.circle")
-                        .font(.system(size: 16, weight: .regular))
-                        .foregroundStyle(.white)
-                }
-                .frame(width: 35.5, height: 35.5)
-                Text(L10n.t("add_button"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.white.opacity(0.62))
-                    .lineLimit(1)
-                    .fixedSize()
-            }
-            .frame(minWidth: 35.5)
-            .contentShape(Rectangle())
+            Image(systemName: "plus.circle")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.85))
+                .frame(width: 30, height: 26)
+                .contentShape(Rectangle())
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -165,38 +249,41 @@ struct AddMenuButton: View {
     }
 }
 
-// MARK: - 圆钮:35.5pt 白色描边圆环 + 16pt 白字形 + 10pt 灰 caption
+// MARK: - 胶囊分段按钮:14pt 字形,悬停段内高亮,激活/禁用三态
 
 struct ToolbarButton: View {
     let spec: ToolbarButtonSpec
     @ObservedObject var ctx: AppContext
     @ObservedObject private var floatState = WindowFloatState.shared
 
+    @State private var hovering = false
+
     var body: some View {
         let active = spec.isActive(ctx)
+        let enabled = spec.isEnabled(ctx)
         Button {
             spec.action(ctx)
         } label: {
-            VStack(spacing: 4) {
-                ZStack {
-                    Circle()
-                        .stroke(Color.white.opacity(active ? 0.55 : 0.20), lineWidth: 1)
-                    Image(systemName: spec.symbol())
-                        .font(.system(size: 16, weight: .regular))
-                        .foregroundStyle(active ? Color.accentColor : .white)
-                }
-                .frame(width: 35.5, height: 35.5)
-                Text(L10n.t(spec.labelKey))
-                    .font(.system(size: 10))
-                    .foregroundStyle(active ? Color.accentColor : Color.white.opacity(0.62))
-                    .lineLimit(1)
-                    .fixedSize()
-            }
-            .frame(minWidth: 35.5)
-            .contentShape(Rectangle())
+            Image(systemName: spec.symbol())
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(iconColor(active: active, enabled: enabled))
+                .frame(width: 30, height: 26)
+                .contentShape(Rectangle())
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(hovering && enabled ? Color.white.opacity(0.08) : Color.clear)
+                )
+                .padding(.horizontal, 1)
         }
         .buttonStyle(.plain)
         // 工具栏按钮不做置灰(删除无选中时为安全空操作)
         .help(L10n.t(spec.helpKey))
+        .onHover { hovering = $0 }
+    }
+
+    private func iconColor(active: Bool, enabled: Bool) -> Color {
+        if active { return .accentColor }
+        if !enabled { return Color.white.opacity(0.28) }
+        return Color.white.opacity(0.85)
     }
 }

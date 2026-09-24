@@ -250,7 +250,7 @@ final class WindowChromeManager: NSObject {
             // 锁屏窗撑回最小主窗尺寸,若此时 frame 恰好卡在最小宽度,说明是被
             // 过渡挤压出来的「中毒」frame(并已被 SwiftUI 持久化),不是用户
             // 调过的尺寸 → 回退默认尺寸,避免主窗口从此永远是最小尺寸。
-            let minMainWidth: CGFloat = 760   // MainWindowView.frame(minWidth:)
+            let minMainWidth: CGFloat = 860   // MainWindowView.frame(minWidth:)
             let restore: NSRect
             if saved.width <= minMainWidth + 0.5 {
                 let visible = win.screen?.visibleFrame

@@ -583,3 +583,11 @@
 "qr_no_otp" = "The QR code does not contain a one-time code.";
 "qr_screen_permission" = "Grant Screen Recording permission in System Settings and try again.";
 "qr_filled" = "One-time code filled from QR.";
+
+/* Mail-style main window UI (toolbar/sidebar/list) */
+"items_count_text" = "%lld items";
+"no_selection_text" = "No Item Selected";
+"toggle_sidebar_command" = "Toggle Sidebar";
+"date_today_text" = "Today";
+"date_yesterday_text" = "Yesterday";
+"other_button" = "Other";

@@ -33,29 +33,34 @@ struct RootView: View {
     }
 }
 
-/// 主窗口:970×819 窗口,70pt 自绘工具栏条带,
-/// 三列布局(侧栏 225pt / 5pt 凹槽 / 列表 266pt / 5pt 凹槽 / 详情),
+/// 主窗口:邮件式布局 —— 侧栏通高在最左(材质延伸到红绿灯之下),
+/// 右侧内容列 = 52pt 自绘工具栏 + 发丝分隔线 + (列表 266pt | 详情)。
 /// 不用 NavigationSplitView:其侧栏列在 macOS 26 带 30pt 玻璃内缩且无法关闭。
 struct MainWindowView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
 
     var body: some View {
-        VStack(spacing: 0) {
-            // 自绘 70pt 工具栏条带(系统 NSToolbar 在 macOS 26 必然附加玻璃胶囊,见 Window/Toolbar.swift)
-            MainToolbarView()
-            HStack(spacing: 0) {
+        HStack(spacing: 0) {
+            if settings.sidebarVisible {
                 SidebarView()
                     .frame(width: 225)
-                ColumnGroove()
-                CardListView()
-                    .frame(width: 266)
-                ColumnGroove()
-                CardDetailView()
-                    .frame(maxWidth: .infinity)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+            VStack(spacing: 0) {
+                MainToolbarView()
+                HairlineDivider(horizontal: true)
+                HStack(spacing: 0) {
+                    CardListView()
+                        .frame(width: 266)
+                    HairlineDivider()
+                    CardDetailView()
+                        .frame(maxWidth: .infinity)
+                }
             }
         }
-        .frame(minWidth: 760, minHeight: 460)
+        .frame(minWidth: settings.sidebarVisible ? 860 : 660, minHeight: 460)
+        .animation(.easeInOut(duration: 0.18), value: settings.sidebarVisible)
         .ignoresSafeArea(.all, edges: .top)   // 隐藏标题栏后仍有 ~8pt 残留安全区,条带需贴顶
         .background(WindowChromeConfigurator(mode: .main))
         .navigationTitle(ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName)

@@ -49,30 +49,6 @@ enum SpecialLabel: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Sidebar grouping: 数据库 / 标签 / 安全性 / 特殊,
-    /// plus optional items hidden until enabled through the 「显示」 menu.
-    var section: SidebarSection {
-        switch self {
-        case .allCards, .favorites, .creditCards, .notes, .oneTimeCodes, .passkeys, .recent:
-            return .safe
-        case .passwords, .files, .images:
-            return .optionalItems
-        case .compromised, .weakPasswords, .samePasswords:
-            return .security
-        case .expiring, .expired, .archived, .templates, .trash:
-            return .special
-        }
-    }
-
-    /// Icon tint for colored special marks.
-    var iconColor: String? {
-        switch self {
-        case .favorites: return "yellow"
-        case .compromised, .weakPasswords, .samePasswords: return "red"
-        default: return nil
-        }
-    }
-
     /// Empty-state text (Localizable `*_empty_state` keys).
     var emptyState: String {
         switch self {
@@ -89,32 +65,6 @@ enum SpecialLabel: String, CaseIterable, Identifiable {
         case .trash: return L10n.t("trash_empty_state")
         case .templates: return L10n.t("templates_empty_state")
         default: return L10n.t("user_empty_state")
-        }
-    }
-}
-
-/// 侧栏分节(分组顺序:safe/labels/security/special/可选项)。
-enum SidebarSection: String, CaseIterable {
-    case safe, labels, security, special, optionalItems
-}
-
-/// Colored group header icons of the sidebar.
-enum SidebarGroupStyle {
-    case safe, labels, security, special
-
-    var icon: String {
-        switch self {
-        case .safe: return "lock.shield"
-        case .labels: return "tag"
-        case .security: return "exclamationmark.shield"
-        case .special: return "gearshape.2"
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .safe, .labels, .special: return .blue
-        case .security: return .red
         }
     }
 }

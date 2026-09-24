@@ -285,17 +285,31 @@ struct SheetShell<Content: View>: View {
 }
 
 
-/// NSVisualEffectView matching the window background — the sidebar uses the
-/// same flat dark tone as the content panes (no translucent material).
+/// NSVisualEffectView with the system sidebar material — 邮件式半透明侧栏,
+/// 与内容区的平底深色形成材质层次(与 Mail/访达 侧栏一致)。
 struct SidebarMaterial: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let v = NSVisualEffectView()
-        v.material = .windowBackground
+        v.material = .sidebar
         v.blendingMode = .behindWindow
         v.state = .active
         return v
     }
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+/// 邮件式发丝分隔线:1pt 系统分隔色,替代旧的 5.5pt 凹槽。
+/// 横竖两个方向,不参与命中测试(不挡下层点击)。
+struct HairlineDivider: View {
+    var horizontal = false
+
+    var body: some View {
+        Rectangle()
+            .fill(Color(nsColor: .separatorColor))
+            .frame(width: horizontal ? nil : 1,
+                   height: horizontal ? 1 : nil)
+            .allowsHitTesting(false)
+    }
 }
 
 // MARK: - 表单行(标签左对齐 110pt,内容填满)

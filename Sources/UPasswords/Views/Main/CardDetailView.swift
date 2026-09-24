@@ -13,9 +13,14 @@ struct CardDetailView: View {
             if let card = currentCard {
                 detail(card)
             } else {
-                // 空状态:纯深色空白,仅底部操作栏可见(按钮置灰)。
-                Color.appBackground
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // 空状态:邮件式居中灰字「未选择项目」,仅底部操作栏可见(按钮置灰)。
+                ZStack {
+                    Color.appBackground
+                    Text(L10n.t("no_selection_text"))
+                        .font(.system(size: 22))
+                        .foregroundStyle(Color.white.opacity(0.28))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .safeAreaInset(edge: .bottom) {

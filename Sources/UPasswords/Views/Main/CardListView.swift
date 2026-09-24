@@ -1,91 +1,24 @@
 import SwiftUI
 
-// MARK: - Card list (search field inside the pane top, generator + sync
-// buttons at the right, 48pt rows)
+// MARK: - Card list (邮件消息列表式:标题+日期一行 / 副标题+角标一行,
+// 搜索与同步已上移到顶部工具栏,列表栏只承载纯列表)
 
 struct CardListView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            list
-        }
-        .background(Color.appBackground)
-        .overlay {
-            if cards.isEmpty {
-                emptyState
+        list
+            .background(Color.appBackground)
+            .overlay {
+                if cards.isEmpty {
+                    emptyState
+                }
             }
-        }
     }
 
     private var cards: [Card] {
         ctx.cards(for: ctx.selection, search: ctx.searchText)
-    }
-
-    /// Search row:搜索框 25.5pt 高、同底色 + 极淡描边;右侧
-    /// 「盾牌 + 云朵」全黄连体胶囊 59.5×27.5pt(生成器 / 云同步)。
-    private var header: some View {
-        HStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.white.opacity(0.45))
-                TextField(L10n.t("search_text"), text: $ctx.searchText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white)
-                if !ctx.searchText.isEmpty {
-                    Button {
-                        ctx.searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Color.white.opacity(0.45))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 9)
-            .frame(height: 25.5)
-            .frame(maxWidth: .infinity)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.012)))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.05), lineWidth: 1))
-
-            syncCapsule
-                .padding(.leading, 8)
-        }
-        .padding(.leading, 8.5)
-        .padding(.trailing, 6.5)
-        .padding(.top, 6)
-        .padding(.bottom, 6)
-    }
-
-    /// 黄色胶囊:仅云同步菜单(密码生成器已上移到顶部工具栏)。
-    /// 黄底尺寸随内容自适应;搜索框用 maxWidth:.infinity 自动占满剩余宽度。
-    private var syncCapsule: some View {
-        Menu {
-            Button(L10n.t("sync_command")) { Task { await ctx.sync() } }
-            Divider()
-            Button(L10n.t("manage_databases_command")) { ctx.activeSheet = .manageDatabases }
-            Button(L10n.t("configure_cloud_command")) {
-                ctx.activeSheet = .configureCloud
-            }
-        } label: {
-            Image(systemName: "icloud.fill")
-                .font(.system(size: 15))
-                .foregroundStyle(.white)
-                .contentShape(Rectangle())
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        // 正圆样式:图标居中,四周留白相等(直径 26,图标 15,四周各 5.5pt)
-        .frame(width: 26, height: 26)
-        .background(Color(red: 0.30, green: 0.66, blue: 0.96))   // 天蓝色
-        .clipShape(Circle())
-        .help(L10n.t("sync_command"))
     }
 
     private var list: some View {
@@ -94,7 +27,7 @@ struct CardListView: View {
                 CardListCellView(card: card, preview: ctx.searchText.isEmpty ? nil : ctx.searchPreview(for: card, word: String(ctx.searchText.lowercased().split(separator: " ").first ?? "")))
                     .tag(card.id)
                     .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-                    .frame(height: 48)
+                    .frame(height: 50)
                     .contextMenu {
                         cardContextMenu(card)
                     }
@@ -176,9 +109,8 @@ struct CardListView: View {
     }
 }
 
-/// CardListCell — 35pt circular icon at (7,7); title over subtitle at x=52
-/// (single centered title when there is no subtitle); blue one-time-password
-/// icon and star button at the right edge.
+/// 邮件消息列表式单元格 — 32pt 圆形图标居左,第一行「标题 + 徽标 + 日期」,
+/// 第二行「副标题 + 角标(一次性代码/收藏)」;选中行文字反白。
 struct CardListCellView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
@@ -186,15 +118,17 @@ struct CardListCellView: View {
     let preview: String?
 
     var body: some View {
+        let selected = ctx.selectedCardId == card.id
         HStack(spacing: 0) {
-            CardIconView(symbol: card.symbol, color: card.color, size: 35,
+            CardIconView(symbol: card.symbol, color: card.color, size: 32,
                          creditCardNumber: card.fields.first { $0.type == .number }?.value,
                          card: card)
-                .padding(.leading, 7)
-            VStack(alignment: .leading, spacing: 1) {
+                .padding(.leading, 9)
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 4) {
                     Text(card.title.isEmpty ? "—" : card.title)
                         .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(selected ? Color.white : Color.primary)
                         .lineLimit(1)
                     if card.isExpired {
                         Image(systemName: "clock.badge.exclamationmark").font(.caption2).foregroundStyle(.red)
@@ -204,37 +138,52 @@ struct CardListCellView: View {
                     if card.hasWeakPasswords {
                         Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.red)
                     }
-                }
-                if !subtitle.isEmpty {
-                    Text(subtitle)
+                    Spacer(minLength: 8)
+                    Text(dateText)
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .foregroundStyle(selected ? Color.white.opacity(0.75) : Color.white.opacity(0.42))
+                }
+                HStack(spacing: 4) {
+                    if !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.system(size: 11))
+                            .foregroundStyle(selected ? Color.white.opacity(0.72) : Color.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    HStack(spacing: 2) {
+                        if card.fields.contains(where: { $0.type == .oneTimePassword }) {
+                            Image(systemName: "timer")
+                                .font(.system(size: 11))
+                                .foregroundStyle(selected ? Color.white : .blue)
+                        }
+                        Button {
+                            ctx.toggleFavorite(card.id)
+                        } label: {
+                            Image(systemName: card.favorite ? "star.fill" : "star")
+                                .font(.system(size: 11))
+                                .foregroundStyle(card.favorite ? .yellow
+                                                 : selected ? Color.white.opacity(0.45)
+                                                 : Color.secondary.opacity(0.4))
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
-            .padding(.leading, 10)
-            .frame(maxHeight: .infinity, alignment: subtitle.isEmpty ? .center : .top)
-            .padding(.top, subtitle.isEmpty ? 0 : 7)
-            Spacer(minLength: 8)
-            if card.fields.contains(where: { $0.type == .oneTimePassword }) {
-                Image(systemName: "timer")
-                    .font(.system(size: 14))
-                    .foregroundStyle(.blue)
-                    .frame(width: 32, height: 32)
-            }
-            Button {
-                ctx.toggleFavorite(card.id)
-            } label: {
-                Image(systemName: card.favorite ? "star.fill" : "star")
-                    .font(.system(size: 14))
-                    .foregroundStyle(card.favorite ? .yellow : .secondary.opacity(0.4))
-                    .frame(width: 32, height: 32)
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 4)
+            .padding(.leading, 9)
+            .padding(.trailing, 10)
         }
-        .frame(height: 48)
+        .frame(height: 50)
         .contentShape(Rectangle())
+    }
+
+    /// 右上角日期:相对当日显示「今天/昨天」,否则为缩写日期(邮件列表惯例)。
+    private var dateText: String {
+        let modified = card.modified.date
+        if Calendar.current.isDateInToday(modified) { return L10n.t("date_today_text") }
+        if Calendar.current.isDateInYesterday(modified) { return L10n.t("date_yesterday_text") }
+        return modified.formatted(date: .abbreviated, time: .omitted)
     }
 
     private var subtitle: String {
@@ -245,4 +194,3 @@ struct CardListCellView: View {
         return card.login
     }
 }
-
