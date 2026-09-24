@@ -7,7 +7,8 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: macos-14
+    # macos-26 = Xcode 26 / Swift 6.x,与本地开发工具链一致,避免 SDK 隔离检查差异
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
       - name: Swift version
