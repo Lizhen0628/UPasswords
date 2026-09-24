@@ -806,7 +806,7 @@ private struct NotesTab: View {
     }
 
     /// 文字字形按钮(B / I / U / S)
-    private func glyphButton(_ label: String, action: @escaping () -> Void) -> some View {
+    private func glyphButton(_ label: String, action: @escaping @MainActor () -> Void) -> some View {
         Button(action: action) {
             Text(label)
                 .frame(width: 22, height: 22)
@@ -817,7 +817,7 @@ private struct NotesTab: View {
 
     /// SF Symbol 图标按钮(列表/链接/撤销/重做)
     private func iconButton(_ systemName: String, help: String,
-                            action: @escaping () -> Void) -> some View {
+                            action: @escaping @MainActor () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .frame(width: 22, height: 22)

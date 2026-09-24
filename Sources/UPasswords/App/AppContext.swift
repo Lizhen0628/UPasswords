@@ -157,9 +157,12 @@ final class AppContext: ObservableObject {
                         w.makeKeyAndOrderFront(nil)
                     }
                 }
+                // Timer 调度在主 runloop,回调必在主线程;assumeIsolated 依据规范 11.3
                 Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
-                    NSApp.setActivationPolicy(.regular)
-                    NSApp.activate(ignoringOtherApps: true)
+                    MainActor.assumeIsolated {
+                        NSApp.setActivationPolicy(.regular)
+                        NSApp.activate(ignoringOtherApps: true)
+                    }
                 }
                 // UP_SCREENSHOT_EDITOR=<templateId>:解锁后直接打开该模板的新卡编辑表单
                 if let specId = ProcessInfo.processInfo.environment["UP_SCREENSHOT_EDITOR"].flatMap(Int.init) {
