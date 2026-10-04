@@ -21,6 +21,9 @@ struct SidebarView: View {
     private static let rowIndent: CGFloat = 14
 
     @State private var bandToggleHovering = false
+    /// 分节折叠状态(邮件式:标题行右端箭头点击展开/收起),会话内记忆。
+    @State private var expandedSections: Set<String> = ["safe", "labels", "security", "special"]
+    @State private var hoveredSection: String?
 
     /// Row order inside the first (database/account) section.
     private static let safeOrder: [SpecialLabel] = [.allCards, .favorites, .creditCards, .notes, .oneTimeCodes, .passkeys, .recent]
@@ -52,27 +55,28 @@ struct SidebarView: View {
             ScrollView {
                 VStack(spacing: 0) {
                     // 数据库分节(与邮件的账号分节同位:标题即库名)
-                    section(title: ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName) {
+                    section(key: "safe",
+                            title: ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName) {
                         ForEach(safeRows) { sp in
                             SidebarRow(sp: sp)
                                 .padding(.leading, Self.rowIndent)
                         }
                     }
                     if !ctx.database.labels.isEmpty {
-                        section(title: L10n.db("labels_group")) {
+                        section(key: "labels", title: L10n.db("labels_group")) {
                             ForEach(sortedLabels) { label in
                                 SidebarLabelRow(label: label)
                                     .padding(.leading, Self.rowIndent)
                             }
                         }
                     }
-                    section(title: L10n.db("security_group")) {
+                    section(key: "security", title: L10n.db("security_group")) {
                         ForEach(Self.securityOrder) { sp in
                             SidebarRow(sp: sp)
                                 .padding(.leading, Self.rowIndent)
                         }
                     }
-                    section(title: L10n.db("special_group")) {
+                    section(key: "special", title: L10n.db("special_group")) {
                         ForEach(Self.specialOrder) { sp in
                             SidebarRow(sp: sp)
                                 .padding(.leading, Self.rowIndent)
@@ -119,19 +123,52 @@ struct SidebarView: View {
         .help(settings.sidebarVisible ? L10n.t("hide_sidebar_command") : L10n.t("show_sidebar_command"))
     }
 
-    // MARK: 分节(小标题 + 行)
+    // MARK: 分节(可折叠标题行 + 子行,邮件式)
 
+    /// 分节标题行:右端折叠箭头(悬停或已折叠时可见),点击展开/收起子行。
     @ViewBuilder
-    private func section(title: String, @ViewBuilder rows: () -> some View) -> some View {
-        Text(title)
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(Color.white.opacity(0.42))
-            .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
+    private func section(key: String, title: String, @ViewBuilder rows: () -> some View) -> some View {
+        let isExpanded = expandedSections.contains(key)
+        let isHovered = hoveredSection == key
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                if isExpanded {
+                    expandedSections.remove(key)
+                } else {
+                    expandedSections.insert(key)
+                }
+            }
+            Log.info("ui", "sidebar section toggle key=\(key) expanded=\(!isExpanded)")
+        } label: {
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.42))
+                    .lineLimit(1)
+                Spacer()
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(isHovered || !isExpanded ? 0.55 : 0))
+                    .rotationEffect(.degrees(isExpanded ? 0 : -90))
+            }
             .padding(.leading, 10)
-            .padding(.top, 14)
-            .padding(.bottom, 4)
-        rows()
+            .padding(.trailing, 6)
+            .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(Color.white.opacity(isHovered ? 0.05 : 0))
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            hoveredSection = hovering ? key : (hoveredSection == key ? nil : hoveredSection)
+        }
+        .padding(.top, 12)
+        .padding(.bottom, 2)
+        if isExpanded {
+            rows()
+        }
     }
 
     /// 「数据库」分节行:固定顺序 + 通过「显示」菜单开启的可选行(密码插入
