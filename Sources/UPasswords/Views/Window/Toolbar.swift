@@ -15,6 +15,8 @@ struct MainToolbarView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
 
+    @State private var fallbackToggleHovering = false
+
     /// 胶囊按钮分组(组间留空隙,组内以发丝竖线分隔,同邮件回复/转发组)。
     private static let groups: [[ToolbarButtonSpec]] = [
         [.add, .generator],
@@ -36,13 +38,14 @@ struct MainToolbarView: View {
                     Log.info("ui", "toolbar toggle sidebar visible=\(settings.sidebarVisible)")
                 } label: {
                     Image(systemName: "sidebar.left")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.75))
-                        .frame(width: 28, height: 26)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.72))
+                        .frame(width: 30, height: 26)
                         .contentShape(Rectangle())
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.045)))
+                        .background(Circle().fill(Color.white.opacity(fallbackToggleHovering ? 0.12 : 0)))
                 }
                 .buttonStyle(.plain)
+                .onHover { fallbackToggleHovering = $0 }
                 .help(L10n.t("toggle_sidebar_command"))
             }
 
@@ -78,7 +81,7 @@ struct MainToolbarView: View {
 
             searchField
         }
-        .padding(.leading, settings.sidebarVisible ? 10 : 84)
+        .padding(.leading, settings.sidebarVisible ? 10 : 96)
         .padding(.trailing, 12)
         .frame(height: 52)
         .background(WindowDragArea())

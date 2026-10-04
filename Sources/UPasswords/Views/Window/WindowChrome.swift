@@ -34,10 +34,10 @@ enum WindowChromeMode {
 final class WindowChromeManager: NSObject {
     static let shared = WindowChromeManager()
 
-    /// 红绿灯默认中心距窗口顶 ~14pt、距左 ~15pt(fullSizeContentView 模式);
-    /// 红绿灯目标中心 (25.75, 25.75)pt → 下移 12pt、右移 11pt。
-    static let trafficLightShift: CGFloat = 12
-    static let trafficLightShiftX: CGFloat = 11
+    /// 红绿灯下移/右移量:主模式目标为中心 ≈ (23, 26.5)pt —— 与 52pt 工具栏
+    /// 中线(26pt)同排(侧栏开关、标题同一水平中心线),并贴近邮件的灯位。
+    static let trafficLightShift: CGFloat = 10
+    static let trafficLightShiftX: CGFloat = 8
     static let lockWindowSize = NSSize(width: 500, height: 380)
 
     private weak var window: NSWindow?
