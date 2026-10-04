@@ -142,7 +142,7 @@ struct SidebarView: View {
         } label: {
             HStack(spacing: 4) {
                 Text(title)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(0.42))
                     .lineLimit(1)
                 Spacer()
