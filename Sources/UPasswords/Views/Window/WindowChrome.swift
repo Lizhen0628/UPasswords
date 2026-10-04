@@ -199,7 +199,13 @@ final class WindowChromeManager: NSObject {
     }
 
     /// 三灯在容器内下移+右移(NSView 不裁剪子视图,移出 28pt 容器仍可见可点)。
+    /// 全屏由系统全权管理红绿灯(隐藏、悬停显示、独立灯位),不做位移干预,
+    /// 否则自绘位移会与系统的全屏排布互相打架(灯被顶到屏幕边缘/灰显异常)。
     private func shiftLights(_ win: NSWindow, down: Bool) {
+        if win.styleMask.contains(.fullScreen) {
+            Log.debug("chrome", "shiftLights skipped (fullscreen, system-managed)")
+            return
+        }
         for type: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
             guard let button = win.standardWindowButton(type) else { continue }
             let id = ObjectIdentifier(button)
