@@ -26,8 +26,9 @@ struct MainToolbarView: View {
     private static let searchWidth: CGFloat = 150
 
     var body: some View {
+        // 侧栏隐藏时内容列从窗口左缘开始,需先让开红绿灯区(邮件式:灯后跟开关)
         HStack(spacing: 10) {
-            // 侧栏显示时开关在侧栏条带内(邮件式);这里只在侧栏隐藏时兜底,
+            // 侧栏显示时开关在侧栏面板顶行(邮件式);这里只在侧栏隐藏时兜底,
             // 否则收起后没有入口再打开
             if !settings.sidebarVisible {
                 Button {
@@ -77,7 +78,7 @@ struct MainToolbarView: View {
 
             searchField
         }
-        .padding(.leading, 10)
+        .padding(.leading, settings.sidebarVisible ? 10 : 84)
         .padding(.trailing, 12)
         .frame(height: 52)
         .background(WindowDragArea())
