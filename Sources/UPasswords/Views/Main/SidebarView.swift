@@ -9,8 +9,9 @@ struct SidebarView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
 
-    /// 面板内顶部行高:红绿灯 + 侧栏开关同排(内容行从其下开始)。
-    private static let topStripHeight: CGFloat = 50
+    /// 面板内顶部行高:红绿灯 + 侧栏开关同排(内容行从其下开始;
+    /// 高度收紧,保证首行分节标题与邮件一样贴近灯排)。
+    private static let topStripHeight: CGFloat = 36
     /// 悬浮面板圆角与四周留边(四边近似均布,面板不贴死窗口边)。
     private static let panelCornerRadius: CGFloat = 22
     private static let panelInset: CGFloat = 6
@@ -73,7 +74,6 @@ struct SidebarView: View {
                     }
                 }
                 .padding(.horizontal, 10)
-                .padding(.top, 4)
                 .padding(.bottom, 8)
             }
             setupBlock
