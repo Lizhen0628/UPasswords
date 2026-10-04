@@ -1,22 +1,21 @@
 import SwiftUI
 
-// MARK: - Sidebar (邮件式悬浮侧栏:顶部红绿灯条带 + 四周留边的大圆角
-// 玻璃卡片,卡片材质比内容区明显更深;分节小标题 + 28pt 行,行内 SF Symbol
-// 图标 + 右对齐计数,选中态为圆角灰底 + 蓝色图标;「显示」菜单挂在卡片底部)
+// MARK: - Sidebar (邮件式悬浮玻璃面板:从窗口顶部整体悬浮开始,红绿灯与
+// 侧栏开关都在面板内部顶行;深色玻璃明显深于内容区;分节小标题 + 32pt 行,
+// 行内 SF Symbol 图标 + 右对齐计数,选中态为圆角灰底 + 强调蓝图标与蓝字;
+// 「显示」菜单挂在面板底部)
 
 struct SidebarView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
 
-    /// 顶部条带高度:与右侧工具栏同高,红绿灯悬浮于其上(窗口底色)。
-    private static let topBandHeight: CGFloat = 52
-    /// 悬浮卡片圆角与四周留边(卡片不贴边,产生浮层感)。
-    private static let cardCornerRadius: CGFloat = 20
-    private static let cardInsetLeading: CGFloat = 8
-    private static let cardInsetTrailing: CGFloat = 4
-    private static let cardInsetBottom: CGFloat = 8
-    /// 卡片底色加深系数:叠加黑罩,使侧栏与右侧两栏明显分层。
-    private static let cardTintOpacity: Double = 0.16
+    /// 面板内顶部行高:红绿灯 + 侧栏开关同排(内容行从其下开始)。
+    private static let topStripHeight: CGFloat = 50
+    /// 悬浮面板圆角与四周留边(四边近似均布,面板不贴死窗口边)。
+    private static let panelCornerRadius: CGFloat = 22
+    private static let panelInset: CGFloat = 6
+    /// 面板底色加深系数:叠加黑罩压住透出的壁纸,使面板沉稳、明显深于右侧。
+    private static let panelTintOpacity: Double = 0.32
 
     @State private var bandToggleHovering = false
 
@@ -27,79 +26,80 @@ struct SidebarView: View {
     private static let optionalOrder: [SpecialLabel] = [.passwords, .files, .images]
 
     var body: some View {
+        panel
+            .padding(.top, Self.panelInset)
+            .padding(.leading, Self.panelInset)
+            .padding(.trailing, Self.panelInset)
+            .padding(.bottom, Self.panelInset)
+            .background(Color.appBackground)
+    }
+
+    /// 悬浮玻璃面板:顶部行(红绿灯区 + 侧栏开关)在面板内部,下接分节
+    /// 列表与底部块;圆角 + 深色玻璃 + 细描边 + 轻投影。
+    private var panel: some View {
         VStack(spacing: 0) {
-            // 红绿灯条带:窗口底色 + 可拖拽,右端是邮件式的侧栏开关(裸图标),
-            // 卡片从条带之下悬浮开始
             ZStack(alignment: .trailing) {
                 WindowDragArea()
                     .frame(maxWidth: .infinity)
-                    .frame(height: Self.topBandHeight)
+                    .frame(height: Self.topStripHeight)
                 sidebarToggleButton
                     .padding(.trailing, 12)
             }
 
-            // 悬浮玻璃卡片:圆角 + 深色材质 + 细描边 + 轻投影
-            VStack(spacing: 0) {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        // 数据库分节(与邮件的账号分节同位:标题即库名)
-                        section(title: ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName) {
-                            ForEach(safeRows) { sp in
-                                SidebarRow(sp: sp)
-                            }
+            ScrollView {
+                VStack(spacing: 0) {
+                    // 数据库分节(与邮件的账号分节同位:标题即库名)
+                    section(title: ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName) {
+                        ForEach(safeRows) { sp in
+                            SidebarRow(sp: sp)
                         }
-                        if !ctx.database.labels.isEmpty {
-                            section(title: L10n.db("labels_group")) {
-                                ForEach(sortedLabels) { label in
-                                    SidebarLabelRow(label: label)
-                                }
-                            }
-                        }
-                        section(title: L10n.db("security_group")) {
-                            ForEach(Self.securityOrder) { sp in
-                                SidebarRow(sp: sp)
-                            }
-                        }
-                        section(title: L10n.db("special_group")) {
-                            ForEach(Self.specialOrder) { sp in
-                                SidebarRow(sp: sp)
+                    }
+                    if !ctx.database.labels.isEmpty {
+                        section(title: L10n.db("labels_group")) {
+                            ForEach(sortedLabels) { label in
+                                SidebarLabelRow(label: label)
                             }
                         }
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.top, 2)
-                    .padding(.bottom, 8)
+                    section(title: L10n.db("security_group")) {
+                        ForEach(Self.securityOrder) { sp in
+                            SidebarRow(sp: sp)
+                        }
+                    }
+                    section(title: L10n.db("special_group")) {
+                        ForEach(Self.specialOrder) { sp in
+                            SidebarRow(sp: sp)
+                        }
+                    }
                 }
-                setupBlock
+                .padding(.horizontal, 10)
+                .padding(.top, 4)
+                .padding(.bottom, 8)
             }
-            .background(
-                // 层序:玻璃材质在下,黑罩叠其上(behindWindow 材质不会被
-                // 窗口内容垫深),行内容在最前 → 卡片整体比右侧明显更深
-                ZStack {
-                    SidebarMaterial(cornerRadius: Self.cardCornerRadius)
-                    Color.black.opacity(Self.cardTintOpacity)
-                }
-            )
-            .clipShape(RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: Self.cardCornerRadius, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.07), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.22), radius: 9, y: 3)
-            .padding(.leading, Self.cardInsetLeading)
-            .padding(.trailing, Self.cardInsetTrailing)
-            .padding(.bottom, Self.cardInsetBottom)
-            .frame(maxHeight: .infinity, alignment: .top)
+            setupBlock
         }
-        .background(Color.appBackground)
+        .background(
+            // 层序:玻璃材质在下,黑罩叠其上(behindWindow 材质不会被
+            // 窗口内容垫深),行内容在最前 → 面板整体深色沉稳
+            ZStack {
+                SidebarMaterial(cornerRadius: Self.panelCornerRadius)
+                Color.black.opacity(Self.panelTintOpacity)
+            }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: Self.panelCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Self.panelCornerRadius, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.07), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.22), radius: 9, y: 3)
     }
 
-    /// 邮件式侧栏开关:条带内右端、红绿灯同排的裸图标(无胶囊底),
+    /// 邮件式侧栏开关:面板顶行右端、红绿灯同排的裸图标(无胶囊底),
     /// 悬停现圆形浅高亮。
     private var sidebarToggleButton: some View {
         Button {
             settings.sidebarVisible.toggle()
-            Log.info("ui", "band toggle sidebar visible=\(settings.sidebarVisible)")
+            Log.info("ui", "panel toggle sidebar visible=\(settings.sidebarVisible)")
         } label: {
             Image(systemName: "sidebar.left")
                 .font(.system(size: 15, weight: .medium))
@@ -290,7 +290,7 @@ private struct SidebarRowButton: View {
                     .frame(width: 18)
                 Text(title)
                     .font(.system(size: 13, weight: selected ? .medium : .regular))
-                    .foregroundStyle(selected ? Color.white : Color.primary)
+                    .foregroundStyle(selected ? Color.accentColor : Color.primary)
                     .lineLimit(1)
                 Spacer()
                 if let count {
@@ -301,7 +301,7 @@ private struct SidebarRowButton: View {
             }
             .padding(.leading, 10)
             .padding(.trailing, 10)
-            .frame(height: 28)
+            .frame(height: 32)
             .contentShape(Rectangle())
             .background(
                 RoundedRectangle(cornerRadius: 6)
@@ -314,7 +314,7 @@ private struct SidebarRowButton: View {
         .onHover { hovering = $0 }
     }
 
-    /// 邮件式选中态:图标转为系统强调色(如选中邮箱的蓝色托盘),文字反白。
+    /// 邮件式选中态:图标与文字同为系统强调色(如选中邮箱的蓝色托盘+蓝字)。
     private var iconColor: Color {
         if selected { return .accentColor }
         return tint ?? Color.white.opacity(0.75)
