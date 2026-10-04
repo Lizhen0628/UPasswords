@@ -95,22 +95,22 @@ struct SidebarView: View {
     }
 
     /// 邮件式侧栏开关:面板顶行右端、红绿灯同排的裸图标(无胶囊底),
-    /// 悬停现圆形浅高亮。
+    /// 悬停现圆形浅高亮;提示随状态切换(隐藏/显示边栏)。
     private var sidebarToggleButton: some View {
         Button {
             settings.sidebarVisible.toggle()
             Log.info("ui", "panel toggle sidebar visible=\(settings.sidebarVisible)")
         } label: {
             Image(systemName: "sidebar.left")
-                .font(.system(size: 15, weight: .medium))
+                .font(.system(size: 22, weight: .medium))
                 .foregroundStyle(Color.white.opacity(0.72))
-                .frame(width: 30, height: 26)
+                .frame(width: 40, height: 34)
                 .contentShape(Rectangle())
                 .background(Circle().fill(Color.white.opacity(bandToggleHovering ? 0.10 : 0)))
         }
         .buttonStyle(.plain)
         .onHover { bandToggleHovering = $0 }
-        .help(L10n.t("toggle_sidebar_command"))
+        .help(settings.sidebarVisible ? L10n.t("hide_sidebar_command") : L10n.t("show_sidebar_command"))
     }
 
     // MARK: 分节(小标题 + 行)

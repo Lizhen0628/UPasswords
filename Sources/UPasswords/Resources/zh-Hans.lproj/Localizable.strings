@@ -587,7 +587,10 @@
 /* 邮件式主窗口 UI(工具栏/侧栏/列表) */
 "items_count_text" = "%lld 个项目";
 "no_selection_text" = "未选择项目";
-"toggle_sidebar_command" = "显示/隐藏侧栏";
 "date_today_text" = "今天";
 "date_yesterday_text" = "昨天";
 "other_button" = "其他";
+
+/* 侧栏开关动态提示 */
+"show_sidebar_command" = "显示边栏";
+"hide_sidebar_command" = "隐藏边栏";

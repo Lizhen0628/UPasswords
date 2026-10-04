@@ -587,7 +587,10 @@
 /* Mail-style main window UI (toolbar/sidebar/list) */
 "items_count_text" = "%lld items";
 "no_selection_text" = "No Item Selected";
-"toggle_sidebar_command" = "Toggle Sidebar";
 "date_today_text" = "Today";
 "date_yesterday_text" = "Yesterday";
 "other_button" = "Other";
+
+/* Sidebar toggle dynamic tooltips */
+"show_sidebar_command" = "Show Sidebar";
+"hide_sidebar_command" = "Hide Sidebar";

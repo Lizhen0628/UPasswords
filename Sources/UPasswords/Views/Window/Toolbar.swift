@@ -38,15 +38,15 @@ struct MainToolbarView: View {
                     Log.info("ui", "toolbar toggle sidebar visible=\(settings.sidebarVisible)")
                 } label: {
                     Image(systemName: "sidebar.left")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.system(size: 22, weight: .medium))
                         .foregroundStyle(Color.white.opacity(0.72))
-                        .frame(width: 30, height: 26)
+                        .frame(width: 40, height: 34)
                         .contentShape(Rectangle())
                         .background(Circle().fill(Color.white.opacity(fallbackToggleHovering ? 0.12 : 0)))
                 }
                 .buttonStyle(.plain)
                 .onHover { fallbackToggleHovering = $0 }
-                .help(L10n.t("toggle_sidebar_command"))
+                .help(L10n.t("show_sidebar_command"))
             }
 
             VStack(alignment: .leading, spacing: 1) {
