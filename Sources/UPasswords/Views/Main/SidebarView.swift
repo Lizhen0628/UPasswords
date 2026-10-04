@@ -18,6 +18,8 @@ struct SidebarView: View {
     /// 卡片底色加深系数:叠加黑罩,使侧栏与右侧两栏明显分层。
     private static let cardTintOpacity: Double = 0.16
 
+    @State private var bandToggleHovering = false
+
     /// Row order inside the first (database/account) section.
     private static let safeOrder: [SpecialLabel] = [.allCards, .favorites, .creditCards, .notes, .oneTimeCodes, .passkeys, .recent]
     private static let securityOrder: [SpecialLabel] = [.compromised, .weakPasswords, .samePasswords]
@@ -26,10 +28,15 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 红绿灯条带:窗口底色 + 可拖拽,卡片从其下悬浮开始
-            WindowDragArea()
-                .frame(maxWidth: .infinity)
-                .frame(height: Self.topBandHeight)
+            // 红绿灯条带:窗口底色 + 可拖拽,右端是邮件式的侧栏开关(裸图标),
+            // 卡片从条带之下悬浮开始
+            ZStack(alignment: .trailing) {
+                WindowDragArea()
+                    .frame(maxWidth: .infinity)
+                    .frame(height: Self.topBandHeight)
+                sidebarToggleButton
+                    .padding(.trailing, 12)
+            }
 
             // 悬浮玻璃卡片:圆角 + 深色材质 + 细描边 + 轻投影
             VStack(spacing: 0) {
@@ -85,6 +92,25 @@ struct SidebarView: View {
             .frame(maxHeight: .infinity, alignment: .top)
         }
         .background(Color.appBackground)
+    }
+
+    /// 邮件式侧栏开关:条带内右端、红绿灯同排的裸图标(无胶囊底),
+    /// 悬停现圆形浅高亮。
+    private var sidebarToggleButton: some View {
+        Button {
+            settings.sidebarVisible.toggle()
+            Log.info("ui", "band toggle sidebar visible=\(settings.sidebarVisible)")
+        } label: {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.72))
+                .frame(width: 30, height: 26)
+                .contentShape(Rectangle())
+                .background(Circle().fill(Color.white.opacity(bandToggleHovering ? 0.10 : 0)))
+        }
+        .buttonStyle(.plain)
+        .onHover { bandToggleHovering = $0 }
+        .help(L10n.t("toggle_sidebar_command"))
     }
 
     // MARK: 分节(小标题 + 行)

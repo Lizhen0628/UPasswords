@@ -27,7 +27,23 @@ struct MainToolbarView: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            sidebarToggleButton
+            // 侧栏显示时开关在侧栏条带内(邮件式);这里只在侧栏隐藏时兜底,
+            // 否则收起后没有入口再打开
+            if !settings.sidebarVisible {
+                Button {
+                    settings.sidebarVisible.toggle()
+                    Log.info("ui", "toolbar toggle sidebar visible=\(settings.sidebarVisible)")
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.75))
+                        .frame(width: 28, height: 26)
+                        .contentShape(Rectangle())
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.045)))
+                }
+                .buttonStyle(.plain)
+                .help(L10n.t("toggle_sidebar_command"))
+            }
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(selectionTitle)
@@ -68,23 +84,7 @@ struct MainToolbarView: View {
         .background(Color.appBackground)
     }
 
-    // MARK: 左区:侧栏开关 + 标题/副标题
-
-    private var sidebarToggleButton: some View {
-        Button {
-            settings.sidebarVisible.toggle()
-            Log.info("ui", "toolbar toggle sidebar visible=\(settings.sidebarVisible)")
-        } label: {
-            Image(systemName: "sidebar.left")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(Color.white.opacity(0.75))
-                .frame(width: 28, height: 26)
-                .contentShape(Rectangle())
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.045)))
-        }
-        .buttonStyle(.plain)
-        .help(L10n.t("toggle_sidebar_command"))
-    }
+    // MARK: 标题/副标题
 
     private var selectionTitle: String {
         switch ctx.selection {
