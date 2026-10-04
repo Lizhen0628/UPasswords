@@ -17,6 +17,8 @@ struct SidebarView: View {
     private static let panelInset: CGFloat = 6
     /// 面板底色加深系数:叠加黑罩压住透出的壁纸,使面板沉稳、明显深于右侧。
     private static let panelTintOpacity: Double = 0.32
+    /// 行相对分节标题的右缩进:体现「标题 → 子项」层级。
+    private static let rowIndent: CGFloat = 14
 
     @State private var bandToggleHovering = false
 
@@ -53,23 +55,27 @@ struct SidebarView: View {
                     section(title: ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName) {
                         ForEach(safeRows) { sp in
                             SidebarRow(sp: sp)
+                                .padding(.leading, Self.rowIndent)
                         }
                     }
                     if !ctx.database.labels.isEmpty {
                         section(title: L10n.db("labels_group")) {
                             ForEach(sortedLabels) { label in
                                 SidebarLabelRow(label: label)
+                                    .padding(.leading, Self.rowIndent)
                             }
                         }
                     }
                     section(title: L10n.db("security_group")) {
                         ForEach(Self.securityOrder) { sp in
                             SidebarRow(sp: sp)
+                                .padding(.leading, Self.rowIndent)
                         }
                     }
                     section(title: L10n.db("special_group")) {
                         ForEach(Self.specialOrder) { sp in
                             SidebarRow(sp: sp)
+                                .padding(.leading, Self.rowIndent)
                         }
                     }
                 }
