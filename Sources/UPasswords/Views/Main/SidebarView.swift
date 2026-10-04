@@ -102,11 +102,11 @@ struct SidebarView: View {
             Log.info("ui", "panel toggle sidebar visible=\(settings.sidebarVisible)")
         } label: {
             Image(systemName: "sidebar.left")
-                .font(.system(size: 22, weight: .medium))
+                .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(Color.white.opacity(0.72))
                 .frame(width: 40, height: 34)
                 .contentShape(Rectangle())
-                .background(Circle().fill(Color.white.opacity(bandToggleHovering ? 0.10 : 0)))
+                .background(Ellipse().fill(Color.white.opacity(bandToggleHovering ? 0.10 : 0)))
         }
         .buttonStyle(.plain)
         .onHover { bandToggleHovering = $0 }
