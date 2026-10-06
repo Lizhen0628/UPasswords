@@ -91,6 +91,15 @@ struct PasswordDatabase: Codable, Equatable {
         upsertGhost(g)
     }
 
+    /// Registers a tombstone and removes the label (deleteCardLabel:).
+    /// 不登记墓碑的话,合并时会被仍持有该标签的远端副本复活(删了又回来)。
+    mutating func deleteLabelPermanently(id: Int, now: Date = Date()) {
+        labels.removeAll { $0.id == id }
+        var g = byIdGhost(id) ?? Ghost(id: id, time: now.millis)
+        g.time = now.millis
+        upsertGhost(g)
+    }
+
     private func byIdGhost(_ id: Int) -> Ghost? { ghosts.first { $0.id == id } }
     private mutating func upsertGhost(_ g: Ghost) {
         if let i = ghosts.firstIndex(where: { $0.id == g.id }) { ghosts[i] = g } else { ghosts.append(g) }

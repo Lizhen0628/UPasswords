@@ -18,13 +18,13 @@ struct CardListView: View {
     }
 
     private var cards: [Card] {
-        ctx.cards(for: ctx.selection, search: ctx.searchText)
+        ctx.cards(for: ctx.selection, search: ctx.searchQuery)
     }
 
     private var list: some View {
         List(selection: $ctx.selectedCardId) {
             ForEach(cards) { card in
-                CardListCellView(card: card, preview: ctx.searchText.isEmpty ? nil : ctx.searchPreview(for: card, word: String(ctx.searchText.lowercased().split(separator: " ").first ?? "")))
+                CardListCellView(card: card, preview: ctx.searchQuery.isEmpty ? nil : ctx.searchPreview(for: card, word: String(ctx.searchQuery.lowercased().split(separator: " ").first ?? "")))
                     .tag(card.id)
                     .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                     .frame(height: 50)

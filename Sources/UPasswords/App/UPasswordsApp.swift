@@ -34,8 +34,13 @@ struct UPasswordsApp: App {
             PreferencesView()
                 .environmentObject(ctx)
                 .environmentObject(ctx.settings)
-                .frame(minWidth: 560, minHeight: 420)
+                // 紧凑定版(同主窗内 PreferencesSheet 的比例):宽度以 7 个标签
+                // 铺满标签条为准(7×66+6×14+28≈602),内容区 PaneContainer
+                // 限宽 520 足以容纳;高度让外观页 10 行免滚动。
+                .frame(width: 620, height: 500)
         }
+        // 窗口锁定为内容尺寸:设置窗不可拖拽放大,避免再出现大片留白的宽松版式
+        .windowResizability(.contentSize)
     }
 
     /// DEBUG 专用:UP_SCREENSHOT_SIZE=WxH 覆盖默认窗口尺寸(截图对比用)。

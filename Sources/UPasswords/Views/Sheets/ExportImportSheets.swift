@@ -123,6 +123,8 @@ struct ImportSheet: View {
             ctx.save()
             imported = n
             log.append("\(L10n.t("conversion_completed_message")) — \(n) \(L10n.t("cards_title"))")
+            // 导入的卡片不经 upsertCard,批量补一次在线泄露检查
+            ctx.scheduleSilentBreachCheck()
         } catch {
             log.append("\(L10n.t("conversion_failed_message")): \(error.localizedDescription)")
         }

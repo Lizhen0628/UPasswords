@@ -107,7 +107,12 @@ extension AppContext {
 
     /// Sidebar badge counts (show_card_count_setting)。只过滤不排序。
     func count(for selection: SidebarSelection) -> Int {
-        filteredCards(for: selection, search: "").count
+        count(for: selection, search: "")
+    }
+
+    /// 计数场景(工具栏副标题):当前选择 + 搜索词,只过滤不排序。
+    func count(for selection: SidebarSelection, search: String) -> Int {
+        filteredCards(for: selection, search: search).count
     }
 
     // MARK: - Search (XCard.satisfiesToSearchWords / previewForSearchWords)

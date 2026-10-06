@@ -1,5 +1,9 @@
 import SwiftUI
 
+/// 云同步弹窗内容统一列宽:480 弹窗宽 − 左右各 14 内边距。
+/// 说明文字钳制到该宽度,避免撑宽弹窗导致单选组位移。
+private let cloudSheetContentWidth: CGFloat = 452
+
 // MARK: - Compromised passwords
 
 struct CompromisedSheet: View {
@@ -78,14 +82,9 @@ struct CompromisedSheet: View {
     private func check(online: Bool) async {
         running = true
         compromisedCards = []
-        let passwords = Set(ctx.database.activeCards.flatMap { card in
-            card.fields.filter { $0.type == .password && !$0.value.isEmpty }.map(\.value)
-        })
-        let result = await CompromisedService.check(passwords: passwords, demo: !online)
-        offline = result.offline
-        compromisedCards = ctx.database.activeCards.filter { card in
-            card.fields.contains { $0.type == .password && result.compromisedPasswords.contains($0.value) }
-        }
+        let outcome = await ctx.checkCompromisedPasswords(online: online)
+        offline = outcome.result.offline
+        compromisedCards = outcome.cards
         resultText = "\(L10n.t("compromised_passwords_found_text")) \(compromisedCards.count)" + (offline ? " (offline)" : "")
         running = false
     }
@@ -109,16 +108,17 @@ struct ConfigureCloudSheet: View {
             okTitle: L10n.t("save_button"),
             onCancel: { dismiss() },
             onOk: {
-                if settings.cloud == .webdav {
-                    Task { await test() }
-                } else {
+                if settings.cloud == .none {
                     saved()
+                } else {
+                    Task { await test() }
                 }
             },
             content: {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(L10n.t("cloud_sync_text"))
                         .font(.callout).foregroundStyle(.secondary)
+                        .frame(width: cloudSheetContentWidth, alignment: .leading)
                     Picker(L10n.t("cloud_prompt"), selection: Binding(
                         get: { settings.cloud }, set: { settings.cloudType = $0.rawValue }
                     )) {
@@ -151,6 +151,10 @@ struct ConfigureCloudSheet: View {
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                         }
+                    } else if settings.cloud == .icloud {
+                        Label(L10n.t("icloud_sync_info"), systemImage: "icloud")
+                            .font(.callout).foregroundStyle(.secondary)
+                            .frame(width: cloudSheetContentWidth, alignment: .leading)
                     } else if settings.cloud != .none {
                         Label(L10n.t("not_configured_state"), systemImage: "info.circle")
                             .font(.callout).foregroundStyle(.secondary)
@@ -175,9 +179,11 @@ struct ConfigureCloudSheet: View {
     }
 
     private func test() async {
+        guard let driver = ctx.makeCloudDriver() else { return }
+        Log.info("ui", "cloud connection test from setup sheet (cloud=\(settings.cloud.rawValue))")
         testing = true
         do {
-            try await WebDavDriver(settings: settings.webdav, databaseName: ctx.databaseName).testConnection()
+            try await driver.testConnection()
             testResult = L10n.t("success_title")
             ctx.markSetupTaskDone(.cloudSync)
             dismiss()
@@ -188,3 +194,56 @@ struct ConfigureCloudSheet: View {
     }
 }
 
+
+// MARK: - Sync conflict
+
+/// 同步冲突决策弹窗:本地与云端自上次同步后都有修改时,由用户决定覆盖方向。
+/// 「稍后」丢弃暂存现场,下次同步重新检测;两个覆盖动作都不可撤销,故
+/// 不设默认按钮(Enter 走「稍后」安全项,两个覆盖必须显式点击)。
+struct SyncConflictSheet: View {
+    @EnvironmentObject var ctx: AppContext
+    @Environment(\.dismiss) var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text(L10n.t("sync_conflict_title"))
+                .font(.headline)
+                .padding(.top, 14).padding(.bottom, 10)
+            Divider()
+            VStack(alignment: .leading, spacing: 10) {
+                Text(L10n.t("sync_conflict_text"))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let conflict = ctx.pendingSyncConflict {
+                    Text(String(format: L10n.t("sync_conflict_local_state"), conflict.localCards, conflict.localLabels))
+                        .font(.callout)
+                    Text(String(format: L10n.t("sync_conflict_remote_state"), conflict.remoteCards, conflict.remoteLabels))
+                        .font(.callout)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            Divider()
+            HStack {
+                Button(L10n.t("sync_conflict_postpone")) {
+                    ctx.postponeSyncConflict()
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button(L10n.t("sync_conflict_use_remote")) {
+                    Task { await ctx.resolveSyncConflict(useLocal: false) }
+                    dismiss()
+                }
+                Button(L10n.t("sync_conflict_use_local")) {
+                    Task { await ctx.resolveSyncConflict(useLocal: true) }
+                    dismiss()
+                }
+            }
+            .padding(10)
+        }
+        .frame(minWidth: 440, minHeight: 180)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}

@@ -260,9 +260,9 @@ extension Card {
         fields.contains { $0.type.needsScoring && !$0.value.isEmpty && PasswordStrength.score($0.value).score <= 1 }
     }
 
-    /// Offline compromised flag (fast mark; full HIBP check runs in the sheet).
+    /// 离线快标(内嵌常见集 + 在线检查动态积累的清单);完整 HIBP 检查在弹窗/自动检查里。
     var compromised: Bool {
-        fields.contains { $0.type.needsScoring && CompromisedService.offlineDemoSet.contains($0.value) }
+        fields.contains { $0.type.needsScoring && !$0.value.isEmpty && CompromisedService.isLocallyBreached($0.value) }
     }
 }
 

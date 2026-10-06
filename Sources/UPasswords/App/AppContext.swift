@@ -9,7 +9,7 @@ import Combine
 /// - 本文件:会话状态、启动引导、锁定/解锁生命周期、持久化、自动锁
 /// - AppContext+CardList:侧栏卡片列表策略、搜索、最近打开
 /// - AppContext+Actions:卡片/标签 CRUD、初始化清单、历史
-/// - AppContext+Sync:修改密码、备份、WebDAV 同步
+/// - AppContext+Sync:修改密码、备份、云同步(WebDAV / iCloud Drive)
 @MainActor
 final class AppContext: ObservableObject {
     enum Phase: Equatable {
@@ -31,7 +31,12 @@ final class AppContext: ObservableObject {
     }
     @Published var selection: SidebarSelection = .special(.allCards)
     @Published var selectedCardId: Int? = nil
-    @Published var searchText: String = ""
+    /// 搜索框逐键文本。故意不用 @Published(同 editDraft/lastActivity 先例,规范 11.5):
+    /// 逐键广播 objectWillChange 会让整棵视图树重渲染造成输入卡顿;
+    /// TextField 编辑期间自绘显示,防抖后的 searchQuery 才驱动列表/计数。
+    private(set) var searchText: String = ""
+    /// 防抖后真正参与列表/计数过滤的搜索词(防抖逻辑见 SearchInputDebouncer)。
+    @Published private(set) var searchQuery: String = ""
     /// 编辑工作副本。故意不用 @Published:填字段值时每个按键都会写入,
     /// @Published 会逐键广播 objectWillChange 让整棵视图树重渲染(输入卡顿)。
     /// didSet 只在「打开(nil → 有值)」和「关闭(有值 → nil)」时通知视图;
@@ -56,6 +61,15 @@ final class AppContext: ObservableObject {
     @Published var lastSync: Date? = nil
     @Published var lastSyncFailed: Date? = nil
     @Published var failedUnlockAttempts = 0
+
+    enum SyncState: Equatable {
+        case disabled, idle, syncing, conflict, error(String)
+    }
+
+    /// 未决同步冲突现场(检测与裁决逻辑见 AppContext+Sync)。故意不用
+    /// @Published:弹窗呈现经 activeSheet 驱动,这里只保存裁决所需现场,
+    /// 弹窗打开时按需读取。
+    var pendingSyncConflict: PendingSyncConflict? = nil
     // 空闲追踪用,不进 UI。故意不用 @Published:活动监视器把每次键盘/鼠标
     // 事件都算作活动,若发布会在打字时逐键触发整棵视图树重渲染(输入卡顿)。
     var lastActivity: Date = Date()
@@ -63,10 +77,6 @@ final class AppContext: ObservableObject {
     // 本会话已尝试抓取的卡片,防止反复请求失败站点;补抓串行任务句柄。
     var iconFetchAttempted = Set<Int>()
     var iconBackfillTask: Task<Void, Never>? = nil
-
-    enum SyncState: Equatable {
-        case disabled, idle, syncing, error(String)
-    }
 
     /// In-memory password, present only while unlocked.
     /// 仅生命周期代码(unlock/lock/erase/changePassword)可写入。
@@ -76,6 +86,13 @@ final class AppContext: ObservableObject {
     let store = DatabaseStore.shared
     private var cancellables = Set<AnyCancellable>()
     private var autoLockTimer: Timer? = nil
+    /// 云同步到期 ticker(5s 一跳,由守卫条件过滤;逻辑见 AppContext+Sync)。
+    /// internal:extension 在独立文件,无法用 private(规范 3.7)。
+    var autoSyncTimer: Timer? = nil
+    /// 泄露库自动检查 ticker(60s 一跳;逻辑见 AppContext+Security)。
+    var breachCheckTimer: Timer? = nil
+    /// 泄露检查进行中标志:防止 60s ticker 在一次长检查未完成时重复发起。
+    var breachCheckInFlight = false
 
     static let shared = AppContext()
 
@@ -277,6 +294,7 @@ final class AppContext: ObservableObject {
         databaseName = name
         self.password = password
         phase = .unlocked
+        pendingSyncConflict = nil // 切换/解锁数据库:旧库的冲突现场作废
         lastActivity = Date() // otherwise the idle timer re-locks right after unlocking
         failedUnlockAttempts = 0
         selection = .special(.allCards)
@@ -284,6 +302,8 @@ final class AppContext: ObservableObject {
         Log.info("lifecycle", "unlocked \"\(name)\": \(database.cards.count) cards, \(database.labels.count) labels")
         scheduleIconBackfill()
         scheduleAutoBackupIfNeeded()
+        startAutoSyncTickerIfNeeded()
+        startBreachCheckTickerIfNeeded()
         markSetupTaskDoneIf(.cloudSync, when: settings.cloud != .none)
         markSetupTaskDoneIf(.autoBackup, when: settings.autoBackupEnabled)
         markSetupTaskDoneIf(.touchID, when: settings.fastUnlock && PasswordStore.biometricAvailable())
@@ -311,6 +331,10 @@ final class AppContext: ObservableObject {
         phase = .locked
         activeSheet = nil
         editDraft = nil
+        // 未决冲突现场随之作废:下次解锁后的同步会重新检测
+        pendingSyncConflict = nil
+        // 关闭设置窗等独立窗口,不让它们残留在锁屏之上
+        WindowChromeManager.shared.closeAuxiliaryWindows()
     }
 
     var touchIDAvailable: Bool {
@@ -374,6 +398,7 @@ final class AppContext: ObservableObject {
         database = PasswordDatabase()
         databaseName = ""
         password = ""
+        pendingSyncConflict = nil
         phase = .setup
     }
 
@@ -395,6 +420,34 @@ final class AppContext: ObservableObject {
         saveDebounce = Just(())
             .delay(for: .milliseconds(600), scheduler: RunLoop.main)
             .sink { [weak self] _ in self?.save() }
+    }
+
+    // MARK: - Search (防抖输入,过滤逻辑在 AppContext+CardList)
+
+    /// 防抖间隔:停顿该时长后才把搜索文本应用到列表。
+    private static let searchDebounceInterval = Duration.milliseconds(200)
+
+    /// 搜索输入防抖器:逐键 setSearchText 只记录文本,停顿后一次性发布 searchQuery。
+    private lazy var searchDebouncer = SearchInputDebouncer(interval: Self.searchDebounceInterval) { [weak self] text in
+        guard let self, self.searchQuery != text else { return }
+        self.searchQuery = text
+        Log.info("ui", "search apply chars=\(text.count)")
+    }
+
+    /// TextField 绑定入口:记录文本并重排防抖;清空立即生效(列表即时恢复)。
+    func setSearchText(_ text: String) {
+        searchText = text
+        searchDebouncer.textChanged(text)
+    }
+
+    /// 清空搜索(搜索框 ✕ 按钮):立即生效,不等防抖。
+    func clearSearch() {
+        guard !searchText.isEmpty || !searchQuery.isEmpty else { return }
+        searchText = ""
+        searchDebouncer.clear()
+        // searchText 非 @Published,手动通知一次以刷新搜索框显示
+        objectWillChange.send()
+        Log.info("ui", "search clear")
     }
 
     // MARK: - Auto-lock (LockedState + auto_lock_setting)

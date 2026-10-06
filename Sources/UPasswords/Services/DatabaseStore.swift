@@ -172,6 +172,17 @@ final class DatabaseStore {
         return keep
     }
 
+    /// 删除单个备份文件(备份列表的删除入口)。
+    /// - Parameter name: 数据库名,校验目标确在该库的备份目录内,防止误删他库文件。
+    func deleteBackup(_ url: URL, name: String) throws {
+        guard url.deletingLastPathComponent().standardizedFileURL == backupDir(for: name).standardizedFileURL else {
+            Log.error("backup", "deleteBackup rejected: \(url.lastPathComponent) is outside \"\(name)\" backup dir")
+            throw StoreError(L10n.t("backup_delete_error"))
+        }
+        try fm.removeItem(at: url)
+        Log.info("backup", "backup deleted: \"\(name)\"/\(url.lastPathComponent)")
+    }
+
     func restore(backup: URL, to name: String) throws {
         Log.info("backup", "restore \(backup.lastPathComponent) → \"\(name).upw\"")
         let data = try Data(contentsOf: backup)

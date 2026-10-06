@@ -19,13 +19,58 @@ extension AppContext {
                     c.fields[j].putHistoryValue(old.value, time: old.modifiedOr(c.modified))
                 }
             }
+            checkChangedPasswords(on: c, against: database.cards[i])
             database.cards[i] = c
         } else {
+            checkChangedPasswords(on: c, against: nil)
             database.cards.append(c)
         }
         selectedCardId = c.id
         saveDebounced()
         scheduleIconFetchAfterSave(cardId: c.id)
+    }
+
+    /// 保存/修改卡片时,对新增或变更过的密码做泄露检查。本地清单已知的
+    /// 泄露密码立即警告(不再发起查询);其余走在线检查(k-匿名,只上传
+    /// SHA-1 前 5 位),命中提示并记入本地动态清单。离线时静默跳过在线部分。
+    private func checkChangedPasswords(on newCard: Card, against oldCard: Card?) {
+        let oldValues = Set(oldCard?.fields.filter { $0.type == .password }.map(\.value) ?? [])
+        let values = Set(newCard.fields
+            .filter { $0.type == .password && !$0.value.isEmpty }
+            .map(\.value)
+            .filter { !oldValues.contains($0) })
+        guard !values.isEmpty else { return }
+        let knownBreached = values.filter { CompromisedService.isLocallyBreached($0) }
+        let toCheck = values.subtracting(knownBreached)
+        let cardId = newCard.id
+        let titleLen = newCard.title.count
+        Task { [weak self] in
+            guard let self else { return }
+            if !knownBreached.isEmpty {
+                objectWillChange.send()
+                Log.warn("security", "saved password matches local breach list cardId=\(cardId) title.len=\(titleLen) count=\(knownBreached.count)")
+                AppToast.shared.show(L10n.t("password_breached_warning"))
+            }
+            guard !toCheck.isEmpty else { return }
+            let startedAt = Date()
+            let result = await CompromisedService.check(passwords: toCheck, demo: false)
+            let ms = Int(Date().timeIntervalSince(startedAt) * 1000)
+            guard !result.offline else {
+                Log.info("security", "save-time breach check offline (hibp unreachable), skipped \(toCheck.count) password(s) cardId=\(cardId) ms=\(ms)")
+                return
+            }
+            if result.compromisedPasswords.isEmpty {
+                Log.info("security", "save-time breach check: \(toCheck.count) password(s) clean cardId=\(cardId) ms=\(ms)")
+                if knownBreached.isEmpty {
+                    AppToast.shared.show(L10n.t("password_not_breached_message"))
+                }
+                return
+            }
+            CompromisedService.recordBreached(result.compromisedPasswords)
+            objectWillChange.send()
+            Log.warn("security", "saved password is breached cardId=\(cardId) title.len=\(titleLen) count=\(result.compromisedPasswords.count) ms=\(ms)")
+            AppToast.shared.show(L10n.t("password_breached_warning"))
+        }
     }
 
     func trashCard(_ id: Int) {
@@ -168,7 +213,7 @@ extension AppContext {
 
     func deleteCardLabel(id: Int) {
         Log.info("ui", "deleteCardLabel id=\(id)")
-        database.labels.removeAll { $0.id == id }
+        database.deleteLabelPermanently(id: id)
         for i in database.cards.indices {
             database.cards[i].labelIds.removeAll { $0 == id }
         }

@@ -205,6 +205,21 @@ final class DatabaseXMLTests: XCTestCase {
         XCTAssertNil(a.card(id: 7))
     }
 
+    /// 标签删除必须登记墓碑:否则合并时会被仍持有该标签的远端副本复活
+    /// ("删掉的标签每次同步/重启后又回来"的回归)。
+    func testMergeGhostSuppressesLabelResurrection() {
+        var a = PasswordDatabase()
+        a.deleteLabelPermanently(id: 777)
+        XCTAssertTrue(a.ghosts.contains { $0.id == 777 }, "删除标签必须登记墓碑")
+        var b = PasswordDatabase()
+        b.labels = [CardLabel(id: 777, name: "xx")]
+        a.merge(with: b)
+        XCTAssertFalse(a.labels.contains { $0.id == 777 }, "墓碑必须抑制标签复活")
+        b.labels.append(CardLabel(id: 778, name: "kept"))
+        a.merge(with: b)
+        XCTAssertTrue(a.labels.contains { $0.id == 778 }, "未删除的标签照常合并")
+    }
+
     func testDefaultDatabaseContents() {
         var db = PasswordDatabase.createDefault(now: Date(timeIntervalSince1970: 0))
         XCTAssertEqual(db.labels.count, 3, "商务/私人/网络账号")

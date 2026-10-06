@@ -29,7 +29,8 @@ enum WindowChromeMode {
 
 /// 单例管理器:同一窗口在 锁定/解锁 相位间切换时 chrome 需要来回切换;
 /// SwiftUI 布局/窗口恢复会偶发把系统标题栏改回来,因此用「通知 + 永久低频
-/// 定时器」自愈重应用。originalY 按按钮实例全局缓存,避免跨相位重复累加位移。
+/// 定时器」自愈重应用。三灯容器基准按容器实例缓存,主窗框架随用随记,
+/// 避免跨相位重复累加位移、窗口关闭重建后落回默认位置。
 @MainActor
 final class WindowChromeManager: NSObject {
     static let shared = WindowChromeManager()
@@ -39,11 +40,15 @@ final class WindowChromeManager: NSObject {
     static let trafficLightShift: CGFloat = 10
     static let trafficLightShiftX: CGFloat = 8
     static let lockWindowSize = NSSize(width: 500, height: 380)
+    /// 主窗最小可用尺寸(MainWindowView 的 minWidth/minHeight);更小的 frame
+    /// 是过渡期被挤压出来的「中毒」帧,不作为主窗框架记录/恢复。
+    static let minMainWidth: CGFloat = 860
+    static let minMainHeight: CGFloat = 460
 
     private weak var window: NSWindow?
     private var mode: WindowChromeMode = .plain
-    private var originalY: [ObjectIdentifier: CGFloat] = [:]
-    private var originalX: [ObjectIdentifier: CGFloat] = [:]
+    /// 三灯公共容器的标准位置基准(按容器实例缓存)。
+    private var lightContainerBase: [ObjectIdentifier: NSPoint] = [:]
     private var savedMainFrame: NSRect?
     private var observed = false
     private var kvoTokens: [NSKeyValueObservation] = []
@@ -67,15 +72,27 @@ final class WindowChromeManager: NSObject {
             observe(window)
         }
         enforce()
-        resizeForMode(window, animated: !isNewWindow)
+        resizeForMode(window)
         startTimers()
+    }
+
+    /// 关闭主窗以外的所有可见标准窗口(如设置窗)——进入锁屏时调用,
+    /// 避免它们残留在锁屏界面之上。NSPanel(菜单/状态栏/弹层)不在此列。
+    func closeAuxiliaryWindows() {
+        guard let main = window else { return }
+        for w in NSApp.windows where w !== main {
+            guard w.isVisible, !w.isKind(of: NSPanel.self) else { continue }
+            Log.info("chrome", "close auxiliary window on lock title=\(w.title)")
+            w.performClose(nil)
+        }
     }
 
     private func observe(_ win: NSWindow) {
         guard !observed else { return }
         observed = true
         for name in [NSWindow.didResizeNotification, NSWindow.didBecomeKeyNotification,
-                     NSWindow.didBecomeMainNotification, NSWindow.didExitFullScreenNotification,
+                     NSWindow.didBecomeMainNotification, NSWindow.didEndLiveResizeNotification,
+                     NSWindow.didMoveNotification, NSWindow.didExitFullScreenNotification,
                      NSWindow.didEnterFullScreenNotification] {
             NotificationCenter.default.addObserver(self, selector: #selector(enforceDelayed), name: name, object: win)
         }
@@ -118,9 +135,23 @@ final class WindowChromeManager: NSObject {
 
     /// 立即 + 短延迟各执行一次(SwiftUI 常在本轮 runloop 稍后重置布局)
     @objc private func enforceDelayed() {
+        persistMainFrame()
         enforce()
         // 存量 GCD:调用点在主线程,延时复核仍在主队列,无需回主线程
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.enforce() }
+    }
+
+    /// 记录用户实际使用中的主窗框架:窗口被关闭后经菜单栏「显示」重建时,
+    /// 据此把新窗口放回原位,而不是落在 SwiftUI 的默认尺寸/位置上。
+    private func persistMainFrame() {
+        guard mode == .main, let win = window else { return }
+        guard !win.styleMask.contains(.fullScreen) else { return }
+        let f = win.frame
+        guard f.width >= Self.minMainWidth, f.height >= Self.minMainHeight else { return }
+        if savedMainFrame != f {
+            savedMainFrame = f
+            log("persist main frame \(f)")
+        }
     }
 
     private func startTimers() {
@@ -194,40 +225,43 @@ final class WindowChromeManager: NSObject {
                 log("enforce: \(mode) → isMovable=true (standard drag)")
             }
             shiftLights(win, down: false)
-            resizeForMode(win, animated: false)   // 窗口恢复可能改回尺寸,随自愈一起纠正
+            resizeForMode(win)   // 窗口恢复可能改回尺寸,随自愈一起纠正
         }
     }
 
-    /// 三灯在容器内下移+右移(NSView 不裁剪子视图,移出 28pt 容器仍可见可点)。
-    /// 全屏由系统全权管理红绿灯(隐藏、悬停显示、独立灯位),不做位移干预,
-    /// 否则自绘位移会与系统的全屏排布互相打架(灯被顶到屏幕边缘/灰显异常)。
+    /// 三灯整体下移+右移(NSView 不裁剪子视图,移出 28pt 容器仍可见可点)。
+    /// 移动三灯的「公共容器」而非逐个按钮:容器内部的三灯排布(顺序、间距、
+    /// Tahoe 悬停聚拢动画)完全交给系统;逐按钮改 frame 会与系统布局互相踩踏,
+    /// 出现灯距拉大/顺序错乱/某颗灯不见了的错乱排布。
+    /// 全屏由系统全权管理红绿灯(隐藏、悬停显示、独立灯位),不做位移干预。
     private func shiftLights(_ win: NSWindow, down: Bool) {
         if win.styleMask.contains(.fullScreen) {
             Log.debug("chrome", "shiftLights skipped (fullscreen, system-managed)")
             return
         }
+        var containers: [ObjectIdentifier: NSView] = [:]
         for type: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
-            guard let button = win.standardWindowButton(type) else { continue }
-            let id = ObjectIdentifier(button)
-            if originalY[id] == nil { originalY[id] = button.frame.origin.y }
-            if originalX[id] == nil { originalX[id] = button.frame.origin.x }
-            if let base = originalY[id] {
-                let target = down ? base - Self.trafficLightShift : base
-                if abs(button.frame.origin.y - target) > 0.5 {
-                    button.frame.origin.y = target
-                }
+            guard let superview = win.standardWindowButton(type)?.superview else { continue }
+            containers[ObjectIdentifier(superview)] = superview
+        }
+        for (id, view) in containers {
+            if lightContainerBase[id] == nil {
+                lightContainerBase[id] = NSPoint(x: view.frame.origin.x, y: view.frame.origin.y)
             }
-            if let baseX = originalX[id] {
-                let targetX = down ? baseX + Self.trafficLightShiftX : baseX
-                if abs(button.frame.origin.x - targetX) > 0.5 {
-                    button.frame.origin.x = targetX
-                }
+            guard let base = lightContainerBase[id] else { continue }
+            let target = NSPoint(
+                x: down ? base.x + Self.trafficLightShiftX : base.x,
+                y: down ? base.y - Self.trafficLightShift : base.y
+            )
+            if abs(view.frame.origin.x - target.x) > 0.5 || abs(view.frame.origin.y - target.y) > 0.5 {
+                view.frame.origin = target
+                log("shiftLights container → (\(Int(target.x)), \(Int(target.y))) down=\(down)")
             }
         }
     }
 
     /// 锁屏用小窗(固定尺寸),解锁恢复原主窗尺寸。
-    private func resizeForMode(_ win: NSWindow, animated: Bool) {
+    private func resizeForMode(_ win: NSWindow) {
         switch mode {
         case .lock:
             win.title = L10n.tBranded("app_title")
@@ -237,7 +271,9 @@ final class WindowChromeManager: NSObject {
             log("lock-resize: current=\(win.frame) fullSizeCV=\(win.styleMask.contains(.fullSizeContentView))")
             // 直接以锁定态启动时窗口天生就是锁定尺寸——这种框架绝不能存为
             // 「主窗框架」,否则解锁后主界面会被塞进小窗(内容挤压错位)。
-            if win.frame.width >= Self.lockWindowSize.width + 60 {
+            // 解锁使用期间 .main 模式已随移动/缩放持续刷新缓存,这里只在缓存
+            // 为空时补记一次,避免把重建窗口落位的默认 frame 覆盖上去。
+            if savedMainFrame == nil, win.frame.width >= Self.lockWindowSize.width + 60 {
                 savedMainFrame = win.frame
                 log("lock-resize: saved=\(win.frame)")
             }
@@ -246,19 +282,25 @@ final class WindowChromeManager: NSObject {
             var f = win.frame
             f.origin = NSPoint(x: center.x - f.width / 2, y: center.y - f.height / 2)
             f = Self.clampedToVisible(f, window: win)
-            win.setFrame(f, display: true, animate: animated)
+            win.setFrame(f, display: true, animate: false)
             log("lock-resize: shrank to \(win.frame)")
         case .main:
             guard let saved = savedMainFrame else { return }
+            // 已就位(SwiftUI 高频 updateNSView 反复 attach):只清缓存不再重排,
+            // 否则缓存被「恢复→通知→再记录」循环不断补回,每次 attach 都 setFrame
+            if abs(win.frame.width - saved.width) < 2, abs(win.frame.height - saved.height) < 2,
+               abs(win.frame.origin.x - saved.origin.x) < 2, abs(win.frame.origin.y - saved.origin.y) < 2 {
+                savedMainFrame = nil
+                return
+            }
             log("main-resize: current=\(win.frame) saved=\(saved)")
             savedMainFrame = nil
             // 解锁过渡中 SwiftUI 会先按内容最小尺寸(minWidth 760)把 500 宽的
             // 锁屏窗撑回最小主窗尺寸,若此时 frame 恰好卡在最小宽度,说明是被
             // 过渡挤压出来的「中毒」frame(并已被 SwiftUI 持久化),不是用户
             // 调过的尺寸 → 回退默认尺寸,避免主窗口从此永远是最小尺寸。
-            let minMainWidth: CGFloat = 860   // MainWindowView.frame(minWidth:)
             let restore: NSRect
-            if saved.width <= minMainWidth + 0.5 {
+            if saved.width <= Self.minMainWidth + 0.5 {
                 let visible = win.screen?.visibleFrame
                     ?? NSScreen.main?.visibleFrame
                     ?? NSRect(x: 0, y: 0, width: 970, height: 819)
@@ -274,8 +316,10 @@ final class WindowChromeManager: NSObject {
             }
             // 立即恢复(不再等 0.15s):否则最小尺寸约束先把窗口压小,用户看到
             // 主界面闪缩,SwiftUI 还可能把这个小 frame 持久化下来。
-            win.setFrame(restore, display: true, animate: animated)
-            log("main-resize: restored now=\(win.frame)")
+            // 恢复不做动画:窗口从居中的锁屏小窗滑回原位的过渡,会被看成
+            // 内容整体向一方漂移(如详情面板偏移);原生解锁也是瞬时就位
+            win.setFrame(restore, display: true, animate: false)
+            Log.info("chrome", "main frame restored to \(win.frame)")
             // SwiftUI 布局稍后仍可能再改窗口(解锁过渡期会重放恢复的 frame),
             // 复核一次;此后不再干预用户的调整。
             // 存量 GCD:调用点在主线程,延时复核仍在主队列,无需回主线程

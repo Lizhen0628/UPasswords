@@ -27,6 +27,7 @@ enum AppSheet: Identifiable, Hashable {
     case compromised
     case changePassword
     case configureCloud
+    case syncConflict       // 同步冲突:让用户选择本地覆盖云端 / 云端覆盖本地
     case eraseData          // 擦除数据 confirm
     case manageDatabases
     case selectDatabase
@@ -64,6 +65,7 @@ enum AppSheet: Identifiable, Hashable {
         case .compromised: return "compromised"
         case .changePassword: return "changePassword"
         case .configureCloud: return "configureCloud"
+        case .syncConflict: return "syncConflict"
         case .eraseData: return "eraseData"
         case .manageDatabases: return "manageDatabases"
         case .selectDatabase: return "selectDatabase"

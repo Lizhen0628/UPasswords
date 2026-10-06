@@ -98,8 +98,9 @@ struct MainToolbarView: View {
     }
 
     /// 副标题:当前选择 + 搜索过滤后的条数(同邮件「过滤条件: 未读 (n 封邮件)」)。
+    /// 用防抖后的 searchQuery(逐键 searchText 不重算,也不为计数付出排序开销)。
     private var subtitle: String {
-        let count = ctx.cards(for: ctx.selection, search: ctx.searchText).count
+        let count = ctx.count(for: ctx.selection, search: ctx.searchQuery)
         return String.localizedStringWithFormat(L10n.t("items_count_text"), count)
     }
 
@@ -110,13 +111,16 @@ struct MainToolbarView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.white.opacity(0.45))
-            TextField(L10n.t("search_text"), text: $ctx.searchText)
+            TextField(L10n.t("search_text"), text: Binding(
+                get: { ctx.searchText },
+                set: { ctx.setSearchText($0) }
+            ))
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .foregroundStyle(.white)
             if !ctx.searchText.isEmpty {
                 Button {
-                    ctx.searchText = ""
+                    ctx.clearSearch()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 10))

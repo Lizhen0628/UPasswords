@@ -24,6 +24,7 @@ enum SheetFactory {
         case .compromised: CompromisedSheet()
         case .changePassword: ChangePasswordSheet()
         case .configureCloud: ConfigureCloudSheet()
+        case .syncConflict: SyncConflictSheet()
         case .eraseData: EraseDataSheet()
         case .manageDatabases: ManageDatabasesSheet()
         case .selectDatabase: SelectDatabaseSheet()
@@ -53,7 +54,8 @@ struct PreferencesSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PreferencesView()
+            // 主窗内嵌 sheet:不同步窗口标题,避免改掉主窗标题
+            PreferencesView(syncWindowTitle: false)
             Divider()
             HStack {
                 Spacer()

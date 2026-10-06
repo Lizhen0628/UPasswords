@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// 统一日志设施:写 `~/Library/Application Support/UPasswords/Logs/UPasswords.log`,
 /// 并镜像到 stderr(终端直接跑二进制时可见)。
@@ -40,17 +41,35 @@ enum Log {
     /// 超过该大小轮转为 .old.log(保留一代),避免无限膨胀。
     private static let rotateBytes = 1_000_000
 
-    /// 生效的最低输出级别:env `UP_LOG_LEVEL` > UserDefaults `log.level` > 构建默认。
-    static let minLevel: Level = {
-        let raw = ProcessInfo.processInfo.environment["UP_LOG_LEVEL"]
-            ?? UserDefaults.standard.string(forKey: "log.level")
-        if let raw, let level = Level(rawValue: raw.lowercased()) { return level }
-        #if DEBUG
-        return .debug
-        #else
-        return .info
-        #endif
-    }()
+    /// 生效的最低输出级别。启动解析优先级:env `UP_LOG_LEVEL` > UserDefaults `log.level`
+    /// > 构建默认(DEBUG=debug,RELEASE=info);运行中可在设置(自动备份页)修改,
+    /// 即时生效并持久化(env 只影响启动时的初始解析)。
+    /// 写入仅在主线程(设置界面),读取在任意线程 → unfair lock 保护。
+    private static let minLevelStorage = OSAllocatedUnfairLock<Level>(
+        initialState: {
+            let raw = ProcessInfo.processInfo.environment["UP_LOG_LEVEL"]
+                ?? UserDefaults.standard.string(forKey: "log.level")
+            if let raw, let level = Level(rawValue: raw.lowercased()) { return level }
+            #if DEBUG
+            return .debug
+            #else
+            return .info
+            #endif
+        }()
+    )
+
+    static var minLevel: Level {
+        get { minLevelStorage.withLock { $0 } }
+        set { minLevelStorage.withLock { $0 = newValue } }
+    }
+
+    /// 设置界面修改日志级别:即时生效并持久化。
+    static func setMinLevel(_ raw: String) {
+        guard let level = Level(rawValue: raw.lowercased()) else { return }
+        minLevel = level
+        UserDefaults.standard.set(level.rawValue, forKey: "log.level")
+        info("app", "log level set to \(level.rawValue)")
+    }
 
     private static let queue = DispatchQueue(label: "upasswords.applog")
     nonisolated(unsafe) private static var handle: FileHandle?
@@ -108,6 +127,19 @@ enum Log {
 
     /// 冲刷异步写盘队列(退出/崩溃上报前调用)。
     static func flush() { queue.sync {} }
+
+    /// 清空当前日志文件(轮转保留的 .old.log 不动),重开句柄并落一条「已清空」标记。
+    static func clear() {
+        queue.sync {
+            handle?.closeFile()
+            handle = nil
+            FileManager.default.createFile(atPath: fileURL.path, contents: nil)
+            handle = try? FileHandle(forWritingTo: fileURL)
+            _ = try? handle?.seekToEnd()
+            writtenBytes = 0
+            emit(.info, "app", "log cleared by user")
+        }
+    }
 
     private static func write(_ level: Level, _ category: String, _ message: String) {
         if level == .error {

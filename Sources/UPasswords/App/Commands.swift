@@ -6,8 +6,37 @@ import SwiftUI
 /// Commands run outside the window's environment and actor isolation, so every
 /// action hops to the main actor before touching the session controller.
 struct UPasswordsCommands: Commands {
+    @ObservedObject private var shortcuts = ShortcutStore.shared
+
     private func perform(_ action: @escaping @MainActor () -> Void) {
         Task { @MainActor in action() }
+    }
+
+    /// 设置存储的键符/修饰键 → SwiftUI 菜单快捷键(空键符 = 无快捷键)。
+    private func keyboardShortcut(key: String, modifiers: Int) -> KeyboardShortcut? {
+        guard let first = key.lowercased().first else { return nil }
+        let flags = NSEvent.ModifierFlags(rawValue: UInt(modifiers))
+        var eventModifiers: EventModifiers = []
+        if flags.contains(.command) { eventModifiers.insert(.command) }
+        if flags.contains(.control) { eventModifiers.insert(.control) }
+        if flags.contains(.option) { eventModifiers.insert(.option) }
+        if flags.contains(.shift) { eventModifiers.insert(.shift) }
+        return KeyboardShortcut(KeyEquivalent(first), modifiers: eventModifiers)
+    }
+
+    /// 菜单项 + 可自定义快捷键(键符为空时不带快捷键)。
+    @ViewBuilder private func shortcutItem(
+        _ title: String,
+        key: String,
+        modifiers: Int,
+        action: @escaping @MainActor () -> Void
+    ) -> some View {
+        if let sc = keyboardShortcut(key: key, modifiers: modifiers) {
+            Button(title) { perform(action) }
+                .keyboardShortcut(sc)
+        } else {
+            Button(title) { perform(action) }
+        }
     }
 
     var body: some Commands {
@@ -59,7 +88,10 @@ struct UPasswordsCommands: Commands {
 
         // 视图
         CommandMenu(L10n.t("interface_prompt")) {
-            Button(L10n.t("main_window_command")) { perform { NSApp.activate(ignoringOtherApps: true) } }
+            shortcutItem(L10n.t("main_window_command"),
+                         key: shortcuts.showMainKey, modifiers: shortcuts.showMainModifiers) {
+                NSApp.activate(ignoringOtherApps: true)
+            }
             Divider()
             Button(L10n.t("sorting_command")) { perform { AppContext.shared.activeSheet = .sorting } }
                 .keyboardShortcut(",", modifiers: [.command, .shift])
@@ -70,8 +102,10 @@ struct UPasswordsCommands: Commands {
             Button(L10n.t("clear_recent_command")) { perform { AppContext.shared.clearRecent() } }
             Button(L10n.t("empty_trash_command")) { perform { AppContext.shared.emptyTrash() } }
             Divider()
-            Button(L10n.t("lock_command")) { perform { AppContext.shared.lock() } }
-                .keyboardShortcut("l", modifiers: [.command, .control])
+            shortcutItem(L10n.t("lock_command"),
+                         key: shortcuts.lockKey, modifiers: shortcuts.lockModifiers) {
+                AppContext.shared.lock()
+            }
         }
 
         // replace default Help with branded help

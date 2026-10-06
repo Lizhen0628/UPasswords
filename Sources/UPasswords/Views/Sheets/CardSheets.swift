@@ -219,7 +219,8 @@ struct SortingSheet: View {
                         .buttonStyle(.plain)
                     }
                     Divider()
-                    Toggle(L10n.t("favorites_at_top_setting"), isOn: $settings.favoritesAtTop)
+                    // 键值供设置页"标签列"复用带冒号,复选框标签这里去尾冒号
+                    Toggle(L10n.t("favorites_at_top_setting").trimmingCharacters(in: CharacterSet(charactersIn: ":： ")), isOn: $settings.favoritesAtTop)
                 }
             }
         )

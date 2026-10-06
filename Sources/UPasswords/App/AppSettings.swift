@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import AppKit
 
 /// App-level settings persisted in UserDefaults — the union of
 /// AppearanceViewController / SecurityViewController / AutoBackupViewController
@@ -35,11 +36,32 @@ final class AppSettings: ObservableObject {
     @Published var selfDestructAttempts: Int { didSet { d.set(selfDestructAttempts, forKey: "sec.selfDestruct") } }
     /// empty_clipboard_setting seconds: 0=off 10 30 60 120.
     @Published var clipboardClearSeconds: Int { didSet { d.set(clipboardClearSeconds, forKey: "clipboard.clearSeconds") } }
+    /// 泄露库自动检查:解锁状态下按周期静默跑一次 HIBP;手动检查不受此开关限制。
+    @Published var autoBreachCheckEnabled: Bool { didSet { d.set(autoBreachCheckEnabled, forKey: "sec.autoBreachCheck") } }
+    @Published var autoBreachCheckDays: Int { didSet { d.set(autoBreachCheckDays, forKey: "sec.autoBreachCheckDays") } }
 
     // MARK: Lock screen
+    /// 锁屏质感默认索引(黑→靛蓝对角渐变,右下泛紫光,同系统锁屏气质)。
+    static let defaultLockTexture = 16
     /// texture index 0..16。
     @Published var lockTexture: Int { didSet { d.set(lockTexture, forKey: "lock.texture") } }
     @Published var lockWhiteText: Bool { didSet { d.set(lockWhiteText, forKey: "lock.whiteText") } }
+    /// 锁屏背景类型:桌面壁纸(模糊压暗,macOS 原生风格,默认)/ 质感渐变 / 自定图片。
+    @Published var lockBackgroundKindRaw: String {
+        didSet { d.set(lockBackgroundKindRaw, forKey: "lock.backgroundKind") }
+    }
+    /// 自定图片文件名(存于 LockScreenImageStore.dir,空 = 未设置)。
+    @Published var lockBackgroundImageName: String { didSet { d.set(lockBackgroundImageName, forKey: "lock.imageName") } }
+
+    var lockBackgroundKind: LockBackgroundKind {
+        LockBackgroundKind(rawValue: lockBackgroundKindRaw) ?? .wallpaper
+    }
+
+    /// 自定锁屏图片的当前文件 URL(未设置时为 nil)。
+    var lockBackgroundImageURL: URL? {
+        guard !lockBackgroundImageName.isEmpty else { return nil }
+        return LockScreenImageStore.dir.appendingPathComponent(lockBackgroundImageName)
+    }
 
     // MARK: Auto backup (AutoBackupViewController)
     @Published var autoBackupEnabled: Bool { didSet { d.set(autoBackupEnabled, forKey: "backup.enabled") } }
@@ -51,6 +73,9 @@ final class AppSettings: ObservableObject {
     @Published var webdav: WebDavSettings {
         didSet { saveCodable(webdav, key: "sync.webdav") }
     }
+    /// 自动同步开关与间隔(秒):解锁状态下由常驻 ticker 按到期触发静默同步。
+    @Published var autoSyncEnabled: Bool { didSet { d.set(autoSyncEnabled, forKey: "sync.autoEnabled") } }
+    @Published var autoSyncSeconds: Int { didSet { d.set(autoSyncSeconds, forKey: "sync.autoSeconds") } }
 
     // MARK: Misc
     /// 主窗口侧栏显隐(工具栏左一按钮切换,布局记忆跨启动保留)。
@@ -81,12 +106,21 @@ final class AppSettings: ObservableObject {
         fastUnlock = d.object(forKey: "sec.fastUnlock") as? Bool ?? true
         selfDestructAttempts = d.object(forKey: "sec.selfDestruct") as? Int ?? 0
         clipboardClearSeconds = d.object(forKey: "clipboard.clearSeconds") as? Int ?? 60
-        lockTexture = d.object(forKey: "lock.texture") as? Int ?? 12   // 默认深灰(原 0 是亮紫渐变)
+        autoBreachCheckEnabled = d.object(forKey: "sec.autoBreachCheck") as? Bool ?? false
+        autoBreachCheckDays = d.object(forKey: "sec.autoBreachCheckDays") as? Int ?? 7
+        lockTexture = d.object(forKey: "lock.texture") as? Int ?? Self.defaultLockTexture
         lockWhiteText = d.object(forKey: "lock.whiteText") as? Bool ?? true
+        // 旧版只有「是否用自定图片」布尔键,迁移为三态背景类型(默认壁纸模糊)
+        lockBackgroundKindRaw = d.string(forKey: "lock.backgroundKind")
+            ?? ((d.object(forKey: "lock.usesImage") as? Bool ?? false)
+                ? LockBackgroundKind.image.rawValue : LockBackgroundKind.wallpaper.rawValue)
+        lockBackgroundImageName = d.string(forKey: "lock.imageName") ?? ""
         autoBackupEnabled = d.object(forKey: "backup.enabled") as? Bool ?? false
         backupIntervalDays = d.object(forKey: "backup.intervalDays") as? Int ?? 7
         cloudType = d.string(forKey: "sync.cloud") ?? CloudType.none.rawValue
         webdav = Self.loadCodable(WebDavSettings.self, key: "sync.webdav") ?? WebDavSettings()
+        autoSyncEnabled = d.object(forKey: "sync.autoEnabled") as? Bool ?? false
+        autoSyncSeconds = d.object(forKey: "sync.autoSeconds") as? Int ?? 60
         sidebarVisible = d.object(forKey: "app.sidebarVisible") as? Bool ?? true
         sidebarOptionalItems = (d.string(forKey: "app.sidebarOptional") ?? "")
             .split(separator: ",").map(String.init).filter { !$0.isEmpty }
@@ -102,6 +136,34 @@ final class AppSettings: ObservableObject {
     }
 
     var cloud: CloudType { CloudType(rawValue: cloudType) ?? .none }
+}
+
+/// 锁定/显示主界面菜单快捷键的存储与广播:
+/// 设置面板的录制控件写入,Commands 观察它即时刷新菜单快捷键。
+/// key 为按键字符(小写,空 = 无快捷键),modifiers 为 NSEvent.ModifierFlags rawValue。
+@MainActor
+final class ShortcutStore: ObservableObject {
+    static let shared = ShortcutStore()
+    private let d = UserDefaults.standard
+
+    static let lockKeyDefaults = "sc.lockKey"
+    static let lockModsDefaults = "sc.lockMods"
+    static let showMainKeyDefaults = "sc.showMainKey"
+    static let showMainModsDefaults = "sc.showMainMods"
+
+    @Published var lockKey: String { didSet { d.set(lockKey, forKey: Self.lockKeyDefaults) } }
+    @Published var lockModifiers: Int { didSet { d.set(lockModifiers, forKey: Self.lockModsDefaults) } }
+    @Published var showMainKey: String { didSet { d.set(showMainKey, forKey: Self.showMainKeyDefaults) } }
+    @Published var showMainModifiers: Int { didSet { d.set(showMainModifiers, forKey: Self.showMainModsDefaults) } }
+
+    private init() {
+        lockKey = d.string(forKey: Self.lockKeyDefaults) ?? "l"
+        lockModifiers = d.object(forKey: Self.lockModsDefaults) as? Int
+            ?? Int(NSEvent.ModifierFlags.command.union(.control).rawValue)
+        showMainKey = d.string(forKey: Self.showMainKeyDefaults) ?? "m"
+        showMainModifiers = d.object(forKey: Self.showMainModsDefaults) as? Int
+            ?? Int(NSEvent.ModifierFlags.command.union(.control).rawValue)
+    }
 }
 
 /// The 8 first-run setup tasks — values are Localizable keys;
@@ -147,5 +209,53 @@ enum LockTextures {
         ]
         let (a, b) = palettes[index % palettes.count]
         return LinearGradient(colors: [a, b], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+}
+
+/// 锁屏背景类型。
+enum LockBackgroundKind: String {
+    /// 桌面壁纸模糊压暗(macOS 原生锁屏风格,默认)。
+    case wallpaper
+    /// 程序内置质感渐变。
+    case texture
+    /// 用户自定图片。
+    case image
+}
+
+/// 锁屏背景视图(设置页预览与真实锁屏共用)。
+enum LockScreenBackground {
+    @ViewBuilder
+    static func view(kind: LockBackgroundKind, textureIndex: Int, imageName: String) -> some View {
+        switch kind {
+        case .wallpaper:
+            if let wallpaper = desktopWallpaper() {
+                // 原生锁屏气质:壁纸铺满 → 重模糊压暗;轻微放大遮住模糊边缘的透明毛边
+                Image(nsImage: wallpaper)
+                    .resizable()
+                    .scaledToFill()
+                    .blur(radius: 40)
+                    .overlay(Color.black.opacity(0.35))
+                    .scaleEffect(1.08)
+            } else {
+                LockTextures.gradient(for: textureIndex)
+            }
+        case .texture:
+            LockTextures.gradient(for: textureIndex)
+        case .image:
+            if let image = LockScreenImageStore.image(named: imageName) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                LockTextures.gradient(for: textureIndex)
+            }
+        }
+    }
+
+    /// 主屏桌面壁纸(动态壁纸取当前解析文件,取不到返回 nil)。
+    static func desktopWallpaper() -> NSImage? {
+        guard let screen = NSScreen.main,
+              let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
+        return NSImage(contentsOf: url)
     }
 }

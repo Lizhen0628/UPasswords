@@ -52,13 +52,13 @@ struct LockWindowView: View {
 
             Text(L10n.tBranded("lock_window_locked_title"))
                 .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(titleColor)
 
             Spacer().frame(height: 13)
 
             Text(subtitle)
                 .font(.system(size: 12))
-                .foregroundStyle(.white.opacity(0.87))
+                .foregroundStyle(titleColor.opacity(0.8))
 
             Spacer().frame(height: 21)
 
@@ -76,11 +76,11 @@ struct LockWindowView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(.container, edges: .top)   // 标题条贴窗口顶(红绿灯叠在其上)
         .background(
-            // 背景:顶 #393A39 → 底 #272A2B 的对角微渐变
-            LinearGradient(
-                colors: [Color(red: 0.224, green: 0.227, blue: 0.224),
-                         Color(red: 0.153, green: 0.165, blue: 0.169)],
-                startPoint: .topLeading, endPoint: .bottomTrailing
+            // 背景:桌面壁纸模糊压暗(macOS 原生风格)/质感渐变/自定图片,跟随设置
+            LockScreenBackground.view(
+                kind: settings.lockBackgroundKind,
+                textureIndex: settings.lockTexture,
+                imageName: settings.lockBackgroundImageName
             )
             .ignoresSafeArea()
         )
@@ -101,6 +101,11 @@ struct LockWindowView: View {
         #endif
         .onAppear {
             fieldFocused = true
+            // 自定图片文件缺失(被手动删除等)时已回退渐变,留 warn 便于排查
+            if settings.lockBackgroundKind == .image,
+               LockScreenImageStore.image(named: settings.lockBackgroundImageName) == nil {
+                Log.warn("app", "lock bg image missing, fallback gradient name=\(settings.lockBackgroundImageName)")
+            }
             // 进入锁屏自动弹出一次 Touch ID(需已保存生物识别副本)
             if !touchIDAsked, ctx.touchIDAvailable, settings.fastUnlock, ctx.hasBiometricItem {
                 touchIDAsked = true
@@ -110,6 +115,11 @@ struct LockWindowView: View {
                 }
             }
         }
+    }
+
+    /// 文字颜色跟随「锁屏文字」设置(字面黑/白,非语义色)。
+    private var titleColor: Color {
+        settings.lockWhiteText ? .white : .black
     }
 
     /// 居中密码框(宽 190、总高 27、圆角 7、描边钢蓝 rgb(49,112,156)、
@@ -196,17 +206,19 @@ struct LockWindowView: View {
     }
 }
 
-/// First-run wizard: 初始化数据库,三选一
-/// (create new / restore from cloud / restore from local file).
+/// First-run wizard: 初始化数据库,两条路径
+/// (create new / restore from cloud)。
 struct SetupWindowView: View {
     @EnvironmentObject var ctx: AppContext
 
+    private enum SetupMode { case create, restoreCloud }
+
+    @State private var mode: SetupMode = .create
     @State private var name = ""
     @State private var password = ""
     @State private var confirm = ""
     @State private var touchID = true
     @State private var error = ""
-    @State private var restoring = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -218,72 +230,77 @@ struct SetupWindowView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
-            Spacer()
+            if mode == .create {
+                Spacer()
+                createForm
+                Spacer()
 
-            VStack(alignment: .leading, spacing: 14) {
-                setupItem(1) { Text(L10n.t("database_setup_item_1")) }
-                    .font(.body.bold())
-                    .foregroundStyle(.primary)
-
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 10) {
-                        LabeledRow(label: L10n.t("database_name_prompt")) {
-                            TextField("Main", text: $name)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                        LabeledRow(label: L10n.t("set_password_prompt")) {
-                            SecureField("", text: $password)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                        LabeledRow(label: L10n.t("confirm_password_prompt")) {
-                            SecureField("", text: $confirm)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                        if PasswordStore.biometricAvailable() {
-                            Toggle(L10n.t("touch_id_login_query"), isOn: $touchID)
-                                .font(.callout)
-                        }
-                        Text(L10n.t("password_restore_warning"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                if !error.isEmpty {
+                    Text(error).foregroundStyle(.red).font(.callout)
+                }
+                HStack {
+                    Button(L10n.t("restore_from_cloud_button")) {
+                        Log.info("ui", "setup: switch to cloud restore")
+                        error = ""
+                        mode = .restoreCloud
                     }
-                    .frame(maxWidth: 380)
+                    Button(L10n.t("continue_button"), action: create)
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(name.isEmpty || password.isEmpty)
                 }
-
-                Divider()
-
-                setupItem(2) { Text(L10n.t("database_setup_item_2")) }
-                    .font(.body)
-                setupItem(3) { Text(L10n.t("database_setup_item_3")) }
-                    .font(.body)
-
-                Button(L10n.t("restore_from_cloud_button")) {
-                    ctx.activeSheet = .selectDatabase
-                }
-                .disabled(true)
-                .help(L10n.t("not_configured_state"))
+                .padding(.bottom, 28)
+            } else {
+                RestoreCloudForm(onBack: {
+                    Log.info("ui", "setup: back to create from cloud restore")
+                    mode = .create
+                })
             }
-            .padding(.horizontal, 60)
-
-            Spacer()
-
-            if !error.isEmpty {
-                Text(error).foregroundStyle(.red).font(.callout)
-            }
-            HStack {
-                Button(L10n.t("continue_button"), action: create)
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(name.isEmpty || password.isEmpty)
-            }
-            .padding(.bottom, 28)
         }
         .frame(minWidth: 680, minHeight: 560)
         .background(.regularMaterial)
         .background(WindowChromeConfigurator(mode: .plain))
-        .onAppear {
-            if ctx.dbsInfo().isEmpty == false { restoring = true }
+    }
+
+    private var createForm: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            setupItem(1) { Text(L10n.t("database_setup_item_1")) }
+                .font(.body.bold())
+                .foregroundStyle(.primary)
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 10) {
+                    LabeledRow(label: L10n.t("database_name_prompt")) {
+                        TextField("Main", text: $name)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    LabeledRow(label: L10n.t("set_password_prompt")) {
+                        SecureField("", text: $password)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    LabeledRow(label: L10n.t("confirm_password_prompt")) {
+                        SecureField("", text: $confirm)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    if PasswordStore.biometricAvailable() {
+                        Toggle(L10n.t("touch_id_login_query"), isOn: $touchID)
+                            .font(.callout)
+                    }
+                    Text(L10n.t("password_restore_warning"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: 380)
+            }
+
+            Divider()
+
+            setupItem(2) { Text(L10n.t("database_setup_item_2")) }
+                .font(.body)
+            setupItem(3) { Text(L10n.t("database_setup_item_3")) }
+                .font(.body)
         }
+        .padding(.horizontal, 60)
     }
 
     private func setupItem(_ n: Int, @ViewBuilder title: () -> some View) -> some View {
@@ -309,5 +326,187 @@ struct SetupWindowView: View {
         } catch let err {
             self.error = err.localizedDescription
         }
+    }
+}
+
+/// 向导「在线恢复」表单:选云端(WebDAV / iCloud Drive)→ 列出云端 .upw
+/// 文件 → 选一个并输入该库主密码 → 下载解密落为本地库,直接进入主界面。
+struct RestoreCloudForm: View {
+    @EnvironmentObject var ctx: AppContext
+    @EnvironmentObject var settings: AppSettings
+    var onBack: () -> Void
+
+    @State private var listing = false
+    @State private var restoring = false
+    @State private var names: [String] = []
+    @State private var selected = ""
+    @State private var password = ""
+    @State private var error = ""
+
+    /// WebDAV 填了主机即可尝试列表;iCloud 在列表/恢复时再验证账号状态。
+    private var cloudReady: Bool {
+        settings.cloud == .icloud || !settings.webdav.host.isEmpty
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    setupItem(2) { Text(L10n.t("database_setup_item_2")) }
+                        .font(.body.bold())
+                        .foregroundStyle(.primary)
+
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Picker(L10n.t("cloud_prompt"), selection: cloudBinding) {
+                                Text(L10n.t("webdav_cloud")).tag(CloudType.webdav)
+                                Text(CloudType.icloud.name).tag(CloudType.icloud)
+                            }
+                            .pickerStyle(.radioGroup)
+
+                            if settings.cloud == .webdav {
+                                LabeledRow(label: L10n.t("host_prompt")) {
+                                    TextField("dav.example.com", text: $settings.webdav.host)
+                                        .textFieldStyle(.roundedBorder)
+                                }
+                                HStack(spacing: 10) {
+                                    LabeledRow(label: L10n.t("port_prompt")) {
+                                        TextField("443", value: $settings.webdav.port, format: .number)
+                                            .textFieldStyle(.roundedBorder)
+                                    }
+                                    Toggle("HTTPS", isOn: $settings.webdav.useHTTPS)
+                                        .font(.callout)
+                                }
+                                LabeledRow(label: L10n.t("local_path_prompt")) {
+                                    TextField("/UPasswords/", text: $settings.webdav.path)
+                                        .textFieldStyle(.roundedBorder)
+                                }
+                                LabeledRow(label: L10n.t("user_name_prompt")) {
+                                    TextField("", text: $settings.webdav.user)
+                                        .textFieldStyle(.roundedBorder)
+                                }
+                                LabeledRow(label: L10n.t("password_prompt")) {
+                                    SecureField("", text: $settings.webdav.password)
+                                        .textFieldStyle(.roundedBorder)
+                                }
+                            } else {
+                                Label(L10n.t("icloud_sync_info"), systemImage: "icloud")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            HStack(spacing: 8) {
+                                Button(L10n.t("list_cloud_databases_button")) {
+                                    Log.info("ui", "cloud restore: list databases")
+                                    Task { await list() }
+                                }
+                                .disabled(listing || !cloudReady)
+                                if listing {
+                                    ProgressView().controlSize(.small)
+                                }
+                                if !names.isEmpty {
+                                    Text(L10n.t("cloud_databases_prompt"))
+                                        .font(.callout)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+
+                            if !names.isEmpty {
+                                Picker("", selection: $selected) {
+                                    ForEach(names, id: \.self) { n in
+                                        Text(n).tag(n)
+                                    }
+                                }
+                                .pickerStyle(.radioGroup)
+                                .labelsHidden()
+                            }
+                        }
+                        .frame(maxWidth: 420)
+                    }
+
+                    LabeledRow(label: L10n.t("password_prompt")) {
+                        SecureField("", text: $password)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    Text(L10n.t("cloud_restore_password_hint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if !error.isEmpty {
+                        Text(error)
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                    }
+                }
+                .padding(.horizontal, 60)
+                .padding(.vertical, 10)
+            }
+
+            HStack {
+                Button(L10n.t("cancel_button"), action: onBack)
+                Button {
+                    Log.info("ui", "cloud restore: restore \"\(selected)\"")
+                    Task { await restore() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(L10n.t("restore_ok_button"))
+                        if restoring { ProgressView().controlSize(.small) }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(selected.isEmpty || password.isEmpty || restoring)
+            }
+            .padding(.bottom, 28)
+        }
+        .onChange(of: settings.cloudType) { _, _ in
+            // 切换云端类型后,上一朵云的清单不再有效
+            names = []
+            selected = ""
+            error = ""
+        }
+    }
+
+    /// 现有云类型是其他网盘(gdrive 等)时落到 WebDAV,避免选中不可用项。
+    private var cloudBinding: Binding<CloudType> {
+        Binding(
+            get: { settings.cloud == .icloud ? .icloud : .webdav },
+            set: { settings.cloudType = $0.rawValue }
+        )
+    }
+
+    private func setupItem(_ n: Int, @ViewBuilder title: () -> some View) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("\(n).")
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            title()
+        }
+    }
+
+    private func list() async {
+        listing = true
+        error = ""
+        do {
+            names = try await ctx.listCloudDatabases()
+            selected = names.first ?? ""
+        } catch let err {
+            names = []
+            selected = ""
+            error = err.localizedDescription
+        }
+        listing = false
+    }
+
+    private func restore() async {
+        restoring = true
+        error = ""
+        do {
+            try await ctx.restoreDatabaseFromCloud(name: selected, password: password)
+            // 成功即 phase → .unlocked,RootView 自动切主界面,本视图随之销毁
+        } catch let err {
+            error = err.localizedDescription
+        }
+        restoring = false
     }
 }
