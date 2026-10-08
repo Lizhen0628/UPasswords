@@ -247,7 +247,7 @@ struct CardEditView: View {
     private var fieldsSection: some View {
         Section {
             ForEach($draft.fields) { $field in
-                fieldEditor(field: $field)
+                draftFieldRow(field: $field)
             }
             Menu {
                 ForEach(FieldType.allCases) { type in
@@ -263,6 +263,16 @@ struct CardEditView: View {
             }
         } header: {
             Text(L10n.t("ios_fields_section_title"))
+        }
+    }
+
+    /// 字段行分发:通行密钥凭据字段只读展示,防止误编辑损坏凭据。
+    @ViewBuilder
+    private func draftFieldRow(field: Binding<Field>) -> some View {
+        if let passkey = field.wrappedValue.passkeyPayload {
+            PasskeyRowView(passkey: passkey)
+        } else {
+            fieldEditor(field: field)
         }
     }
 

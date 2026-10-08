@@ -31,22 +31,33 @@ public struct Passkey: Codable, Equatable, Sendable {
     public var created: TimeInterval
 }
 
+extension Field {
+    /// 是否为通行密钥凭据的机读字段(固定名 passkey 的私密字段)。
+    public var isPasskeyPayload: Bool {
+        type == .secret && name == Card.passkeyFieldName
+    }
+
+    /// 解析机读字段里的凭据;非凭据字段或数据损坏返回 nil。
+    public var passkeyPayload: Passkey? {
+        guard isPasskeyPayload, let data = value.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(Passkey.self, from: data)
+    }
+}
+
 extension Card {
     /// 通行密钥凭据的固定机读字段名(不随语言变化,勿本地化)。
     public static let passkeyFieldName = "passkey"
 
     /// 解析卡片上的通行密钥凭据;无凭据或数据损坏返回 nil。
     public var passkey: Passkey? {
-        guard let field = fields.first(where: { $0.type == .secret && $0.name == Card.passkeyFieldName }),
-              let data = field.value.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(Passkey.self, from: data)
+        fields.first(where: \.isPasskeyPayload)?.passkeyPayload
     }
 
     /// 写入/更新卡片上的通行密钥凭据(JSON 存进固定字段)。
     public mutating func setPasskey(_ passkey: Passkey) {
         guard let data = try? JSONEncoder().encode(passkey),
               let json = String(data: data, encoding: .utf8) else { return }
-        if let i = fields.firstIndex(where: { $0.type == .secret && $0.name == Card.passkeyFieldName }) {
+        if let i = fields.firstIndex(where: \.isPasskeyPayload) {
             fields[i].value = json
         } else {
             fields.append(Field(name: Card.passkeyFieldName, type: .secret, value: json))

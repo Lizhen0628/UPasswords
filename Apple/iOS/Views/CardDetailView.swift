@@ -169,14 +169,19 @@ struct CardDetailView: View {
 
     private func fieldsSection(_ card: Card) -> some View {
         BrandSection(title: L10n.t("ios_fields_section_title")) {
-            let fields = card.fields.filter { $0.hasValue }
-            if fields.isEmpty {
+            // 通行密钥凭据字段不进入普通字段流,单独以摘要行展示
+            let fields = card.fields.filter { $0.hasValue && !$0.isPasskeyPayload }
+            if fields.isEmpty && card.passkey == nil {
                 Text(L10n.t("ios_fields_empty"))
                     .font(.subheadline)
                     .foregroundStyle(Brand.muted)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
             } else {
+                if let passkey = card.passkey {
+                    PasskeyRowView(passkey: passkey)
+                    if !fields.isEmpty { InsetDivider(leading: 54) }
+                }
                 ForEach(Array(fields.enumerated()), id: \.element.id) { i, field in
                     fieldRow(field, title: card.title)
                     if i < fields.count - 1 { InsetDivider(leading: 54) }
@@ -504,6 +509,39 @@ struct CardDetailView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - 通行密钥摘要行
+
+/// 详情/编辑页共用:替代机读 JSON 凭据字段的原始展示。
+struct PasskeyRowView: View {
+    let passkey: Passkey
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "person.badge.key.fill")
+                .font(.body)
+                .foregroundStyle(Brand.accent)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.t("ios_passkey_field_name"))
+                    .font(.caption)
+                    .foregroundStyle(Brand.muted)
+                Text("\(passkey.relyingParty) · \(passkey.userName)")
+                    .font(.body)
+                    .foregroundStyle(Brand.fg)
+                    .lineLimit(2)
+                Text(String(format: L10n.t("ios_db_created_fmt"),
+                            Date(timeIntervalSince1970: passkey.created / 1000)
+                                .formatted(date: .abbreviated, time: .omitted)))
+                    .font(.caption2)
+                    .foregroundStyle(Brand.muted)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 }
 
