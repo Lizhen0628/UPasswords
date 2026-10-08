@@ -519,6 +519,25 @@ final class Vault: ObservableObject {
         }
     }
 
+    /// 初始化页「从 iCloud 云盘恢复」:用户选定云端 UPasswords 文件夹后存好书签
+    /// (文件夹选择器授予目录级安全作用域,书签才有效)并列出其中的库展示恢复卡片。
+    func probeICloudFolder(_ picked: URL) async {
+        guard await setICloudFolder(picked) else { return }
+        cloudTypeRaw = CloudType.icloud.rawValue
+        guard let mounted = makeCloudDriver() else { return }
+        defer { mounted.releaseAccess?() }
+        do {
+            try await mounted.driver.testConnection()
+            let names = try await mounted.driver.listDatabases()
+            cloudDatabases = names
+            Log.info("sync", "ios setup icloud folder probe: \(names.count) db(s) [\(names.joined(separator: ","))]")
+            if names.isEmpty { showToast(L10n.t("cloud_database_not_found")) }
+        } catch {
+            Log.warn("sync", "ios setup icloud folder probe failed: \(error)")
+            showToast(error.localizedDescription)
+        }
+    }
+
     /// 从 iCloud 下载指定库到本地容器(校验 magic 后落盘)并切换为当前库。
     /// 导入后立即锁定:内存中的主密码属于原库,绝不能带到新库上(防止误写)。
     func importCloudDatabase(name: String) async -> Bool {

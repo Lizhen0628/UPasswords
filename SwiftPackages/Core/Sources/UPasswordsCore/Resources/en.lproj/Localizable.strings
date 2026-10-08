@@ -974,3 +974,4 @@
 "ios_af_no_passkeys_text" = "No passkeys for this site in your vault.";
 "ios_import_file_button" = "Import Vault from File";
 "ios_db_import_invalid_message" = "This file is not a valid UPasswords vault.";
+"ios_cloud_restore_folder_button" = "Restore from iCloud Drive";

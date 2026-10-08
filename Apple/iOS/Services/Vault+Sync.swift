@@ -63,8 +63,14 @@ extension Vault {
             || fileURL.path.contains("/Mobile Documents/")
         guard ubiquitous else { return }
         let folder = fileURL.deletingLastPathComponent()
+        // 文件选择器只保证被选文件的作用域;父文件夹拿不到授权时造出的书签
+        // 后续必然解析失败,不如不配置(用户可在设置里手动选文件夹)
         let granted = folder.startAccessingSecurityScopedResource()
-        defer { if granted { folder.stopAccessingSecurityScopedResource() } }
+        guard granted else {
+            Log.info("sync", "ios import: no scope for folder \"\(folder.lastPathComponent)\" — skip auto sync setup")
+            return
+        }
+        defer { folder.stopAccessingSecurityScopedResource() }
         guard let bookmark = try? folder.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) else {
             Log.warn("sync", "ios import: icloud folder bookmark failed for \"\(folder.lastPathComponent)\" — pick manually in settings")
             return
@@ -87,7 +93,11 @@ extension Vault {
         }
         var stale = false
         guard let folder = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) else {
-            Log.warn("sync", "ios icloud bookmark resolve failed — re-pick folder in settings")
+            Log.warn("sync", "ios icloud bookmark resolve failed — cleared, re-pick folder in settings")
+            // 无效书签(如无作用域造出的半成品)会造成永久“未配置”,清掉回到未选定状态
+            d.removeObject(forKey: "sync.icloud.bookmark")
+            d.removeObject(forKey: "sync.icloud.name")
+            icloudFolderName = ""
             return nil
         }
         guard folder.startAccessingSecurityScopedResource() else {

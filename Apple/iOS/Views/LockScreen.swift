@@ -16,6 +16,7 @@ struct LockScreen: View {
     @State private var restoreFailed = false
     @State private var lockImage: UIImage? = nil
     @State private var showFileImporter = false
+    @State private var showFolderPicker = false
 
     private var isSetup: Bool { !vault.hasVault }
     private var theme: (name: String, colors: [Color]) {
@@ -122,6 +123,13 @@ struct LockScreen: View {
                 Log.warn("db", "ios import file picker failed: \(error)")
             }
         }
+        .sheet(isPresented: $showFolderPicker) {
+            // 文件夹选择器授予目录级安全作用域,恢复后同步书签直接可用
+            FolderPickerView { url in
+                showFolderPicker = false
+                Task { await vault.probeICloudFolder(url) }
+            }
+        }
     }
 
     @ViewBuilder
@@ -148,6 +156,17 @@ struct LockScreen: View {
                     showFileImporter = true
                 } label: {
                     Label(L10n.t("ios_import_file_button"), systemImage: "doc.badge.plus")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Brand.accent)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 46)
+                        .background(Brand.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                Button {
+                    showFolderPicker = true
+                } label: {
+                    Label(L10n.t("ios_cloud_restore_folder_button"), systemImage: "icloud")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(Brand.accent)
                         .frame(maxWidth: .infinity)

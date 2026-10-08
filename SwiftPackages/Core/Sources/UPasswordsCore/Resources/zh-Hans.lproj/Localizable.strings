@@ -974,3 +974,4 @@
 "ios_af_no_passkeys_text" = "密码库中没有该站点的通行密钥";
 "ios_import_file_button" = "从文件导入密码库";
 "ios_db_import_invalid_message" = "文件不是有效的 UPasswords 密码库";
+"ios_cloud_restore_folder_button" = "从 iCloud 云盘恢复";
