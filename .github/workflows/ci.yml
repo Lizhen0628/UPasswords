@@ -26,6 +26,8 @@ jobs:
           swift test
       - name: Build Xcode workspace (macOS + iOS + Safari extension)
         run: |
+          # 新版 runner 镜像不再预装 xcodegen,按需安装
+          command -v xcodegen >/dev/null || brew install xcodegen
           (cd Apple && xcodegen generate)
           xcodebuild -workspace UPasswords.xcworkspace -scheme UPasswords-macOS \
             -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
