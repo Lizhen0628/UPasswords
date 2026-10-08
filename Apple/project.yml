@@ -153,9 +153,10 @@ targets:
           # 表现为「设置-自动填充与密码」里找不到 App
           NSExtensionPointIdentifier: com.apple.authentication-services-credential-provider-ui
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).CredentialProviderViewController
-          # iOS 18+ 一次性验证码填充能力(对应 prepareOneTimeCodeCredentialList 实现)
+          # iOS 17+ 通行密钥(断言/注册)与 iOS 18+ 一次性验证码填充能力
           NSExtensionAttributes:
             ASCredentialProviderExtensionCapabilities:
+              ProvidesPasskeys: true
               ProvidesOneTimeCodes: true
     settings:
       base:

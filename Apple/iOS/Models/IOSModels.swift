@@ -59,7 +59,9 @@ extension Card {
     /// 通行密钥条目:包含名为「通行密钥」的机密字段(按本地化名匹配)。
     var hasPasskey: Bool {
         let passkeyName = L10n.t("ios_passkey_field_name")
-        return fields.contains { $0.type == .secret && $0.name == passkeyName }
+        return fields.contains {
+            $0.type == .secret && ($0.name == passkeyName || $0.name == Card.passkeyFieldName)
+        }
     }
 }
 

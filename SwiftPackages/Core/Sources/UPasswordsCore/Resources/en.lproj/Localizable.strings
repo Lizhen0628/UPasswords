@@ -968,3 +968,7 @@
 "ios_settings_group_security" = "Security & Sync";
 "ios_settings_group_data" = "Data Management";
 "ios_settings_group_general" = "General";
+"ios_af_passkey_create_title" = "Create Passkey";
+"ios_af_passkey_for_fmt" = "Create a passkey for %@ and save it to your vault.";
+"ios_af_passkey_save_error" = "Couldn't save the passkey — please try again.";
+"ios_af_no_passkeys_text" = "No passkeys for this site in your vault.";

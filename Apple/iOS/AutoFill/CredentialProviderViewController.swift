@@ -16,6 +16,35 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         embed(AutoFillRootView(model: model))
     }
 
+    /// iOS 17+ 通行密钥断言列表入口。
+    override func prepareCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier],
+                                        requestParameters: ASPasskeyCredentialRequestParameters) {
+        Log.info("app", "autofill: prepareCredentialList passkey rp=\(requestParameters.relyingPartyIdentifier)")
+        model.attachPasskeyList(context: extensionContext, params: requestParameters)
+        embed(AutoFillRootView(model: model))
+    }
+
+    /// iOS 17+ 统一静默入口:本地加密库需解锁,一律转交互流程。
+    override func provideCredentialWithoutUserInteraction(for credentialRequest: any ASCredentialRequest) {
+        extensionContext.cancelRequest(withError: NSError(
+            domain: ASExtensionErrorDomain,
+            code: ASExtensionError.userInteractionRequired.rawValue))
+    }
+
+    /// iOS 17+ 指定请求交互入口(QuickType 选中或系统要求用户验证)。
+    override func prepareInterfaceToProvideCredential(for credentialRequest: any ASCredentialRequest) {
+        Log.info("app", "autofill: prepareInterfaceToProvideCredential request")
+        model.attach(context: extensionContext, request: credentialRequest)
+        embed(AutoFillRootView(model: model))
+    }
+
+    /// iOS 17+ 通行密钥注册入口。
+    override func prepareInterface(forPasskeyRegistration registrationRequest: any ASCredentialRequest) {
+        Log.info("app", "autofill: passkey registration entry")
+        model.attachPasskeyRegistration(context: extensionContext, request: registrationRequest)
+        embed(AutoFillRootView(model: model))
+    }
+
     /// iOS 18+ 验证码填充入口:展示与当前页面匹配的一次性验证码(TOTP)列表。
     @available(iOS 18.0, *)
     override func prepareOneTimeCodeCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier]) {

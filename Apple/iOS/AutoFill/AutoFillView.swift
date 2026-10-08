@@ -15,7 +15,8 @@ struct AutoFillRootView: View {
                 switch model.stage {
                 case .noVault: noVaultView
                 case .locked: lockedView
-                case .unlocked: listView
+                case .unlocked:
+                    if model.flow == .passkeyRegistration { registerView } else { listView }
                 }
             }
         }
@@ -127,6 +128,52 @@ struct AutoFillRootView: View {
         }
     }
 
+    // MARK: 通行密钥注册
+
+    private var registerView: some View {
+        VStack(spacing: 18) {
+            Spacer()
+            BrandLogo(size: 72)
+            if let info = model.registrationInfo {
+                Text(L10n.t("ios_af_passkey_create_title"))
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(Brand.fg)
+                Text(String(format: L10n.t("ios_af_passkey_for_fmt"), info.relyingParty))
+                    .font(.system(size: 15))
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(4)
+                    .foregroundStyle(Brand.muted)
+                HStack(spacing: 10) {
+                    Image(systemName: "person.fill")
+                        .foregroundStyle(Brand.accent)
+                    Text(info.userName)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Brand.fg)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 14)
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+                .background(Brand.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            if model.registerError {
+                Text(L10n.t("ios_af_passkey_save_error"))
+                    .font(.system(size: 13))
+                    .foregroundStyle(Brand.red)
+            }
+            Button { model.registerPasskey() } label: {
+                Text(L10n.t("ios_create_button"))
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Brand.accent)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 46)
+                    .background(Brand.accent.opacity(0.14), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 28)
+    }
+
     // MARK: 凭证列表
 
     private var listView: some View {
@@ -166,9 +213,7 @@ struct AutoFillRootView: View {
                               cards: model.others)
                     }
                     if model.suggested.isEmpty && model.others.isEmpty {
-                        Text(model.query.isEmpty
-                             ? L10n.t("ios_af_no_fillable_text")
-                             : String(format: L10n.t("ios_af_no_match_fmt"), model.query))
+                        Text(emptyListText)
                             .font(.system(size: 15))
                             .foregroundStyle(Brand.muted)
                             .frame(maxWidth: .infinity)
@@ -179,6 +224,13 @@ struct AutoFillRootView: View {
                 .padding(.bottom, 24)
             }
         }
+    }
+
+    /// 列表为空的提示文案(按流区分)。
+    private var emptyListText: String {
+        if !model.query.isEmpty { return String(format: L10n.t("ios_af_no_match_fmt"), model.query) }
+        if model.flow == .passkey { return L10n.t("ios_af_no_passkeys_text") }
+        return L10n.t("ios_af_no_fillable_text")
     }
 
     private func group(title: String, cards: [Card]) -> some View {
@@ -210,8 +262,11 @@ struct AutoFillRootView: View {
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(Brand.fg)
                         .lineLimit(1)
-                    // 验证码条目可能没有登录名,退而显示站点
-                    let subtitle = !card.login.isEmpty ? card.login : card.website
+                    // 通行密钥显示凭据用户名;验证码条目可能没有登录名,退而显示站点
+                    let subtitle: String = {
+                        if model.flow == .passkey { return card.passkey?.userName ?? "" }
+                        return !card.login.isEmpty ? card.login : card.website
+                    }()
                     if !subtitle.isEmpty {
                         Text(subtitle)
                             .font(.system(size: 13))
