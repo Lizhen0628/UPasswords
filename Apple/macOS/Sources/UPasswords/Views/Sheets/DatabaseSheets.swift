@@ -241,15 +241,8 @@ struct ManageDatabasesSheet: View {
     }
 
     private func switchTo(_ db: DatabaseFile) {
-        if ctx.phase == .unlocked && db.name == ctx.databaseName { return }
-        ctx.databaseName = db.name
-        ctx.store.mainDatabaseName = db.name
-        if ctx.phase == .locked {
-            ctx.activeSheet = nil
-            // stay on lock screen; the new name is prefilled
-        } else {
-            ctx.lock()
-        }
+        // 先验证目标库密码,成功才切换(不再走「先切库再锁屏」的往返)
+        ctx.promptUnlockAndSwitch(to: db.name)
     }
 
     private func randomPassword() -> String {

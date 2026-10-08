@@ -74,13 +74,10 @@ final class StatusItemController: NSObject {
 
     @objc private func switchDatabaseAction(_ sender: NSMenuItem) {
         guard let name = sender.representedObject as? String else { return }
-        let ctx = AppContext.shared
-        guard name != ctx.databaseName else { return }
         Log.info("db", "menu bar switch database → \"\(name)\"")
-        ctx.databaseName = name
-        ctx.store.mainDatabaseName = name
-        if ctx.phase == .unlocked { ctx.lock() }
-        Self.showMainWindow()
+        if AppContext.shared.promptUnlockAndSwitch(to: name) {
+            Self.showMainWindow()
+        }
     }
 
     // MARK: - Actions

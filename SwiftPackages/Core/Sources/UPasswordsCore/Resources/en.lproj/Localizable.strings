@@ -985,3 +985,6 @@
 "ios_sync_overwrite_cloud_query" = "The current cloud content will be replaced with local data. Continue?";
 "ios_icloud_folder_label" = "Cloud Folder";
 "switch_database_command" = "Switch Database";
+"switch_database_unlock_title" = "Switch to “%@”";
+"switch_database_unlock_message" = "Enter the master password for this database.";
+"unlock_button" = "Unlock";
