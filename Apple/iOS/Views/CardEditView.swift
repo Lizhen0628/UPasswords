@@ -84,6 +84,11 @@ struct CardEditView: View {
     @State private var iconFetching = false
     @State private var showScanner = false
     @State private var scanTarget: UUID? = nil
+    @State private var showIconPickers = false
+    @State private var showExpiration = false
+    @State private var showLabels = false
+    @State private var showNotes = false
+    @State private var showAttachments = false
 
     /// 单附件上限(XML 里 base64 序列化,过大显著膨胀)。
     private static let maxAttachmentBytes = 8 * 1024 * 1024
@@ -93,6 +98,11 @@ struct CardEditView: View {
         _draft = State(initialValue: draft)
         _hasExpiration = State(initialValue: draft.expiration != nil)
         _expirationDate = State(initialValue: draft.expiration?.date ?? Date(timeIntervalSinceNow: 86400 * 365))
+        // 低频分区默认收起;编辑已有内容的卡片时自动展开对应分区
+        _showExpiration = State(initialValue: draft.expiration != nil)
+        _showLabels = State(initialValue: !draft.labelIds.isEmpty)
+        _showNotes = State(initialValue: !draft.notes.isEmpty)
+        _showAttachments = State(initialValue: !draft.images.isEmpty || !draft.files.isEmpty)
     }
 
     private var titleValid: Bool { !draft.title.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -127,10 +137,27 @@ struct CardEditView: View {
 
     private var titleSection: some View {
         Section {
-            TextField(L10n.t("ios_title_prompt"), text: $draft.title)
-                .font(.body.weight(.medium))
-            symbolPicker
-            colorPicker
+            HStack(spacing: 12) {
+                TextField(L10n.t("ios_title_prompt"), text: $draft.title)
+                    .font(.body.weight(.medium))
+                // 图标/色板默认收起,点当前图标徽章展开
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { showIconPickers.toggle() }
+                } label: {
+                    Image(systemName: draft.symbol ?? "globe")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(Brand.tileColor(draft.color))
+                        .frame(width: 34, height: 34)
+                        .background(Brand.tileColor(draft.color).opacity(0.16),
+                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(L10n.t("ios_icon_section_title"))
+            }
+            if showIconPickers {
+                symbolPicker
+                colorPicker
+            }
         }
     }
 
@@ -375,52 +402,58 @@ struct CardEditView: View {
 
     private var expirationSection: some View {
         Section {
-            Toggle(L10n.t("ios_set_expiration_toggle"), isOn: $hasExpiration)
-            if hasExpiration {
-                DatePicker(L10n.t("ios_expiry_date_prompt"), selection: $expirationDate, displayedComponents: .date)
+            DisclosureGroup(isExpanded: $showExpiration) {
+                Toggle(L10n.t("ios_set_expiration_toggle"), isOn: $hasExpiration)
+                if hasExpiration {
+                    DatePicker(L10n.t("ios_expiry_date_prompt"), selection: $expirationDate, displayedComponents: .date)
+                }
+            } label: {
+                Text(L10n.t("ios_expiration_section")).foregroundStyle(.primary)
             }
-        } header: {
-            Text(L10n.t("ios_expiration_section"))
         }
     }
 
     private var labelSection: some View {
         Section {
-            FlowChips {
-                ForEach(vault.labels) { label in
-                    let on = draft.labelIds.contains(label.id)
-                    Button {
-                        if on { draft.labelIds.removeAll { $0 == label.id } }
-                        else { draft.labelIds.append(label.id) }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Circle().fill(Brand.tileColor(label.color)).frame(width: 8, height: 8)
-                            Text(label.name)
-                            if on { Image(systemName: "checkmark").font(.caption2.weight(.bold)) }
+            DisclosureGroup(isExpanded: $showLabels) {
+                FlowChips {
+                    ForEach(vault.labels) { label in
+                        let on = draft.labelIds.contains(label.id)
+                        Button {
+                            if on { draft.labelIds.removeAll { $0 == label.id } }
+                            else { draft.labelIds.append(label.id) }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Circle().fill(Brand.tileColor(label.color)).frame(width: 8, height: 8)
+                                Text(label.name)
+                                if on { Image(systemName: "checkmark").font(.caption2.weight(.bold)) }
+                            }
+                            .font(.subheadline)
+                            .foregroundStyle(on ? Brand.fg : Brand.muted)
+                            .padding(.horizontal, 12)
+                            .frame(height: 32)
+                            .background(
+                                Capsule().fill(on ? Brand.tileColor(label.color).opacity(0.18) : Color(uiColor: .tertiarySystemFill))
+                            )
                         }
-                        .font(.subheadline)
-                        .foregroundStyle(on ? Brand.fg : Brand.muted)
-                        .padding(.horizontal, 12)
-                        .frame(height: 32)
-                        .background(
-                            Capsule().fill(on ? Brand.tileColor(label.color).opacity(0.18) : Color(uiColor: .tertiarySystemFill))
-                        )
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
+                .padding(.vertical, 4)
+            } label: {
+                Text(L10n.t("ios_labels_section_title")).foregroundStyle(.primary)
             }
-            .padding(.vertical, 4)
-        } header: {
-            Text(L10n.t("ios_labels_section_title"))
         }
     }
 
     private var notesSection: some View {
         Section {
-            TextEditor(text: $draft.notes)
-                .frame(minHeight: 90)
-        } header: {
-            Text(L10n.t("ios_notes_section_title"))
+            DisclosureGroup(isExpanded: $showNotes) {
+                TextEditor(text: $draft.notes)
+                    .frame(minHeight: 90)
+            } label: {
+                Text(L10n.t("ios_notes_section_title")).foregroundStyle(.primary)
+            }
         }
     }
 
@@ -428,20 +461,22 @@ struct CardEditView: View {
 
     private var attachmentsSection: some View {
         Section {
-            ForEach(draft.images) { att in
-                attachmentRow(att, icon: "photo")
+            DisclosureGroup(isExpanded: $showAttachments) {
+                ForEach(draft.images) { att in
+                    attachmentRow(att, icon: "photo")
+                }
+                ForEach(draft.files) { att in
+                    attachmentRow(att, icon: "paperclip")
+                }
+                PhotosPicker(selection: $photoItem, matching: .images) {
+                    Label(L10n.t("ios_add_photo_button"), systemImage: "photo")
+                }
+                Button { showFilePicker = true } label: {
+                    Label(L10n.t("ios_add_file_button"), systemImage: "paperclip")
+                }
+            } label: {
+                Text(L10n.t("ios_attachments_section_title")).foregroundStyle(.primary)
             }
-            ForEach(draft.files) { att in
-                attachmentRow(att, icon: "paperclip")
-            }
-            PhotosPicker(selection: $photoItem, matching: .images) {
-                Label(L10n.t("ios_add_photo_button"), systemImage: "photo")
-            }
-            Button { showFilePicker = true } label: {
-                Label(L10n.t("ios_add_file_button"), systemImage: "paperclip")
-            }
-        } header: {
-            Text(L10n.t("ios_attachments_section_title"))
         }
         .onChange(of: photoItem) { item in loadPhoto(item) }
         .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
