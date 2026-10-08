@@ -1,5 +1,6 @@
 import XCTest
 @testable import UPasswordsPersistence
+import UPasswordsCore
 
 final class ICloudDriverTests: XCTestCase {
 
@@ -8,7 +9,8 @@ final class ICloudDriverTests: XCTestCase {
         let root = try tempRoot()
         let driver = ICloudDriver(databaseName: "RoundTrip", cloudRoot: root)
         try await driver.testConnection()
-        let payload = Data("upw-container".utf8)
+        // 驱动对读取内容做 UPWDB 魔数校验,测试载荷须为真实容器
+        let payload = try DatabaseCipher.encryptedData(Data("upw-container".utf8), password: "t")
         try await driver.upload(payload)
         let downloaded = try await driver.download()
         XCTAssertEqual(downloaded, payload)
@@ -30,7 +32,7 @@ final class ICloudDriverTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: root.appendingPathComponent("UPasswords").path))
         try await driver.testConnection()
-        try await driver.upload(Data([1, 2, 3]))
+        try await driver.upload(try DatabaseCipher.encryptedData(Data([1, 2, 3]), password: "t"))
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: root.appendingPathComponent("UPasswords/Layout.upw").path))
     }
@@ -40,10 +42,12 @@ final class ICloudDriverTests: XCTestCase {
         let root = try tempRoot()
         let driver = ICloudDriver(databaseName: "Replace", cloudRoot: root)
         try await driver.testConnection()
-        try await driver.upload(Data("old".utf8))
-        try await driver.upload(Data("new-and-longer".utf8))
+        // 驱动对读取内容做 UPWDB 魔数校验,测试载荷须为真实容器
+        try await driver.upload(try DatabaseCipher.encryptedData(Data("old".utf8), password: "t"))
+        let newer = try DatabaseCipher.encryptedData(Data("new-and-longer".utf8), password: "t")
+        try await driver.upload(newer)
         let downloaded = try await driver.download()
-        XCTAssertEqual(downloaded, Data("new-and-longer".utf8))
+        XCTAssertEqual(downloaded, newer)
     }
 
     // MARK: - 夹具
