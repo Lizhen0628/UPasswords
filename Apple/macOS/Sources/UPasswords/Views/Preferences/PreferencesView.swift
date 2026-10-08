@@ -856,21 +856,16 @@ struct ConfigureCloudSheetContents: View {
                         }
                     }
                 }
-                // 远端密文解不开(对端改过主密码/数据损坏)时的修复入口
+                // 远端密文解不开(对端改过主密码/数据损坏)时的修复入口:
+                // 统一收进一个对话框(接管/覆盖两条路都在里面),避免与弹窗重复
                 if ctx.syncRemoteUnreadable {
-                    VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 10) {
                         Label(L10n.t("sync_remote_unreadable_error"), systemImage: "exclamationmark.triangle")
                             .font(.callout)
                             .foregroundStyle(.red)
-                        HStack(spacing: 10) {
-                            Button(L10n.t("ios_sync_adopt_password_button")) {
-                                Log.info("ui", "adopt remote password from preferences")
-                                ctx.promptAdoptRemotePassword()
-                            }
-                            Button(L10n.t("ios_sync_overwrite_cloud_button"), role: .destructive) {
-                                Log.info("ui", "overwrite unreadable remote from preferences")
-                                ctx.promptOverwriteUnreadableRemote()
-                            }
+                        Button(L10n.t("sync_repair_button")) {
+                            Log.info("ui", "sync repair dialog from preferences")
+                            ctx.promptAdoptRemotePassword()
                         }
                     }
                 }

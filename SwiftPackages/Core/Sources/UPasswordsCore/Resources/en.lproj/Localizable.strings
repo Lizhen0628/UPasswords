@@ -992,3 +992,4 @@
 "ios_sync_adopt_password_title" = "Enter New Password";
 "ios_sync_adopt_password_message" = "The cloud vault is encrypted with the new password. Enter it to decrypt and merge your data.";
 "sync_adopt_failed_hint" = "Incorrect password. If you changed the password on THIS device, choose “Overwrite Cloud with Local Data” instead.";
+"sync_repair_button" = "Repair Sync…";
