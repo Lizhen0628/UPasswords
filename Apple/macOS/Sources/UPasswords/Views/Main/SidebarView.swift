@@ -54,14 +54,16 @@ struct SidebarView: View {
                     .padding(.trailing, 12)
             }
 
-            // 当前库徽章:库名 + 点击打开「管理密码库」(切换/新建/删除)
-            databaseBadge
-
+            // 库名即「数据库」分节标题;悬停标题行浮现库管理按钮
             ScrollView {
                 VStack(spacing: 0) {
                     // 数据库分节(与邮件的账号分节同位:标题即库名)
                     section(key: "safe",
-                            title: ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName) {
+                            title: ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName,
+                            action: {
+                                Log.info("ui", "sidebar database section → manage databases")
+                                ctx.activeSheet = .manageDatabases
+                            }) {
                         ForEach(safeRows) { sp in
                             SidebarRow(sp: sp)
                                 .padding(.leading, Self.rowIndent)
@@ -109,32 +111,6 @@ struct SidebarView: View {
         .shadow(color: .black.opacity(0.22), radius: 9, y: 3)
     }
 
-    /// 当前密码库徽章:面板顶行之下的库名行,点击打开「管理密码库」弹窗。
-    private var databaseBadge: some View {
-        Button {
-            Log.info("ui", "sidebar database badge → manage databases")
-            ctx.activeSheet = .manageDatabases
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "cylinder.fill")
-                    .font(.caption)
-                Text(ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName)
-                    .font(.callout.weight(.medium))
-                    .lineLimit(1)
-                Spacer()
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 7)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(L10n.t("manage_databases_command"))
-    }
-
     /// 邮件式侧栏开关:面板顶行右端、红绿灯同排的裸图标(无胶囊底),
     /// 悬停现圆形浅高亮;提示随状态切换(隐藏/显示边栏)。
     private var sidebarToggleButton: some View {
@@ -158,7 +134,7 @@ struct SidebarView: View {
 
     /// 分节标题行:右端折叠箭头(悬停或已折叠时可见),点击展开/收起子行。
     @ViewBuilder
-    private func section(key: String, title: String, @ViewBuilder rows: () -> some View) -> some View {
+    private func section(key: String, title: String, action: (() -> Void)? = nil, @ViewBuilder rows: () -> some View) -> some View {
         let isExpanded = expandedSections.contains(key)
         let isHovered = hoveredSection == key
         Button {
@@ -177,6 +153,18 @@ struct SidebarView: View {
                     .foregroundStyle(Color.white.opacity(0.42))
                     .lineLimit(1)
                 Spacer()
+                if let action {
+                    // 悬停浮现的分节管理按钮(如「数据库」分节的库管理)
+                    Button {
+                        action()
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(isHovered ? 0.75 : 0))
+                    }
+                    .buttonStyle(.plain)
+                    .help(L10n.t("manage_databases_command"))
+                }
                 Image(systemName: "chevron.down")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(isHovered || !isExpanded ? 0.55 : 0))
