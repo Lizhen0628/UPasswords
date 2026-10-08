@@ -54,6 +54,30 @@ extension Vault {
         return true
     }
 
+    /// 文件导入的来源若在 iCloud 云盘:把所在文件夹存为云端容器书签并启用
+    /// iCloud 同步(首次装机从云盘导入后同步开箱即用)。文档选择器对父目录的
+    /// 安全作用域不作保证,失败仅记日志,用户仍可在设置里手动选文件夹。
+    func adoptICloudFolderIfUbiquitous(fileURL: URL) {
+        guard cloud == .none else { return }
+        let ubiquitous = (try? fileURL.resourceValues(forKeys: [.isUbiquitousItemKey]))?.isUbiquitousItem == true
+            || fileURL.path.contains("/Mobile Documents/")
+        guard ubiquitous else { return }
+        let folder = fileURL.deletingLastPathComponent()
+        let granted = folder.startAccessingSecurityScopedResource()
+        defer { if granted { folder.stopAccessingSecurityScopedResource() } }
+        guard let bookmark = try? folder.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) else {
+            Log.warn("sync", "ios import: icloud folder bookmark failed for \"\(folder.lastPathComponent)\" — pick manually in settings")
+            return
+        }
+        d.set(bookmark, forKey: "sync.icloud.bookmark")
+        d.set(folder.lastPathComponent, forKey: "sync.icloud.name")
+        // 导入的 .upw 直接躺在该文件夹里 → 该文件夹即同步容器
+        d.set("explicit", forKey: "sync.icloud.mode")
+        icloudFolderName = folder.lastPathComponent
+        cloudTypeRaw = CloudType.icloud.rawValue
+        Log.info("sync", "ios import: adopted icloud folder \"\(folder.lastPathComponent)\", sync enabled")
+    }
+
     /// 解析书签并取得安全作用域访问权;调用方必须在用完后调用返回的
     /// release 闭包(stopAccessingSecurityScopedResource)。
     private func resolveICloudFolder() -> (folder: URL, release: () -> Void)? {

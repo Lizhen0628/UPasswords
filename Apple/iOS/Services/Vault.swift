@@ -508,6 +508,8 @@ final class Vault: ObservableObject {
             lock()
             reloadPerDatabaseState()
             refreshDatabases()
+            // 来源在 iCloud 云盘时顺带配好同步书签,登录后同步开箱即用
+            adoptICloudFolderIfUbiquitous(fileURL: url)
             Log.info("db", "ios imported \"\(name).upw\" (\(data.count)B) from file — locked for unlock")
             return name
         } catch {
