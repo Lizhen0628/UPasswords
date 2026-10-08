@@ -61,8 +61,17 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         }
         do {
             let data = try Data(contentsOf: vault.url)
-            let plain = try DatabaseCipher.decryptedData(data, password: password)
-            let db = try PasswordDatabase.parse(plain)
+            let db: PasswordDatabase
+            if DatabaseCipher.isV2Container(data) {
+                // v2:主密码解信封(同名 .upwkey)拿库密钥再解本体
+                let keyURL = vault.url.deletingPathExtension().appendingPathExtension("upwkey")
+                let envelope = try Data(contentsOf: keyURL)
+                let vek = try DatabaseCipher.unwrapVaultKey(envelope, password: password)
+                db = try PasswordDatabase.parse(DatabaseCipher.decryptBody(data, vaultKey: vek))
+            } else {
+                // v1 兼容:主密码直解
+                db = try PasswordDatabase.parse(DatabaseCipher.decryptedData(data, password: password))
+            }
             cachedCards = db.cards.filter { !$0.trashed && !$0.archived && !$0.template }
             cachedVaultName = vault.name
             Log.info("chrome", "safari vault \"\(vault.name)\" unlocked: \(cachedCards?.count ?? 0) cards")

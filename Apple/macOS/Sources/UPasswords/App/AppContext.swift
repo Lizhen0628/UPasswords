@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import CryptoKit
 import UPasswordsCore
 import UPasswordsPersistence
 
@@ -86,6 +87,9 @@ final class AppContext: ObservableObject {
     /// In-memory password, present only while unlocked.
     /// 仅生命周期代码(unlock/lock/erase/changePassword)可写入。
     nonisolated(unsafe) var password: String = ""
+    /// v2 信封加密的库密钥(解锁时由信封解出;保存/同步解密本体用,与主密码解耦)。
+    /// nonisolated(unsafe):与 password 同一先例,全部读写都在 @MainActor 上。
+    nonisolated(unsafe) var vaultKey: SymmetricKey? = nil
 
     let settings = AppSettings.shared
     let store = DatabaseStore.shared
@@ -293,7 +297,9 @@ final class AppContext: ObservableObject {
     func unlock(name: String, password: String) throws {
         Log.info("lifecycle", "unlock \"\(name)\" (password length \(password.count))")
         do {
-            database = try store.load(name: name, password: password)
+            let (db, vek) = try store.loadUnlocked(name: name, password: password)
+            database = db
+            vaultKey = vek
         } catch {
             Log.warn("lifecycle", "unlock \"\(name)\" failed: \(error)")
             throw error
@@ -336,6 +342,7 @@ final class AppContext: ObservableObject {
         guard phase == .unlocked else { return }
         Log.info("lifecycle", "lock \"\(databaseName)\"")
         password = ""
+        vaultKey = nil
         phase = .locked
         activeSheet = nil
         editDraft = nil
@@ -415,7 +422,12 @@ final class AppContext: ObservableObject {
     func save() {
         guard phase == .unlocked else { return }
         do {
-            try store.save(database, name: databaseName, password: password)
+            if let vaultKey {
+                try store.save(database, name: databaseName, vaultKey: vaultKey)
+            } else {
+                // 兼容:解锁路径必持库密钥,此处理论不可达;从钥匙串兜底
+                try store.save(database, name: databaseName, password: password)
+            }
             SafariSnapshotBridge.push(databaseName: databaseName, store: store)
         } catch {
             Log.error("db", "save \"\(databaseName)\" failed: \(error)")

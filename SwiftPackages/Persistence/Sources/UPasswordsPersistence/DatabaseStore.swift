@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 import UPasswordsCore
 
@@ -66,6 +67,8 @@ public final class DatabaseStore {
     public var backupsDir: URL { root.appendingPathComponent("Backups", isDirectory: true) }
 
     public func url(for name: String) -> URL { databasesDir.appendingPathComponent("\(name).upw") }
+    /// v2 信封文件路径:库密钥由主密码包裹存放在此(<名>.upwkey)。
+    public func keyURL(for name: String) -> URL { databasesDir.appendingPathComponent("\(name).upwkey") }
 
     public var mainDatabaseName: String {
         get { UserDefaults.standard.string(forKey: "db.main") ?? "Main" }
@@ -95,20 +98,25 @@ public final class DatabaseStore {
         guard !exists(name) else { throw StoreError(L10n.t("database_already_exists_error")) }
         let t0 = Date()
         let db = PasswordDatabase.createDefault(now: now)
-        let plain = db.xmlData()
-        let enc = try DatabaseCipher.encryptedData(plain, password: password)
+        let vek = DatabaseCipher.generateVaultKey()
+        let enc = try DatabaseCipher.encryptBody(db.xmlData(), vaultKey: vek)
+        let envelope = try DatabaseCipher.wrapVaultKey(vek, password: password)
         do {
             try enc.write(to: url(for: name))
+            try envelope.write(to: keyURL(for: name))
         } catch {
             Log.error("db", "create \"\(name).upw\" write failed: \(error)")
             throw error
         }
         PasswordStore.savePassword(password, databaseName: name)
-        Log.info("db", "created \"\(name).upw\" (\(enc.count)B, \(Int(Date().timeIntervalSince(t0) * 1000))ms) at \(url(for: name).path)")
+        Log.info("db", "created \"\(name).upw\" v2 (\(enc.count)B + envelope, \(Int(Date().timeIntervalSince(t0) * 1000))ms)")
         return DatabaseFile(name: name, fileName: "\(name).upw", created: now, isMain: list().isEmpty)
     }
 
-    public func load(name: String, password: String) throws -> PasswordDatabase {
+    /// 解锁加载:v1 容器用主密码直解并就地迁移为 v2(本体+信封);
+    /// v2 用主密码解信封拿到库密钥再解本体。
+    /// - Returns: 数据库与库密钥(会话期持有,保存时直接使用)
+    public func loadUnlocked(name: String, password: String) throws -> (PasswordDatabase, SymmetricKey) {
         let t0 = Date()
         let data: Data
         do {
@@ -117,17 +125,61 @@ public final class DatabaseStore {
             Log.error("db", "load \"\(name).upw\" unreadable: \(error)")
             throw error
         }
+        if DatabaseCipher.isV2Container(data) {
+            let envelope = try Data(contentsOf: keyURL(for: name))
+            let vek = try DatabaseCipher.unwrapVaultKey(envelope, password: password)
+            let plain = try DatabaseCipher.decryptBody(data, vaultKey: vek)
+            let db = try PasswordDatabase.parse(plain)
+            Log.debug("db", "loaded \"\(name).upw\" v2 (\(data.count)B, \(Int(Date().timeIntervalSince(t0) * 1000))ms)")
+            return (db, vek)
+        }
+        // v1:主密码直解,随后迁移 v2(生成库密钥,重写本体+信封)
         let plain = try DatabaseCipher.decryptedData(data, password: password)
         let db = try PasswordDatabase.parse(plain)
-        Log.debug("db", "loaded \"\(name).upw\" (\(data.count)B, \(Int(Date().timeIntervalSince(t0) * 1000))ms)")
-        return db
+        let vek = DatabaseCipher.generateVaultKey()
+        let body = try DatabaseCipher.encryptBody(plain, vaultKey: vek)
+        let envelope = try DatabaseCipher.wrapVaultKey(vek, password: password)
+        try body.write(to: url(for: name), options: .atomic)
+        try envelope.write(to: keyURL(for: name), options: .atomic)
+        Log.info("db", "loaded \"\(name).upw\" v1 → migrated to v2 (\(body.count)B + envelope)")
+        return (db, vek)
     }
 
-    public func save(_ db: PasswordDatabase, name: String, password: String) throws {
+    public func load(name: String, password: String) throws -> PasswordDatabase {
+        try loadUnlocked(name: name, password: password).0
+    }
+
+    /// v2 保存:仅需库密钥(与主密码无关,改密后保存不受影响)。
+    public func save(_ db: PasswordDatabase, name: String, vaultKey: SymmetricKey) throws {
         let t0 = Date()
+        let enc = try DatabaseCipher.encryptBody(db.xmlData(), vaultKey: vaultKey)
+        try enc.write(to: url(for: name), options: .atomic)
+        Log.debug("db", "saved \"\(name).upw\" v2 (\(enc.count)B, \(Int(Date().timeIntervalSince(t0) * 1000))ms)")
+    }
+
+    /// v1 兼容保存(低频路径:导入/AutoFill):v2 库解信封拿库密钥后走 v2 写;
+    /// 无信封的纯 v1 库保持旧写(下次 loadUnlocked 会迁移)。
+    public func save(_ db: PasswordDatabase, name: String, password: String) throws {
+        if fm.fileExists(atPath: keyURL(for: name).path),
+           let envelope = try? Data(contentsOf: keyURL(for: name)),
+           let vek = try? DatabaseCipher.unwrapVaultKey(envelope, password: password) {
+            try save(db, name: name, vaultKey: vek)
+            return
+        }
         let enc = try DatabaseCipher.encryptedData(db.xmlData(), password: password)
         try enc.write(to: url(for: name), options: .atomic)
-        Log.debug("db", "saved \"\(name).upw\" (\(enc.count)B, \(Int(Date().timeIntervalSince(t0) * 1000))ms)")
+    }
+
+    /// v2 改密:只重写信封(本体不动);调用方负责更新钥匙串。
+    public func rewrap(name: String, vaultKey: SymmetricKey, newPassword: String) throws {
+        let envelope = try DatabaseCipher.wrapVaultKey(vaultKey, password: newPassword)
+        try envelope.write(to: keyURL(for: name), options: .atomic)
+        Log.info("db", "rewrapped \"\(name).upwkey\" (envelope only, body untouched)")
+    }
+
+    /// 读本地信封(同步上传信封时用)。
+    public func envelopeData(for name: String) -> Data? {
+        try? Data(contentsOf: keyURL(for: name))
     }
 
     public func rename(_ old: String, to new: String) throws {
@@ -138,6 +190,9 @@ public final class DatabaseStore {
         }
         Log.info("db", "rename \"\(old)\" → \"\(new)\"")
         try fm.moveItem(at: url(for: old), to: url(for: new))
+        if fm.fileExists(atPath: keyURL(for: old).path) {
+            try? fm.moveItem(at: keyURL(for: old), to: keyURL(for: new))
+        }
         if let pw = PasswordStore.loadPassword(databaseName: old) {
             PasswordStore.savePassword(pw, databaseName: new)
             if PasswordStore.loadPassword(databaseName: old, biometric: true) != nil {
@@ -153,6 +208,7 @@ public final class DatabaseStore {
         guard exists(name) else { return }
         Log.warn("db", "delete \"\(name).upw\" (alsoBackups=\(alsoBackups))")
         try fm.removeItem(at: url(for: name))
+        try? fm.removeItem(at: keyURL(for: name))
         PasswordStore.eraseData(databaseName: name)
         if alsoBackups {
             let dir = backupsDir.appendingPathComponent(name, isDirectory: true)
@@ -179,6 +235,10 @@ public final class DatabaseStore {
         let data = try Data(contentsOf: url(for: name))
         let stamp = Self.backupStampFormatter.string(from: now)
         try data.write(to: dir.appendingPathComponent("\(stamp).upw"))
+        // v2 库须连同信封一起备份,否则备份本体无法用主密码解开
+        if let envelope = envelopeData(for: name) {
+            try? envelope.write(to: dir.appendingPathComponent("\(stamp).upwkey"))
+        }
         Log.info("backup", "backup \"\(name)\" → \(stamp).upw (\(data.count)B), kept \(pruneBackups(name: name, keep: 10)) most recent")
     }
 
@@ -221,11 +281,18 @@ public final class DatabaseStore {
     public func restore(backup: URL, to name: String) throws {
         Log.info("backup", "restore \(backup.lastPathComponent) → \"\(name).upw\"")
         let data = try Data(contentsOf: backup)
-        guard DatabaseCipher.checkFileMagic(data) else {
+        let isV1 = DatabaseCipher.checkFileMagic(data)
+        let isV2 = DatabaseCipher.isV2Container(data)
+        guard isV1 || isV2 else {
             Log.error("backup", "restore rejected: wrong file magic in \(backup.lastPathComponent)")
             throw StoreError(L10n.t("wrong_database_format_error"))
         }
         try data.write(to: url(for: name), options: .atomic)
+        // v2 本体需配套信封:同名 .upwkey 备份存在则一并恢复
+        let keyBackup = backup.deletingPathExtension().appendingPathExtension("upwkey")
+        if isV2, fm.fileExists(atPath: keyBackup.path) {
+            try? fm.copyItem(at: keyBackup, to: keyURL(for: name))
+        }
     }
 
     public struct StoreError: LocalizedError {

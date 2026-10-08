@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import UPasswordsCore
 import UPasswordsPersistence
 
@@ -12,45 +13,37 @@ extension AppContext {
             Log.warn("db", "changePassword \"\(databaseName)\" failed: wrong current password")
             throw DatabaseCipher.CipherError(message: L10n.t("wrong_password_error"))
         }
-        // re-encrypt under the new password
-        try store.save(database, name: databaseName, password: new)
+        guard let vaultKey else {
+            Log.error("db", "changePassword \"\(databaseName)\" failed: no vault key in session")
+            throw DatabaseCipher.CipherError(message: L10n.t("sync_error"))
+        }
+        // v2:改密只重写本地信封(~100B),本体不动;钥匙串同步更新
+        try store.rewrap(name: databaseName, vaultKey: vaultKey, newPassword: new)
         PasswordStore.savePassword(new, databaseName: databaseName)
         if settings.fastUnlock && PasswordStore.biometricAvailable() {
             PasswordStore.savePasswordForBiometric(new, databaseName: databaseName)
         }
         password = new
-        Log.info("db", "changePassword \"\(databaseName)\" ok (re-encrypted)")
-        // 远端容器仍是旧密码加密:云端已配置则接力重加密(与 iOS 同语义),
-        // 否则其他设备下次同步拿到无法解密的远端,走「密码已变更」流程
+        Log.info("db", "changePassword \"\(databaseName)\" ok (envelope rewrapped, body untouched)")
+        // 云端接力:只传信封——本体对端用同一库密钥照解,无重传竞态
         if settings.cloud != .none {
-            Task { await reencryptCloudAfterPasswordChange(old: current) }
+            Task { await uploadCloudEnvelope() }
         } else {
-            Log.info("sync", "password changed with cloud unconfigured — other devices will see unreadable remote")
+            Log.info("sync", "password changed with cloud unconfigured — other devices adopt via next sync")
         }
     }
 
-    /// 改主密码后的云端接力:旧密码解密远端并合并(防丢对端改动),再用新密码重传。
-    /// 同时推送 Safari 快照(密文容器已换密钥,扩展侧下次解锁用新密码)。
-    private func reencryptCloudAfterPasswordChange(old: String) async {
-        guard let driver = makeCloudDriver() else { return }
+    /// 改主密码后的云端接力:v2 只需上传本地信封(~100B),本体不重传。
+    private func uploadCloudEnvelope() async {
+        guard let driver = makeCloudDriver(),
+              let envelope = store.envelopeData(for: databaseName) else { return }
         do {
             try await driver.testConnection()
-            if let remoteData = try await driver.download(),
-               let plain = try? DatabaseCipher.decryptedData(remoteData, password: old),
-               let remote = try? PasswordDatabase.parse(plain) {
-                var local = database
-                local.merge(with: remote)
-                database = local
-                save()
-                Log.info("sync", "cloud handoff: merged remote (\(remote.cards.count) cards) after password change")
-            }
-            let out = try DatabaseCipher.encryptedData(database.xmlData(), password: password)
-            try await driver.upload(out)
-            recordSyncBaseline(uploaded: out)
+            try await driver.uploadKey(envelope)
             SafariSnapshotBridge.push(databaseName: databaseName, store: store)
-            Log.info("sync", "cloud handoff: remote re-encrypted with new password (\(out.count)B)")
+            Log.info("sync", "cloud handoff: envelope uploaded (\(envelope.count)B) after password change")
         } catch {
-            Log.warn("sync", "cloud handoff after password change failed: \(error)")
+            Log.warn("sync", "cloud envelope handoff failed: \(error)")
         }
     }
 
@@ -115,6 +108,23 @@ extension AppContext {
         case success, wrongPassword, emptyClobber
     }
 
+    /// 双端各自从 v1 迁移会产生不同库密钥;以云端信封为准收敛库身份
+    /// (本地本体换密钥重写 + 信封重裹,此后双端同身份,不再分歧)。
+    private func joinRemoteVaultIdentity(_ remoteVEK: SymmetricKey) {
+        let differs = vaultKey.map {
+            $0.withUnsafeBytes { Data($0) } != remoteVEK.withUnsafeBytes { Data($0) }
+        } ?? true
+        guard differs else { return }
+        do {
+            vaultKey = remoteVEK
+            try store.save(database, name: databaseName, vaultKey: remoteVEK)
+            try store.rewrap(name: databaseName, vaultKey: remoteVEK, newPassword: password)
+            Log.warn("sync", "vault identity converged to remote envelope (local body re-keyed)")
+        } catch {
+            Log.error("sync", "vault identity convergence failed: \(error)")
+        }
+    }
+
     /// 远端不可解密修复 A:输入「其他设备改后的新主密码」接管远端——
     /// 解密远端并合并进本地 → 本地以新密码重加密落盘并更新钥匙串 → 上传合并结果。
     @discardableResult
@@ -122,6 +132,37 @@ extension AppContext {
         guard let driver = makeCloudDriver() else { return .wrongPassword }
         do {
             try await driver.testConnection()
+            // v2 路径:只需解开远端信封——收敛库身份(云端为准),顺带合并本体
+            if let keyData = try await driver.downloadKey() {
+                guard let remoteVEK = try? DatabaseCipher.unwrapVaultKey(keyData, password: newPassword) else {
+                    Log.warn("sync", "adopt: envelope unwrap failed with given password")
+                    return .wrongPassword
+                }
+                vaultKey = remoteVEK
+                password = newPassword
+                try store.rewrap(name: databaseName, vaultKey: remoteVEK, newPassword: newPassword)
+                PasswordStore.savePassword(newPassword, databaseName: databaseName)
+                if settings.fastUnlock && PasswordStore.biometricAvailable() {
+                    PasswordStore.savePasswordForBiometric(newPassword, databaseName: databaseName)
+                }
+                if let remoteData = try await driver.download(),
+                   DatabaseCipher.isV2Container(remoteData),
+                   let plain = try? DatabaseCipher.decryptBody(remoteData, vaultKey: remoteVEK),
+                   let remote = try? PasswordDatabase.parse(plain) {
+                    var merged = database
+                    merged.merge(with: remote)
+                    database = merged
+                    try store.save(merged, name: databaseName, vaultKey: remoteVEK)
+                    let out = try DatabaseCipher.encryptBody(merged.xmlData(), vaultKey: remoteVEK)
+                    try await driver.upload(out)
+                    recordSyncBaseline(uploaded: out)
+                }
+                syncRemoteUnreadable = false
+                SafariSnapshotBridge.push(databaseName: databaseName, store: store)
+                Log.info("sync", "adopted new password via envelope (identity converged, body merged)")
+                return .success
+            }
+            // v1 兼容路径(或库重建):新密码解密远端本体 → 合并 → 本地重加密 → 重传
             guard let remoteData = try await driver.download() else {
                 return .wrongPassword
             }
@@ -139,18 +180,22 @@ extension AppContext {
             var merged = database
             merged.merge(with: remote)
             database = merged
-            try store.save(merged, name: databaseName, password: newPassword)
+            guard let vaultKey else { return .wrongPassword }
+            try store.save(merged, name: databaseName, vaultKey: vaultKey)
+            try store.rewrap(name: databaseName, vaultKey: vaultKey, newPassword: newPassword)
             password = newPassword
             PasswordStore.savePassword(newPassword, databaseName: databaseName)
             if settings.fastUnlock && PasswordStore.biometricAvailable() {
                 PasswordStore.savePasswordForBiometric(newPassword, databaseName: databaseName)
             }
-            let out = try DatabaseCipher.encryptedData(merged.xmlData(), password: newPassword)
-            try await driver.upload(out)
-            recordSyncBaseline(uploaded: out)
+            try await driver.upload(try DatabaseCipher.encryptBody(merged.xmlData(), vaultKey: vaultKey))
+            if let envelope = store.envelopeData(for: databaseName) {
+                try await driver.uploadKey(envelope)
+            }
+            recordSyncBaseline(uploaded: try DatabaseCipher.encryptBody(merged.xmlData(), vaultKey: vaultKey))
             syncRemoteUnreadable = false
             SafariSnapshotBridge.push(databaseName: databaseName, store: store)
-            Log.info("sync", "adopted remote password: merged \(remote.cards.count) remote cards, re-encrypted local+cloud")
+            Log.info("sync", "adopted remote password: merged \(remote.cards.count) remote cards (v1 path)")
             return .success
         } catch {
             Log.warn("sync", "adopt remote password failed: \(error)")
@@ -160,12 +205,15 @@ extension AppContext {
 
     /// 远端不可解密修复 B:以本地数据覆盖云端(确认后调用),会丢弃云端现有内容。
     func overwriteUnreadableRemote() async {
-        guard let driver = makeCloudDriver() else { return }
+        guard let driver = makeCloudDriver(), let vaultKey else { return }
         syncState = .syncing
         do {
             try await driver.testConnection()
-            let out = try DatabaseCipher.encryptedData(database.xmlData(), password: password)
+            let out = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
             try await driver.upload(out)
+            if let envelope = store.envelopeData(for: databaseName) {
+                try await driver.uploadKey(envelope)
+            }
             recordSyncBaseline(uploaded: out)
             syncRemoteUnreadable = false
             lastSync = Date()
@@ -362,12 +410,38 @@ extension AppContext {
         do {
             try await driver.testConnection()
             Log.debug("sync", "\(settings.cloud.rawValue) connection ok")
+            // v2 信封先行:远端有信封 → 本体用库密钥解密(与主密码解耦)。
+            // 信封解不开 = 对端刚改密 → 走接管提示;无信封 = v1 远端(兼容期)。
+            var sessionKey = vaultKey
+            if let keyData = try await driver.downloadKey() {
+                if let remoteVEK = try? DatabaseCipher.unwrapVaultKey(keyData, password: password) {
+                    sessionKey = remoteVEK
+                    joinRemoteVaultIdentity(remoteVEK)
+                } else {
+                    let firstHit = !syncRemoteUnreadable
+                    syncRemoteUnreadable = true
+                    syncState = .error(L10n.t("sync_remote_unreadable_error"))
+                    Log.error("sync", "sync \"\(databaseName)\": envelope unwrap failed — peer changed password (firstHit=\(firstHit))")
+                    if firstHit {
+                        promptAdoptRemotePassword()
+                    } else if !auto {
+                        AppToast.shared.show(L10n.t("sync_remote_unreadable_error"))
+                    }
+                    return
+                }
+            }
             let remoteData = try await driver.download()
             var local = database
             if let remoteData {
                 let plain: Data
                 do {
-                    plain = try DatabaseCipher.decryptedData(remoteData, password: password)
+                    if DatabaseCipher.isV2Container(remoteData) {
+                        guard let sessionKey else { throw SyncError.wrongPassword }
+                        plain = try DatabaseCipher.decryptBody(remoteData, vaultKey: sessionKey)
+                    } else {
+                        // v1 远端(兼容期):主密码直解
+                        plain = try DatabaseCipher.decryptedData(remoteData, password: password)
+                    }
                 } catch {
                     // 远端被其他设备用新主密码重加密(或损坏):不进入合并,
                     // 主动弹窗引导输入新密码接管(边沿触发:同一事件只弹一次)
@@ -443,8 +517,18 @@ extension AppContext {
                     }
                 }
             }
-            let out = try DatabaseCipher.encryptedData(database.xmlData(), password: password)
+            guard let vaultKey else {
+                Log.error("sync", "sync aborted: no vault key in session")
+                syncState = .error(L10n.t("sync_error"))
+                return
+            }
+            let out = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
             try await driver.upload(out)
+            // 远端缺信封则补传(v1→v2 迁移后的首次同步;之后仅改密时传)
+            if try await driver.downloadKey() == nil, let envelope = store.envelopeData(for: databaseName) {
+                try await driver.uploadKey(envelope)
+                Log.info("sync", "cloud envelope uploaded (first v2 sync)")
+            }
             recordSyncBaseline(uploaded: out)
             syncRemoteUnreadable = false
             let finished = Date()

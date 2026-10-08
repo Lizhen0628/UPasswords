@@ -146,11 +146,21 @@ public enum SyncConflict {
 
 /// 云同步驱动的统一接口:sync() 以相同的 test/download/upload 流程驱动各实现;
 /// listDatabases 供云端恢复流程枚举远端数据库。
+/// v2 信封(<名>.upwkey)经 downloadKey/uploadKey 同步;v1 远端无信封,
+/// 默认实现返回 nil/空操作,由调用方回落旧路径。
 public protocol CloudDriver {
     func testConnection() async throws
     func download() async throws -> Data?
     func upload(_ data: Data) async throws
     func listDatabases() async throws -> [String]
+    /// v2 信封(主密码包裹的库密钥)下载/上传
+    func downloadKey() async throws -> Data?
+    func uploadKey(_ data: Data) async throws
+}
+
+public extension CloudDriver {
+    func downloadKey() async throws -> Data? { nil }
+    func uploadKey(_ data: Data) async throws {}
 }
 
 /// WebDAV driver: PUT/GET of the encrypted database container, with an
@@ -175,6 +185,9 @@ public final class WebDavDriver {
 
     private var remoteURL: URL? {
         settings.baseURL?.appendingPathComponent("\(databaseName).upw")
+    }
+    private var remoteKeyURL: URL? {
+        settings.baseURL?.appendingPathComponent("\(databaseName).upwkey")
     }
 
     public func testConnection() async throws {
@@ -219,6 +232,27 @@ public final class WebDavDriver {
         guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw SyncError.http((resp as? HTTPURLResponse)?.statusCode ?? 0)
         }
+    }
+
+    public func downloadKey() async throws -> Data? {
+        guard let url = remoteKeyURL else { throw SyncError.badUrl }
+        let req = request(method: "GET", url: url)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse else { throw SyncError.badUrl }
+        if http.statusCode == 404 { return nil }
+        guard (200..<300).contains(http.statusCode) else { throw SyncError.http(http.statusCode) }
+        return data
+    }
+
+    public func uploadKey(_ data: Data) async throws {
+        guard let url = remoteKeyURL else { throw SyncError.badUrl }
+        var req = request(method: "PUT", url: url)
+        req.httpBody = data
+        let (_, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw SyncError.http((resp as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        Log.debug("sync", "webdav wrote envelope \(data.count)B for \"\(databaseName)\"")
     }
 
     public func listDatabases() async throws -> [String] {
@@ -367,6 +401,21 @@ public final class ICloudDriver: CloudDriver {
         try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
         try coordinatedWrite(data, to: remoteURL)
         Log.debug("sync", "icloud wrote \(data.count)B to \"\(remoteURL.lastPathComponent)\"")
+    }
+
+    private var remoteKeyURL: URL {
+        folderURL.appendingPathComponent("\(databaseName).upwkey")
+    }
+
+    public func downloadKey() async throws -> Data? {
+        guard FileManager.default.fileExists(atPath: remoteKeyURL.path) else { return nil }
+        return try coordinatedRead(remoteKeyURL)
+    }
+
+    public func uploadKey(_ data: Data) async throws {
+        try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        try coordinatedWrite(data, to: remoteKeyURL)
+        Log.debug("sync", "icloud wrote envelope \(data.count)B for \"\(databaseName)\"")
     }
 
     public func listDatabases() async throws -> [String] {

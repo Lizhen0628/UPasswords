@@ -226,10 +226,6 @@ struct ManageDatabasesSheet: View {
         let pwd = ctx.password.isEmpty ? randomPassword() : ctx.password
         do {
             try ctx.store.create(name: newName, password: pwd)
-            if !ctx.password.isEmpty {
-                // inherit current password for a seamless switch
-                try? ctx.store.save(PasswordDatabase.createDefault(), name: newName, password: ctx.password)
-            }
             newName = ""
             error = ""
             AppToast.shared.show(L10n.t("new_database_created_message"))

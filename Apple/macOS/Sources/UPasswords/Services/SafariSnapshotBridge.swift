@@ -24,6 +24,10 @@ enum SafariSnapshotBridge {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let data = try Data(contentsOf: source)
             try data.write(to: dir.appendingPathComponent("\(name).upw"), options: .atomic)
+            // v2 库须连同信封一起推,扩展侧才能用主密码解出库密钥
+            if let envelope = store.envelopeData(for: name) {
+                try envelope.write(to: dir.appendingPathComponent("\(name).upwkey"), options: .atomic)
+            }
             try Data(name.utf8).write(to: dir.appendingPathComponent("current"), options: .atomic)
             Log.debug("chrome", "safari snapshot pushed: \(name) (\(data.count)B)")
         } catch {

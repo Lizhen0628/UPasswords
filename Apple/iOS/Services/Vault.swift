@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import LocalAuthentication
 import UniformTypeIdentifiers
+import CryptoKit
 
 import UPasswordsCore
 import UPasswordsPersistence
@@ -80,6 +81,8 @@ final class Vault: ObservableObject {
     internal var databaseName = SharedVaultStore.defaultDatabaseName
     /// 解锁期间内存持有,绝不写入日志/持久化(隐私红线)。
     internal var password = ""
+    /// v2 信封加密的库密钥(解锁时由信封解出;保存/同步解密本体用,与主密码解耦)。
+    internal var vaultKey: SymmetricKey? = nil
     private var backgroundAt: Date? = nil
     private var toastTask: Task<Void, Never>? = nil
     internal var autoSyncTimer: Timer? = nil
@@ -168,8 +171,9 @@ final class Vault: ObservableObject {
 
     @discardableResult
     func unlock(with pw: String) -> Bool {
-        guard let db = try? store.load(name: databaseName, password: pw) else { return false }
+        guard let (db, vek) = try? store.loadUnlocked(name: databaseName, password: pw) else { return false }
         password = pw
+        vaultKey = vek
         database = db
         locked = false
         Log.info("app", "ios vault unlocked db=\(databaseName) cards=\(db.cards.count)")
@@ -232,22 +236,26 @@ final class Vault: ObservableObject {
         return .success
     }
 
-    /// 修改主密码:校验旧密码后用新密码重新加密落盘,并更新钥匙串。
+    /// 修改主密码:校验旧密码后只重写本地信封(v2),并更新钥匙串。
     func changeMasterPassword(old: String, new: String) -> Bool {
         guard verifyMaster(old), new.count >= 4 else { return false }
+        guard let vaultKey else {
+            Log.error("app", "ios master password change failed: no vault key in session")
+            return false
+        }
         do {
-            try store.save(database, name: databaseName, password: new)
+            try store.rewrap(name: databaseName, vaultKey: vaultKey, newPassword: new)
             password = new
             PasswordStore.savePassword(new, databaseName: databaseName)
             if PasswordStore.hasBiometricItem(databaseName: databaseName) {
                 PasswordStore.savePasswordForBiometric(new, databaseName: databaseName)
             }
-            Log.info("app", "ios master password changed db=\(databaseName)")
-            // 远端容器仍是旧密码加密:云端已就绪则接力重加密,否则下次同步走覆盖修复
+            Log.info("app", "ios master password changed db=\(databaseName) (envelope rewrapped, body untouched)")
+            // 云端接力:只传信封——本体对端用同一库密钥照解,无重传竞态
             if cloudConfigured {
-                Task { await reencryptCloudAfterPasswordChange(old: old) }
+                Task { await uploadCloudEnvelope() }
             } else {
-                Log.info("sync", "ios password changed with cloud unconfigured — next sync may hit unreadable remote")
+                Log.info("sync", "ios password changed with cloud unconfigured — other devices adopt via next sync")
             }
             return true
         } catch {
@@ -259,6 +267,7 @@ final class Vault: ObservableObject {
     func lock() {
         database = PasswordDatabase()
         password = ""
+        vaultKey = nil
         locked = true
         Log.info("app", "ios vault locked")
     }
@@ -371,7 +380,7 @@ final class Vault: ObservableObject {
     @discardableResult
     func switchDatabase(to name: String, password pw: String) -> Bool {
         guard store.exists(name), name != databaseName else { return false }
-        guard let db = try? store.load(name: name, password: pw) else {
+        guard let (db, vek) = try? store.loadUnlocked(name: name, password: pw) else {
             Log.warn("app", "ios switch database → \"\(name)\" failed: wrong password")
             return false
         }
@@ -380,6 +389,7 @@ final class Vault: ObservableObject {
         databaseName = name
         database = db
         password = pw
+        vaultKey = vek
         locked = false
         reloadPerDatabaseState()
         healBiometricEntry(with: pw)
@@ -611,7 +621,12 @@ final class Vault: ObservableObject {
     func persist() {
         guard !locked else { return }
         do {
-            try store.save(database, name: databaseName, password: password)
+            if let vaultKey {
+                try store.save(database, name: databaseName, vaultKey: vaultKey)
+            } else {
+                // 兼容:解锁路径必持库密钥,此处理论不可达;信封兼容写兜底
+                try store.save(database, name: databaseName, password: password)
+            }
         } catch {
             Log.error("db", "ios save db=\(databaseName) failed: \(error)")
             showToast(L10n.t("ios_vault_save_error"))
