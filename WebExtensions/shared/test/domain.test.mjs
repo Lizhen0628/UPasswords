@@ -58,6 +58,7 @@ test('isRequestMessage accepts only tagged shapes', () => {
     assert.equal(isRequestMessage({ type: 'ping' }), true)
     assert.equal(isRequestMessage({ type: 'query', host: 'x.com' }), true)
     assert.equal(isRequestMessage({ type: 'fill', candidate: {} }), true)
+    assert.equal(isRequestMessage({ type: 'unlock', password: 'x' }), true)
     assert.equal(isRequestMessage({ type: 'pong' }), false, 'responses must not pass as requests')
     assert.equal(isRequestMessage(null), false)
     assert.equal(isRequestMessage('ping'), false)
@@ -99,8 +100,8 @@ test('Contracts: extension message schema covers all request/response tags', () 
     )
     const tag = (branch) => branch.properties.type.const
     const [request, response] = schema.oneOf
-    assert.deepEqual(request.oneOf.map(tag).sort(), ['fill', 'ping', 'query'])
-    assert.deepEqual(response.oneOf.map(tag).sort(), ['error', 'filled', 'items', 'pong'])
+    assert.deepEqual(request.oneOf.map(tag).sort(), ['fill', 'ping', 'query', 'unlock'])
+    assert.deepEqual(response.oneOf.map(tag).sort(), ['error', 'filled', 'items', 'locked', 'pong', 'unlocked'])
 })
 
 test('Contracts: safari and chrome manifests agree on shared entry points', () => {

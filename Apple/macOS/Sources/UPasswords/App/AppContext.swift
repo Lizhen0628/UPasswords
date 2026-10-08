@@ -302,6 +302,7 @@ final class AppContext: ObservableObject {
         selection = .special(.allCards)
         selectedCardId = database.activeCards.first?.id
         Log.info("lifecycle", "unlocked \"\(name)\": \(database.cards.count) cards, \(database.labels.count) labels")
+        SafariSnapshotBridge.push(databaseName: name, store: store)
         scheduleIconBackfill()
         scheduleAutoBackupIfNeeded()
         startAutoSyncTickerIfNeeded()
@@ -410,6 +411,7 @@ final class AppContext: ObservableObject {
         guard phase == .unlocked else { return }
         do {
             try store.save(database, name: databaseName, password: password)
+            SafariSnapshotBridge.push(databaseName: databaseName, store: store)
         } catch {
             Log.error("db", "save \"\(databaseName)\" failed: \(error)")
             AppToast.shared.show(error.localizedDescription)

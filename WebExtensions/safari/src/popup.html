@@ -3,15 +3,39 @@
 <head>
     <meta charset="utf-8">
     <style>
-        body { font: 13px -apple-system, sans-serif; width: 260px; margin: 10px; }
-        h1 { font-size: 14px; margin: 0 0 8px; }
-        .host { color: #666; word-break: break-all; }
-        ul { padding-left: 16px; margin: 8px 0 0; }
+        body { font: 13px -apple-system, sans-serif; width: 280px; margin: 0; padding: 12px; }
+        h1 { font-size: 14px; margin: 0 0 4px; }
+        .host { color: #666; word-break: break-all; margin-bottom: 8px; }
+        .muted { color: #888; }
+        ul { list-style: none; padding: 0; margin: 8px 0 0; }
+        li.item {
+            padding: 8px 10px; border-radius: 8px; cursor: pointer;
+            display: flex; flex-direction: column; gap: 2px;
+        }
+        li.item:hover { background: rgba(128, 128, 128, 0.15); }
+        li.item .title { font-weight: 600; }
+        li.item .user { color: #666; font-size: 12px; }
+        .unlock { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+        .unlock input {
+            font: inherit; padding: 7px 10px; border-radius: 8px;
+            border: 1px solid rgba(128, 128, 128, 0.4); background: transparent; color: inherit;
+        }
+        .unlock button {
+            font: inherit; font-weight: 600; padding: 7px 10px; border: 0;
+            border-radius: 8px; cursor: pointer; color: #fff; background: #0a84ff;
+        }
+        .error { color: #ff453a; font-size: 12px; }
+        .ok { color: #30d158; font-size: 12px; }
     </style>
 </head>
 <body>
     <h1>UPasswords</h1>
     <div class="host" id="host">…</div>
+    <div id="status" class="muted"></div>
+    <div class="unlock" id="unlockBox" hidden>
+        <input type="password" id="masterPassword" autocomplete="off">
+        <button id="unlockButton" type="button"></button>
+    </div>
     <ul id="items"></ul>
     <script type="module" src="popup.js"></script>
 </body>

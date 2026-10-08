@@ -52,12 +52,17 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.upasswords.UPasswords
         PRODUCT_NAME: UPasswords
         ENABLE_PREVIEWS: "YES"
+        CODE_SIGN_ENTITLEMENTS: macOS/UPasswords.entitlements
+        DEVELOPMENT_TEAM: 2CV6VKVD26
+        CODE_SIGN_STYLE: Automatic
 
   SafariWebExtension:
     type: app-extension
     platform: macOS
     sources:
       - path: SafariWebExtension
+        excludes:
+          - "SafariWebExtension.entitlements"
       # manifest.json 平铺到 appex Resources 根;src 目录以 folder reference
       # 整体拷入,保住 manifest 里 "src/…" 引用的相对结构(组语义会打平,导致
       # Safari 找不到 background/content 脚本)。
@@ -80,6 +85,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.upasswords.UPasswords.SafariWebExtension
         PRODUCT_NAME: UPasswordsSafariWebExtension
         SKIP_INSTALL: "YES"
+        CODE_SIGN_ENTITLEMENTS: SafariWebExtension/SafariWebExtension.entitlements
+        DEVELOPMENT_TEAM: 2CV6VKVD26
+        CODE_SIGN_STYLE: Automatic
 
   UPasswords-iOS:
     type: application

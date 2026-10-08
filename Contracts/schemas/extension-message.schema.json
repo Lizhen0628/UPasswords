@@ -62,6 +62,14 @@
                     },
                     "required": ["candidate"],
                     "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": { "const": "unlock" },
+                        "password": { "type": "string" }
+                    },
+                    "required": ["password"],
+                    "additionalProperties": false
                 }
             ]
         },
@@ -90,6 +98,21 @@
                         "ok": { "type": "boolean" }
                     },
                     "required": ["ok"],
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": { "const": "unlocked" },
+                        "ok": { "type": "boolean" },
+                        "count": { "type": "integer" }
+                    },
+                    "required": ["ok", "count"],
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": { "const": "locked" }
+                    },
                     "additionalProperties": false
                 },
                 {
