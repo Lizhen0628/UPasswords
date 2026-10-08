@@ -295,10 +295,12 @@ struct CardEditView: View {
                         revealed.insert(fieldValue.id)
                         vault.showToast(L10n.t("ios_password_generated_message"))
                     } label: {
-                        Label(L10n.t("ios_generate_button"), systemImage: "wand.and.stars")
-                            .font(.caption.weight(.medium))
+                        Image(systemName: "wand.and.stars")
+                            .font(.subheadline)
                             .foregroundStyle(Brand.accent)
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(L10n.t("ios_generate_button"))
                 }
                 if fieldValue.type.isOneTimePassword {
                     Button {
