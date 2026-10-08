@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import LocalAuthentication
+import UniformTypeIdentifiers
 
 import UPasswordsCore
 import UPasswordsPersistence
@@ -469,6 +470,50 @@ final class Vault: ObservableObject {
         } catch {
             // 未登录 iCloud/未开云盘属正常路径,不惊扰用户
             Log.info("sync", "ios setup probe: icloud unavailable")
+        }
+    }
+
+    /// 密码库文件类型(文档选择器导入用;.upw 为自定义扩展)。
+    static var vaultFileTypes: [UTType] {
+        [UTType(filenameExtension: "upw") ?? .data]
+    }
+
+    /// 从文件导入加密库(文档选择器;来源可为 iCloud 云盘/本地/AirDrop)。
+    /// 校验容器 magic 后落盘为本地库并切换为当前库,随后锁定等待解锁。
+    /// - Returns: 成功返回导入的库名;失败返回 nil(已 toast + 记日志)
+    @discardableResult
+    func importDatabaseFile(from url: URL) -> String? {
+        let name = url.deletingPathExtension().lastPathComponent
+        guard !name.isEmpty else {
+            showToast(L10n.t("ios_db_import_invalid_message"))
+            return nil
+        }
+        guard !store.exists(name) else {
+            Log.warn("db", "ios import file \"\(name)\": local database already exists")
+            showToast(L10n.t("local_database_exists_error"))
+            return nil
+        }
+        let granted = url.startAccessingSecurityScopedResource()
+        defer { if granted { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try Data(contentsOf: url)
+            guard DatabaseCipher.checkFileMagic(data) else {
+                Log.warn("db", "ios import file \"\(name)\": bad container magic")
+                showToast(L10n.t("ios_db_import_invalid_message"))
+                return nil
+            }
+            try data.write(to: store.url(for: name), options: .atomic)
+            SharedVaultStore.currentDatabaseName = name
+            databaseName = name
+            lock()
+            reloadPerDatabaseState()
+            refreshDatabases()
+            Log.info("db", "ios imported \"\(name).upw\" (\(data.count)B) from file — locked for unlock")
+            return name
+        } catch {
+            Log.error("db", "ios import file \"\(name)\" failed: \(error)")
+            showToast(error.localizedDescription)
+            return nil
         }
     }
 

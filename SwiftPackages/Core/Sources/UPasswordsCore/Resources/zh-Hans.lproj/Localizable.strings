@@ -972,3 +972,5 @@
 "ios_af_passkey_for_fmt" = "为 %@ 创建通行密钥，保存到你的密码库。";
 "ios_af_passkey_save_error" = "通行密钥保存失败，请重试";
 "ios_af_no_passkeys_text" = "密码库中没有该站点的通行密钥";
+"ios_import_file_button" = "从文件导入密码库";
+"ios_db_import_invalid_message" = "文件不是有效的 UPasswords 密码库";

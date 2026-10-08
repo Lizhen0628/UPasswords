@@ -972,3 +972,5 @@
 "ios_af_passkey_for_fmt" = "Create a passkey for %@ and save it to your vault.";
 "ios_af_passkey_save_error" = "Couldn't save the passkey — please try again.";
 "ios_af_no_passkeys_text" = "No passkeys for this site in your vault.";
+"ios_import_file_button" = "Import Vault from File";
+"ios_db_import_invalid_message" = "This file is not a valid UPasswords vault.";

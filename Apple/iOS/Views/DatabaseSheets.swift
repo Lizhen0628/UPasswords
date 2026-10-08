@@ -22,6 +22,7 @@ struct VaultManageSheet: View {
     @State private var switchTarget: DatabaseFile? = nil
     @State private var deleteTarget: DatabaseFile? = nil
     @State private var showRename = false
+    @State private var showImporter = false
 
     var body: some View {
         NavigationStack {
@@ -48,15 +49,29 @@ struct VaultManageSheet: View {
                     Button(L10n.t("close_button")) { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        showRename = true
-                    } label: {
-                        Image(systemName: "pencil")
+                    HStack(spacing: 16) {
+                        Button {
+                            showImporter = true
+                        } label: {
+                            Image(systemName: "doc.badge.plus")
+                        }
+                        .accessibilityLabel(L10n.t("ios_import_file_button"))
+                        Button {
+                            showRename = true
+                        } label: {
+                            Image(systemName: "pencil")
+                        }
+                        .accessibilityLabel(L10n.t("ios_db_rename_title"))
                     }
-                    .accessibilityLabel(L10n.t("ios_db_rename_title"))
                 }
             }
             .onAppear { vault.refreshDatabases() }
+            .fileImporter(isPresented: $showImporter, allowedContentTypes: Vault.vaultFileTypes) { result in
+                // 导入成功后库即切换并锁定,本页随锁屏自动退场
+                if case .success(let url) = result {
+                    vault.importDatabaseFile(from: url)
+                }
+            }
             .sheet(isPresented: $showRename) { DatabaseRenameSheet() }
             .confirmationDialog(L10n.t("ios_db_switch_query"), isPresented: Binding(
                 get: { switchTarget != nil },

@@ -15,6 +15,7 @@ struct LockScreen: View {
     @State private var selectedCloudDB = ""
     @State private var restoreFailed = false
     @State private var lockImage: UIImage? = nil
+    @State private var showFileImporter = false
 
     private var isSetup: Bool { !vault.hasVault }
     private var theme: (name: String, colors: [Color]) {
@@ -113,6 +114,14 @@ struct LockScreen: View {
                 password = stored
             }
         }
+        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: Vault.vaultFileTypes) { result in
+            switch result {
+            case .success(let url):
+                vault.importDatabaseFile(from: url)
+            case .failure(let error):
+                Log.warn("db", "ios import file picker failed: \(error)")
+            }
+        }
     }
 
     @ViewBuilder
@@ -135,6 +144,17 @@ struct LockScreen: View {
                     }
                     .frame(height: 36)
                 }
+                Button {
+                    showFileImporter = true
+                } label: {
+                    Label(L10n.t("ios_import_file_button"), systemImage: "doc.badge.plus")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Brand.accent)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 46)
+                        .background(Brand.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
                 createFields
             } else {
                 unlockFields
