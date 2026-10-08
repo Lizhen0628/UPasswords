@@ -210,12 +210,19 @@ struct AutoFillRootView: View {
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(Brand.fg)
                         .lineLimit(1)
-                    Text(card.login)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Brand.muted)
-                        .lineLimit(1)
+                    // 验证码条目可能没有登录名,退而显示站点
+                    let subtitle = !card.login.isEmpty ? card.login : card.website
+                    if !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.system(size: 13))
+                            .foregroundStyle(Brand.muted)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 8)
+                if model.flow == .oneTimeCode {
+                    otpCode(card)
+                }
                 if model.pickedID == card.id {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 22))
@@ -229,5 +236,29 @@ struct AutoFillRootView: View {
         }
         .buttonStyle(.plain)
         .animation(.spring(response: 0.3), value: model.pickedID)
+    }
+
+    /// 验证码流行尾:实时 TOTP(每秒刷新,3 位分组便于燈抄)。
+    @ViewBuilder
+    private func otpCode(_ card: Card) -> some View {
+        if let field = card.fields.first(where: { $0.type.isOneTimePassword }),
+           let config = try? TOTP.parse(field.value) {
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                Text(groupedCode((try? TOTP.code(config: config, at: ctx.date)) ?? "——————"))
+                    .font(.system(size: 15, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(Brand.green)
+            }
+        }
+    }
+
+    /// 6/8 位验证码按 3 位分组显示。
+    private func groupedCode(_ code: String) -> String {
+        var rest = Array(code.filter { $0 != " " })
+        var groups: [String] = []
+        while !rest.isEmpty {
+            groups.append(String(rest.prefix(3)))
+            rest.removeFirst(min(3, rest.count))
+        }
+        return groups.joined(separator: " ")
     }
 }

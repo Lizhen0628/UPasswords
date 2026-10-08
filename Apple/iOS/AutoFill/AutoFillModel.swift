@@ -14,6 +14,11 @@ final class AutoFillModel: ObservableObject {
 
     enum Stage { case noVault, locked, unlocked }
 
+    /// 填充流:密码(默认)或一次性验证码(iOS 18+ 由系统入口决定)。
+    enum Flow { case password, oneTimeCode }
+
+    @Published private(set) var flow: Flow = .password
+
     @Published private(set) var stage: Stage = .locked
     @Published private(set) var canAutoUnlock = false
     @Published var query = ""
@@ -34,8 +39,10 @@ final class AutoFillModel: ObservableObject {
     }
 
     func attach(context: ASCredentialProviderExtensionContext,
-                serviceIdentifiers: [ASCredentialServiceIdentifier]) {
+                serviceIdentifiers: [ASCredentialServiceIdentifier],
+                flow: Flow = .password) {
         self.context = context
+        self.flow = flow
         serviceHosts = serviceIdentifiers.compactMap { Self.normalizeHost($0.identifier) }
         guard let main = SharedVaultStore.mainDatabase() else {
             Log.info("app", "autofill: no vault found in shared container")
@@ -93,7 +100,13 @@ final class AutoFillModel: ObservableObject {
 
     private func accept(database db: PasswordDatabase) {
         all = db.cards.filter {
-            !$0.trashed && !$0.archived && !$0.template && !$0.login.isEmpty && !$0.password.isEmpty
+            guard !$0.trashed && !$0.archived && !$0.template else { return false }
+            switch flow {
+            case .password:
+                return !$0.login.isEmpty && !$0.password.isEmpty
+            case .oneTimeCode:
+                return $0.fields.contains { $0.type.isOneTimePassword && $0.hasValue }
+            }
         }
         stage = .unlocked
     }
@@ -149,12 +162,41 @@ final class AutoFillModel: ObservableObject {
 
     func pick(_ card: Card) {
         guard pickedID == nil else { return }
+        switch flow {
+        case .password:
+            pickPassword(card)
+        case .oneTimeCode:
+            if #available(iOS 18.0, *) {
+                pickOneTimeCode(card)
+            }
+        }
+    }
+
+    private func pickPassword(_ card: Card) {
         pickedID = card.id
         Log.info("app", "autofill: picked cardId=\(card.id) (只提交该站点凭据)")
         Task {
             try? await Task.sleep(nanoseconds: 350_000_000)
             let credential = ASPasswordCredential(user: card.login, password: card.password)
             context?.completeRequest(withSelectedCredential: credential)
+        }
+    }
+
+    /// 验证码流点选:现场解析 TOTP 配置并计算当前码提交(iOS 18+)。
+    @available(iOS 18.0, *)
+    private func pickOneTimeCode(_ card: Card) {
+        guard let field = card.fields.first(where: { $0.type.isOneTimePassword && $0.hasValue }),
+              let config = try? TOTP.parse(field.value),
+              let code = try? TOTP.code(config: config) else {
+            Log.warn("app", "autofill: otp parse/generate failed cardId=\(card.id)")
+            return
+        }
+        pickedID = card.id
+        Log.info("app", "autofill: picked otp cardId=\(card.id)")
+        Task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            context?.completeOneTimeCodeRequest(using: ASOneTimeCodeCredential(code: code),
+                                                completionHandler: nil)
         }
     }
 

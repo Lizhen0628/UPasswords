@@ -16,6 +16,14 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         embed(AutoFillRootView(model: model))
     }
 
+    /// iOS 18+ 验证码填充入口:展示与当前页面匹配的一次性验证码(TOTP)列表。
+    @available(iOS 18.0, *)
+    override func prepareOneTimeCodeCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier]) {
+        Log.info("app", "autofill: prepareOneTimeCodeCredentialList services=\(serviceIdentifiers.count)")
+        model.attach(context: extensionContext, serviceIdentifiers: serviceIdentifiers, flow: .oneTimeCode)
+        embed(AutoFillRootView(model: model))
+    }
+
     /// 本地加密库需主密码/生物验证,无法静默填充,交给交互流程。
     override func provideCredentialWithoutUserInteraction(for credentialIdentity: ASPasswordCredentialIdentity) {
         extensionContext.cancelRequest(withError: NSError(
