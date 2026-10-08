@@ -979,3 +979,4 @@
 "ios_cloud_pick_folder_guide_message" = "接下来会打开文件选择器：进入 iCloud 云盘，轻点 UPasswords 文件夹使其高亮选中，再点右上角「打开」。\n\n注意：此模式下文件夹里的文件显示为灰色属正常，要选的是文件夹本身。";
 "ios_cloud_databases_section" = "云端密码库";
 "ios_db_import_query" = "从云端下载该密码库并切换为当前库？";
+"ios_autolock_custom" = "自定义";
