@@ -158,9 +158,9 @@ struct SyncSettingsView: View {
                 let pw = adoptPassword
                 Log.info("sync", "ios adopt remote password attempt")
                 Task {
-                    let ok = await vault.adoptRemotePassword(pw)
-                    if !ok {
-                        // 原地重试:重开弹窗并带错误文案
+                    let result = await vault.adoptRemotePassword(pw)
+                    if result != .success {
+                        // 原地重试:重开弹窗并带错误文案(空库残骸时文案引导覆盖)
                         adoptFailed = true
                         try? await Task.sleep(nanoseconds: 300_000_000)
                         showAdoptPrompt = true
@@ -170,7 +170,7 @@ struct SyncSettingsView: View {
             .disabled(adoptPassword.isEmpty)
             Button(L10n.t("cancel_button"), role: .cancel) {}
         } message: {
-            Text(adoptFailed ? L10n.t("wrong_password_error") : L10n.t("ios_sync_adopt_password_message"))
+            Text(adoptFailed ? L10n.t("sync_adopt_failed_hint") : L10n.t("ios_sync_adopt_password_message"))
         }
     }
 

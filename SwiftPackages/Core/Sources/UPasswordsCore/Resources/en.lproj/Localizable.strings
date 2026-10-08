@@ -994,3 +994,4 @@
 "sync_adopt_failed_hint" = "Incorrect password. If you changed the password on THIS device, choose “Overwrite Cloud with Local Data” instead.";
 "sync_repair_button" = "Repair Sync…";
 "icloud_download_pending_error" = "The cloud file hasn't downloaded to this device yet. Please try again later.";
+"sync_remote_empty_clobber_hint" = "The cloud vault was wiped by a legacy locked-sync bug. Tap “Overwrite Cloud with Local Data” to restore — your local data is intact.";

@@ -170,20 +170,34 @@ extension Vault {
         }
     }
 
+    /// 接管远端的结果:成功 / 密码不对 / 远端是「锁屏同步空库覆盖」残骸
+    /// (空密码加密,任何真实密码都解不开,只能用本地覆盖恢复)。
+    enum AdoptResult {
+        case success, wrongPassword, emptyClobber
+    }
+
     /// 远端用「其他设备改后的新主密码」加密时的接管流程:
     /// 输入新密码 → 解密远端并合并进本地 → 本地以新密码重加密落盘并更新钥匙串
-    /// → 上传合并结果。返回是否成功(失败多半是密码不对,UI 层提示重试)。
+    /// → 上传合并结果。
     @discardableResult
-    func adoptRemotePassword(_ newPassword: String) async -> Bool {
-        guard let mounted = makeCloudDriver() else { return false }
+    func adoptRemotePassword(_ newPassword: String) async -> AdoptResult {
+        guard let mounted = makeCloudDriver() else { return .wrongPassword }
         defer { mounted.releaseAccess?() }
         do {
             try await mounted.driver.testConnection()
-            guard let remoteData = try await mounted.driver.download(),
-                  let plain = try? DatabaseCipher.decryptedData(remoteData, password: newPassword),
+            guard let remoteData = try await mounted.driver.download() else {
+                return .wrongPassword
+            }
+            guard let plain = try? DatabaseCipher.decryptedData(remoteData, password: newPassword),
                   let remote = try? PasswordDatabase.parse(plain) else {
+                // 已知事故形态自检:锁屏态同步曾以空密码上传空库覆盖云端
+                if let emptyPlain = try? DatabaseCipher.decryptedData(remoteData, password: ""),
+                   let empty = try? PasswordDatabase.parse(emptyPlain), empty.cards.isEmpty {
+                    Log.error("sync", "ios remote is the empty-vault clobber (locked-sync artifact) — user must overwrite with local")
+                    return .emptyClobber
+                }
                 Log.warn("sync", "ios adopt remote password failed: cannot decrypt with given password")
-                return false
+                return .wrongPassword
             }
             var merged = database
             merged.merge(with: remote)
@@ -199,10 +213,10 @@ extension Vault {
             recordSyncBaseline(uploaded: out)
             syncRemoteUnreadable = false
             Log.info("sync", "ios adopted remote password: merged \(remote.cards.count) remote cards, re-encrypted local+cloud")
-            return true
+            return .success
         } catch {
             Log.warn("sync", "ios adopt remote password failed: \(error)")
-            return false
+            return .wrongPassword
         }
     }
 

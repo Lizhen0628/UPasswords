@@ -90,6 +90,7 @@ struct MainTabView: View {
     @State private var showAdoptPrompt = false
     @State private var adoptPassword = ""
     @State private var adoptFailed = false
+    @State private var adoptEmptyClobber = false
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -110,6 +111,7 @@ struct MainTabView: View {
                 Log.info("sync", "ios adopt password prompt shown (unreadable remote)")
                 adoptPassword = ""
                 adoptFailed = false
+                adoptEmptyClobber = false
                 showAdoptPrompt = true
             }
         }
@@ -118,8 +120,13 @@ struct MainTabView: View {
             Button(L10n.t("unlock_button")) {
                 let pw = adoptPassword
                 Task {
-                    let ok = await vault.adoptRemotePassword(pw)
-                    if !ok {
+                    let result = await vault.adoptRemotePassword(pw)
+                    if result == .emptyClobber {
+                        // 远端是锁屏同步的空库残骸:直接引导覆盖恢复,不再要求试密码
+                        adoptEmptyClobber = true
+                        try? await Task.sleep(nanoseconds: 300_000_000)
+                        showAdoptPrompt = true
+                    } else if result == .wrongPassword {
                         adoptFailed = true
                         try? await Task.sleep(nanoseconds: 300_000_000)
                         showAdoptPrompt = true
@@ -134,7 +141,9 @@ struct MainTabView: View {
             }
             Button(L10n.t("cancel_button"), role: .cancel) {}
         } message: {
-            Text(adoptFailed ? L10n.t("sync_adopt_failed_hint") : L10n.t("ios_sync_adopt_password_message"))
+            Text(adoptEmptyClobber ? L10n.t("sync_remote_empty_clobber_hint")
+                 : adoptFailed ? L10n.t("sync_adopt_failed_hint")
+                 : L10n.t("ios_sync_adopt_password_message"))
         }
     }
 }

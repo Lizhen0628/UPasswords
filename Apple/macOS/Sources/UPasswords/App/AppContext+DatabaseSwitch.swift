@@ -72,8 +72,15 @@ extension AppContext {
         }
         let pw = input.stringValue
         Task {
-            let ok = await adoptRemotePassword(pw)
-            AppToast.shared.show(L10n.t(ok ? "last_sync_completed_prompt" : "sync_adopt_failed_hint"))
+            let result = await adoptRemotePassword(pw)
+            switch result {
+            case .success:
+                AppToast.shared.show(L10n.t("last_sync_completed_prompt"))
+            case .emptyClobber:
+                AppToast.shared.show(L10n.t("sync_remote_empty_clobber_hint"))
+            case .wrongPassword:
+                AppToast.shared.show(L10n.t("sync_adopt_failed_hint"))
+            }
         }
     }
 
