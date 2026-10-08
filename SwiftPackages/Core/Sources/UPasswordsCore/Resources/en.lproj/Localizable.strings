@@ -984,3 +984,4 @@
 "ios_sync_overwrite_cloud_button" = "Overwrite Cloud with Local Data";
 "ios_sync_overwrite_cloud_query" = "The current cloud content will be replaced with local data. Continue?";
 "ios_icloud_folder_label" = "Cloud Folder";
+"switch_database_command" = "Switch Database";

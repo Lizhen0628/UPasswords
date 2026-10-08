@@ -54,6 +54,9 @@ struct SidebarView: View {
                     .padding(.trailing, 12)
             }
 
+            // 当前库徽章:库名 + 点击打开「管理密码库」(切换/新建/删除)
+            databaseBadge
+
             ScrollView {
                 VStack(spacing: 0) {
                     // 数据库分节(与邮件的账号分节同位:标题即库名)
@@ -104,6 +107,32 @@ struct SidebarView: View {
                 .strokeBorder(Color.white.opacity(0.07), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.22), radius: 9, y: 3)
+    }
+
+    /// 当前密码库徽章:面板顶行之下的库名行,点击打开「管理密码库」弹窗。
+    private var databaseBadge: some View {
+        Button {
+            Log.info("ui", "sidebar database badge → manage databases")
+            ctx.activeSheet = .manageDatabases
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "cylinder.fill")
+                    .font(.caption)
+                Text(ctx.databaseName.isEmpty ? L10n.tBranded("app_title") : ctx.databaseName)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(L10n.t("manage_databases_command"))
     }
 
     /// 邮件式侧栏开关:面板顶行右端、红绿灯同排的裸图标(无胶囊底),

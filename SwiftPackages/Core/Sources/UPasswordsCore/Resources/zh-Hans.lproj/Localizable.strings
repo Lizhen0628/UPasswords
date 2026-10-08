@@ -984,3 +984,4 @@
 "ios_sync_overwrite_cloud_button" = "用本地数据覆盖云端";
 "ios_sync_overwrite_cloud_query" = "云端现有内容将被本地数据替换，确定继续吗？";
 "ios_icloud_folder_label" = "云端文件夹";
+"switch_database_command" = "切换密码库";

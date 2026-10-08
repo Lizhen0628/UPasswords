@@ -3,11 +3,11 @@ import UPasswordsCore
 
 /// 菜单栏状态图标(程序坞之外的常驻入口):三钥匙 template 图 + 快捷菜单。
 @MainActor
-final class StatusItemController {
+final class StatusItemController: NSObject {
     private var statusItem: NSStatusItem?
 
     /// 无状态构造,允许在 AppDelegate 的非隔离 init 中创建。
-    nonisolated init() {}
+    nonisolated override init() {}
 
     /// 由 RootView 注入的 SwiftUI openWindow 动作:窗口被关闭后
     /// (应用仍驻留程序坞)据此重建主窗口。
@@ -55,6 +55,12 @@ final class StatusItemController {
         let show = NSMenuItem(title: L10n.t("show_command"), action: #selector(showMainWindowAction), keyEquivalent: "")
         show.target = self
         menu.addItem(show)
+        // 切换密码库:列出全部库,勾选当前;点击后回锁屏预填新库名
+        let switchItem = NSMenuItem(title: L10n.t("switch_database_command"), action: nil, keyEquivalent: "")
+        let switchMenu = NSMenu()
+        switchMenu.delegate = self
+        switchItem.submenu = switchMenu
+        menu.addItem(switchItem)
         menu.addItem(.separator())
         let lock = NSMenuItem(title: L10n.t("lock_command"), action: #selector(lockNow), keyEquivalent: "")
         lock.target = self
@@ -64,6 +70,17 @@ final class StatusItemController {
                                 action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
         return menu
+    }
+
+    @objc private func switchDatabaseAction(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        let ctx = AppContext.shared
+        guard name != ctx.databaseName else { return }
+        Log.info("db", "menu bar switch database → \"\(name)\"")
+        ctx.databaseName = name
+        ctx.store.mainDatabaseName = name
+        if ctx.phase == .unlocked { ctx.lock() }
+        Self.showMainWindow()
     }
 
     // MARK: - Actions
@@ -87,5 +104,22 @@ final class StatusItemController {
         Log.info("ui", "status menu: lock now")
         AppContext.shared.lock()
         Self.showMainWindow()
+    }
+}
+
+// MARK: - NSMenuDelegate
+
+extension StatusItemController: NSMenuDelegate {
+    /// 「切换密码库」子菜单每次展开前重建:文件列表可能已增删。
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let ctx = AppContext.shared
+        for db in ctx.dbsInfo() {
+            let item = NSMenuItem(title: db.name, action: #selector(switchDatabaseAction), keyEquivalent: "")
+            item.target = self
+            item.representedObject = db.name
+            item.state = db.name == ctx.databaseName ? .on : .off
+            menu.addItem(item)
+        }
     }
 }
