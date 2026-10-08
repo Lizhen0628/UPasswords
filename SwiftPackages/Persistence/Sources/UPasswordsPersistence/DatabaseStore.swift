@@ -33,6 +33,33 @@ public final class DatabaseStore {
         }
         try? fm.createDirectory(at: databasesDir, withIntermediateDirectories: true)
         try? fm.createDirectory(at: backupsDir, withIntermediateDirectories: true)
+        // 仅默认根目录(真实应用数据位置)才尝试迁移;测试注入的临时目录跳过
+        if root == nil { migrateFromLegacyIfNeeded() }
+    }
+
+    /// macOS 沙盒化迁移:旧(未沙盒)路径里的数据项拷入容器(逐项跳过已存在者,
+    /// 可重复执行)。依赖临时例外 entitlement 读旧目录;读不到时静默跳过。
+    private func migrateFromLegacyIfNeeded() {
+        #if os(macOS)
+        // 沙盒下 NSHomeDirectoryForUser 也返回容器路径;POSIX getpwuid 才是真家目录
+        guard let pw = getpwuid(getuid()), let pwDir = pw.pointee.pw_dir else { return }
+        let legacy = URL(fileURLWithPath: String(cString: pwDir))
+            .appendingPathComponent("Library/Application Support/UPasswords", isDirectory: true)
+        guard legacy.path != root.path, fm.fileExists(atPath: legacy.path) else { return }
+        do {
+            let items = try fm.contentsOfDirectory(atPath: legacy.path)
+            // 只补本地缺失的项,容器里已有的(含迁移后新建的)一律不动
+            let missing = items.filter { !fm.fileExists(atPath: root.appendingPathComponent($0).path) }
+            guard !missing.isEmpty else { return }
+            for item in missing {
+                try fm.copyItem(at: legacy.appendingPathComponent(item),
+                                to: root.appendingPathComponent(item))
+            }
+            Log.info("db", "migrated \(missing.count)/\(items.count) item(s) from legacy Application Support into sandbox container")
+        } catch {
+            Log.warn("db", "legacy data migration skipped: \(error)")
+        }
+        #endif
     }
 
     public var databasesDir: URL { root.appendingPathComponent("Databases", isDirectory: true) }

@@ -13,6 +13,9 @@ struct UPasswordsApp: App {
     init() {
         // 最早入口:横幅先落盘,后续每条日志(包括 AppContext bootstrap)都排在它后面
         Log.bootstrap()
+        // 沙盒化一次性迁移:必须早于一切读 defaults/库文件的初始化
+        // (@StateObject 的属性包装在 body 首次求值前不构造,此处仍是最早)
+        LegacyPreferencesMigration.run()
     }
 
     var body: some Scene {

@@ -99,6 +99,8 @@ final class AppContext: ObservableObject {
     static let shared = AppContext()
 
     init() {
+        // 沙盒化迁移必须最先跑:后续 settings/store 都依赖迁移后的偏好与库文件
+        LegacyPreferencesMigration.run()
         bootstrapPhase()
         installActivityMonitor()
     }

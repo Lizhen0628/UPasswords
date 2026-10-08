@@ -79,7 +79,10 @@ targets:
       properties:
         CFBundleDisplayName: UPasswords for Safari
         NSExtension:
-          NSExtensionPointIdentifier: com.apple.Safari-web-extension
+          # macOS 26 起扩展点标识符为点分形态(旧连字符形态已被系统移除,
+          # pkd 报 "Failed to find extension point" -10814,扩展不再注册)
+          NSExtensionPointIdentifier: com.apple.Safari.web-extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SafariWebExtensionHandler
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.upasswords.UPasswords.SafariWebExtension
