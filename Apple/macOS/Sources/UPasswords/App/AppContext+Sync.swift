@@ -358,7 +358,8 @@ extension AppContext {
                     Log.error("sync", "sync \"\(databaseName)\": remote undecryptable — adopt prompt offered (firstHit=\(firstHit))")
                     if firstHit {
                         promptAdoptRemotePassword()
-                    } else {
+                    } else if !auto {
+                        // 自动同步的重试不打扰(修复前每轮都会失败),仅手动同步提示
                         AppToast.shared.show(L10n.t("sync_remote_unreadable_error"))
                     }
                     return

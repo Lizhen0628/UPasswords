@@ -127,9 +127,14 @@ struct MainTabView: View {
                 }
             }
             .disabled(adoptPassword.isEmpty)
+            // 局面反转逃生口:本机才是改密方(云端还是旧密码)时,以本机覆盖云端
+            Button(L10n.t("ios_sync_overwrite_cloud_button"), role: .destructive) {
+                Log.info("sync", "ios adopt prompt → user chose overwrite with local")
+                Task { await vault.overwriteUnreadableRemote() }
+            }
             Button(L10n.t("cancel_button"), role: .cancel) {}
         } message: {
-            Text(adoptFailed ? L10n.t("wrong_password_error") : L10n.t("ios_sync_adopt_password_message"))
+            Text(adoptFailed ? L10n.t("sync_adopt_failed_hint") : L10n.t("ios_sync_adopt_password_message"))
         }
     }
 }
