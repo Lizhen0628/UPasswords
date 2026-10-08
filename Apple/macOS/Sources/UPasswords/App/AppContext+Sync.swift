@@ -85,6 +85,15 @@ extension AppContext {
         case .webdav:
             return WebDavDriver(settings: settings.webdav, databaseName: dbName)
         case .icloud:
+            if let scoped = ScopedICloudFolderDriver(databaseName: dbName,
+                                                     bookmark: settings.icloudBookmark,
+                                                     mode: settings.icloudFolderMode,
+                                                     onRefreshBookmark: { [weak self] data in
+                                                         self?.settings.icloudBookmark = data
+                                                     }) {
+                return scoped
+            }
+            // 未选文件夹:回落旧直读路径(未沙盒构建可用;沙盒下报 icloudUnavailable)
             return ICloudDriver(databaseName: dbName)
         default:
             return nil

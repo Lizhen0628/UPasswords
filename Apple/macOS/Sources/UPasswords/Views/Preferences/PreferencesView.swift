@@ -811,6 +811,23 @@ struct ConfigureCloudSheetContents: View {
                                 .frame(width: 240)
                         }
                     }
+                    if settings.cloud == .icloud {
+                        GridRow {
+                            Text(L10n.t("ios_icloud_folder_label"))
+                            HStack(spacing: 8) {
+                                Button(settings.icloudFolderName.isEmpty
+                                       ? L10n.t("ios_icloud_pick_folder_button")
+                                       : settings.icloudFolderName) {
+                                    Log.info("ui", "icloud folder pick from preferences")
+                                    ctx.pickICloudFolder()
+                                }
+                                if !settings.icloudFolderName.isEmpty {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                }
+                            }
+                        }
+                    }
                     if settings.cloud == .webdav || settings.cloud == .icloud {
                         GridRow {
                             Color.clear.frame(width: 0, height: 0)

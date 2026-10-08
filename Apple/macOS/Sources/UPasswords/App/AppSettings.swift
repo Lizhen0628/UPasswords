@@ -78,6 +78,18 @@ final class AppSettings: ObservableObject {
     /// 自动同步开关与间隔(秒):解锁状态下由常驻 ticker 按到期触发静默同步。
     @Published var autoSyncEnabled: Bool { didSet { d.set(autoSyncEnabled, forKey: "sync.autoEnabled") } }
     @Published var autoSyncSeconds: Int { didSet { d.set(autoSyncSeconds, forKey: "sync.autoSeconds") } }
+    /// iCloud 云盘文件夹(沙盒下直读 CloudDocs 被禁,与 iOS 一样经安全作用域
+    /// 书签访问用户选定的目录;未选择时回落旧直读路径,兼容未沙盒构建)。
+    @Published var icloudFolderName: String { didSet { d.set(icloudFolderName, forKey: "sync.icloud.name") } }
+    var icloudBookmark: Data? {
+        get { d.data(forKey: "sync.icloud.bookmark") }
+        set { d.set(newValue, forKey: "sync.icloud.bookmark") }
+    }
+    /// 所选文件夹语义:explicit = 文件夹本身是同步容器;root = 容器取其下 UPasswords/。
+    var icloudFolderMode: String {
+        get { d.string(forKey: "sync.icloud.mode") ?? "explicit" }
+        set { d.set(newValue, forKey: "sync.icloud.mode") }
+    }
 
     // MARK: Misc
     /// 主窗口侧栏显隐(工具栏左一按钮切换,布局记忆跨启动保留)。
@@ -123,6 +135,7 @@ final class AppSettings: ObservableObject {
         webdav = Self.loadCodable(WebDavSettings.self, key: "sync.webdav") ?? WebDavSettings()
         autoSyncEnabled = d.object(forKey: "sync.autoEnabled") as? Bool ?? false
         autoSyncSeconds = d.object(forKey: "sync.autoSeconds") as? Int ?? 60
+        icloudFolderName = d.string(forKey: "sync.icloud.name") ?? ""
         sidebarVisible = d.object(forKey: "app.sidebarVisible") as? Bool ?? true
         sidebarOptionalItems = (d.string(forKey: "app.sidebarOptional") ?? "")
             .split(separator: ",").map(String.init).filter { !$0.isEmpty }
