@@ -392,6 +392,28 @@ extension AppContext {
             } else {
                 Log.info("sync", "no remote database yet — uploading local")
             }
+            // 读-改-写竞态护栏:上传前再取一次远端,若与本次同步开始时读到的
+            // 版本不同(对端刚写入),先合并新远端再传;若新远端已无法解密(对端
+            // 刚改密),中止上传走接管流程——绝不用本地旧视图覆盖云端新数据
+            if let fresh = try await driver.download() {
+                let seenHash = remoteData.map { SyncConflict.sha256Hex($0) }
+                if SyncConflict.sha256Hex(fresh) != seenHash {
+                    if let freshPlain = try? DatabaseCipher.decryptedData(fresh, password: password),
+                       let freshRemote = try? PasswordDatabase.parse(freshPlain) {
+                        var merged = database
+                        merged.merge(with: freshRemote)
+                        database = merged
+                        save()
+                        Log.warn("sync", "remote changed mid-sync — merged fresh remote (\(freshRemote.cards.count) cards) before upload")
+                    } else {
+                        syncRemoteUnreadable = true
+                        syncState = .error(L10n.t("sync_remote_unreadable_error"))
+                        Log.error("sync", "remote changed mid-sync and undecryptable — aborting upload, adopt prompt offered")
+                        promptAdoptRemotePassword()
+                        return
+                    }
+                }
+            }
             let out = try DatabaseCipher.encryptedData(database.xmlData(), password: password)
             try await driver.upload(out)
             recordSyncBaseline(uploaded: out)

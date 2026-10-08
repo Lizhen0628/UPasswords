@@ -363,6 +363,26 @@ extension Vault {
             } else {
                 Log.info("sync", "ios no remote database yet — uploading local")
             }
+            // 读-改-写竞态护栏(与 macOS 同款):上传前再取一次远端,版本变了
+            // 先合并再传;新远端解不开(对端刚改密)则中止上传走接管流程
+            if let fresh = try await driver.download() {
+                let seenHash = remoteData.map { SyncConflict.sha256Hex($0) }
+                if SyncConflict.sha256Hex(fresh) != seenHash {
+                    if let freshPlain = try? DatabaseCipher.decryptedData(fresh, password: password),
+                       let freshRemote = try? PasswordDatabase.parse(freshPlain) {
+                        var merged = database
+                        merged.merge(with: freshRemote)
+                        database = merged
+                        persist()
+                        Log.warn("sync", "ios remote changed mid-sync — merged fresh remote (\(freshRemote.cards.count) cards) before upload")
+                    } else {
+                        syncRemoteUnreadable = true
+                        syncState = .failed(L10n.t("sync_remote_unreadable_error"))
+                        Log.error("sync", "ios remote changed mid-sync and undecryptable — aborting upload, adopt prompt offered")
+                        return
+                    }
+                }
+            }
             let out = try DatabaseCipher.encryptedData(database.xmlData(), password: password)
             try await driver.upload(out)
             recordSyncBaseline(uploaded: out)

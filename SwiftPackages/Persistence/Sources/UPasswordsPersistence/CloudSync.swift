@@ -334,7 +334,7 @@ public final class ICloudDriver: CloudDriver {
             try? fm.startDownloadingUbiquitousItem(at: placeholder)
             Log.debug("sync", "icloud placeholder -> start download \"\(placeholder.lastPathComponent)\"")
         }
-        return files
+        let names = files
             .map { $0.lastPathComponent }
             // `.upw.icloud` 是未下载完的占位文件(CloudDocs dataless),同样计入
             .filter { $0.hasSuffix(".upw") || $0.hasSuffix(".upw.icloud") }
@@ -342,6 +342,17 @@ public final class ICloudDriver: CloudDriver {
             .map { String($0.dropLast(4)) }
             // 占位文件名带前导点,剥掉才是真实库名
             .map { $0.hasPrefix(".") ? String($0.dropFirst()) : $0 }
+        // iCloud 冲突副本「名 N.upw」(双端近乎同时写入时系统保留双方):
+        // 同名主文件存在时过滤,不作为可恢复库列出(同步也只写主文件名)
+        let baseNames = Set(names)
+        return names
+            .filter { name in
+                guard let range = name.range(of: #" \d+$"#, options: .regularExpression) else { return true }
+                let base = String(name[..<range.lowerBound])
+                guard baseNames.contains(base) else { return true }
+                Log.warn("sync", "icloud conflict copy filtered from listing: \"\(name).upw\"")
+                return false
+            }
             .sorted()
     }
 
