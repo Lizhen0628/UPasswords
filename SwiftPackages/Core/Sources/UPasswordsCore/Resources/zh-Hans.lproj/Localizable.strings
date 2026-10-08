@@ -975,3 +975,5 @@
 "ios_import_file_button" = "从文件导入密码库";
 "ios_db_import_invalid_message" = "文件不是有效的 UPasswords 密码库";
 "ios_cloud_restore_folder_button" = "从 iCloud 云盘恢复";
+"ios_cloud_pick_folder_guide_title" = "选择云端文件夹";
+"ios_cloud_pick_folder_guide_message" = "接下来会打开文件选择器：进入 iCloud 云盘，轻点 UPasswords 文件夹使其高亮选中，再点右上角「打开」。\n\n注意：此模式下文件夹里的文件显示为灰色属正常，要选的是文件夹本身。";

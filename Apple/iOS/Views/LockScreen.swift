@@ -17,6 +17,7 @@ struct LockScreen: View {
     @State private var lockImage: UIImage? = nil
     @State private var showFileImporter = false
     @State private var showFolderPicker = false
+    @State private var showFolderGuide = false
 
     private var isSetup: Bool { !vault.hasVault }
     private var theme: (name: String, colors: [Color]) {
@@ -130,6 +131,13 @@ struct LockScreen: View {
                 Task { await vault.probeICloudFolder(url) }
             }
         }
+        // 文件夹模式下文件是灰的(要选的是文件夹本身),先给操作指引避免误点
+        .alert(L10n.t("ios_cloud_pick_folder_guide_title"), isPresented: $showFolderGuide) {
+            Button(L10n.t("ios_icloud_pick_folder_button")) { showFolderPicker = true }
+            Button(L10n.t("cancel_button"), role: .cancel) {}
+        } message: {
+            Text(L10n.t("ios_cloud_pick_folder_guide_message"))
+        }
     }
 
     @ViewBuilder
@@ -164,7 +172,7 @@ struct LockScreen: View {
                 }
                 .buttonStyle(.plain)
                 Button {
-                    showFolderPicker = true
+                    showFolderGuide = true
                 } label: {
                     Label(L10n.t("ios_cloud_restore_folder_button"), systemImage: "icloud")
                         .font(.subheadline.weight(.medium))

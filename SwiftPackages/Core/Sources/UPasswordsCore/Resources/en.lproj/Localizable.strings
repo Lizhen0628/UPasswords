@@ -975,3 +975,5 @@
 "ios_import_file_button" = "Import Vault from File";
 "ios_db_import_invalid_message" = "This file is not a valid UPasswords vault.";
 "ios_cloud_restore_folder_button" = "Restore from iCloud Drive";
+"ios_cloud_pick_folder_guide_title" = "Choose Cloud Folder";
+"ios_cloud_pick_folder_guide_message" = "A file picker will open: go to iCloud Drive, tap the UPasswords folder once to highlight it, then tap Open in the top-right corner.\n\nNote: files inside appear greyed out — that's expected, you're selecting the folder itself.";
