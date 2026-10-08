@@ -67,6 +67,9 @@ public enum SyncError: LocalizedError {
     case icloudUnavailable
     case databaseNotFound
     case localNameConflict
+    /// iCloud 文件未物化/下载中超时:上层应视为「同步失败待重试」而非「解不开」
+    case notDownloaded
+    case downloadFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -80,6 +83,8 @@ public enum SyncError: LocalizedError {
         case .icloudUnavailable: return L10n.t("icloud_account_error")
         case .databaseNotFound: return L10n.t("cloud_database_not_found")
         case .localNameConflict: return L10n.t("local_database_exists_error")
+        case .notDownloaded: return L10n.t("icloud_download_pending_error")
+        case .downloadFailed(let detail): return "\(L10n.t("sync_error")): \(detail)"
         }
     }
 }
@@ -312,10 +317,50 @@ public final class ICloudDriver: CloudDriver {
     }
 
     public func download() async throws -> Data? {
-        guard FileManager.default.fileExists(atPath: remoteURL.path) else { return nil }
+        let fm = FileManager.default
+        // 文件不在但占位符在(dataless):先触发物化
+        if !fm.fileExists(atPath: remoteURL.path) {
+            let placeholder = folderURL.appendingPathComponent(".\(remoteURL.lastPathComponent).icloud")
+            if fm.fileExists(atPath: placeholder.path) {
+                Log.info("sync", "icloud \"\(remoteURL.lastPathComponent)\" is dataless — requesting download")
+                try? fm.startDownloadingUbiquitousItem(at: placeholder)
+            } else {
+                return nil
+            }
+        }
+        try await ensureMaterialized(remoteURL)
         let data = try coordinatedRead(remoteURL)
+        // 防御:读到的不是 UPWDB 容器(占位符残体/下载半截),按未就绪处理而非交给上层误判为「解不开」
+        guard DatabaseCipher.checkFileMagic(data) else {
+            Log.warn("sync", "icloud read \"\(remoteURL.lastPathComponent)\" got \(data.count)B without UPWDB magic — treating as not-ready")
+            throw SyncError.notDownloaded
+        }
         Log.debug("sync", "icloud read \(data.count)B from \"\(remoteURL.lastPathComponent)\"")
         return data
+    }
+
+    /// 等待 iCloud 文件物化完成(占位符 → 实体)。轮询 ubiquitous 下载状态,
+    /// 超时抛错让上层走失败路径(而不是读到占位符残体误判密码)。
+    private func ensureMaterialized(_ url: URL, timeout: TimeInterval = 30) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        var logged = false
+        while Date() < deadline {
+            let values = try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey, .ubiquitousItemDownloadingErrorKey])
+            if let err = values?.ubiquitousItemDownloadingError {
+                throw SyncError.downloadFailed(err.localizedDescription)
+            }
+            // 只有 ubiquity 路径且明确「未下载」才等待;本地路径(测试的假云端)
+            // 与已下载(.downloaded/.current)都直接放行——陈旧性由上层复检护栏负责
+            let isUbiquitous = url.path.contains("/Mobile Documents/")
+            let notDownloaded = values?.ubiquitousItemDownloadingStatus == .some(.notDownloaded)
+            guard isUbiquitous, notDownloaded else { return }
+            if !logged {
+                Log.info("sync", "icloud waiting for \"\(url.lastPathComponent)\" to materialize…")
+                logged = true
+            }
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+        throw SyncError.notDownloaded
     }
 
     public func upload(_ data: Data) async throws {

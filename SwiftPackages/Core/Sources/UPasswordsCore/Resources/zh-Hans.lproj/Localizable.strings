@@ -993,3 +993,4 @@
 "ios_sync_adopt_password_message" = "云端密码库已使用新密码加密。输入新密码以解密并合并数据。";
 "sync_adopt_failed_hint" = "密码不正确。如果您刚在本设备上修改过密码，请改用「用本地数据覆盖云端」。";
 "sync_repair_button" = "修复同步…";
+"icloud_download_pending_error" = "云端文件尚未下载到本机，请稍后重试。";
