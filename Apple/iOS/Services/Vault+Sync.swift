@@ -297,6 +297,12 @@ extension Vault {
     /// sync: — 云驱动 download/冲突判定/merge/upload(WebDAV / iCloud Drive)。
     /// auto = true 为自动同步:静默执行(成功/未配置不打 toast,失败只记日志与状态)。
     func sync(auto: Bool = false) async {
+        // 锁屏状态下禁止同步:库已清空、密码已抹,继续走会以空密码加密空库
+        // 覆盖云端(真实事故:18:46 锁屏态同步把 122B 空库传上了 iCloud)
+        guard !locked else {
+            Log.warn("sync", "ios sync skipped: vault locked")
+            return
+        }
         guard cloud != .none else {
             syncState = .idle
             Log.debug("sync", "ios sync skipped: cloud disabled")

@@ -326,6 +326,12 @@ extension AppContext {
     /// sync: — 云驱动 download/冲突判定/merge/upload(WebDAV / iCloud Drive)。
     /// auto = true 为自动同步:静默执行(成功/未配置不打 toast,失败只记日志与状态)。
     func sync(auto: Bool = false) async {
+        // 锁屏状态下禁止同步:密码已抹(空串),继续走会以空密码加密并
+        // 覆盖云端/误报远端解不开(与 iOS 同款事故防护)
+        guard phase == .unlocked else {
+            Log.warn("sync", "sync skipped: vault locked")
+            return
+        }
         guard settings.cloud != .none else {
             syncState = .disabled
             Log.debug("sync", "sync skipped: cloud disabled")
