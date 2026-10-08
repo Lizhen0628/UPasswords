@@ -20,6 +20,38 @@ extension AppContext {
         }
         password = new
         Log.info("db", "changePassword \"\(databaseName)\" ok (re-encrypted)")
+        // 远端容器仍是旧密码加密:云端已配置则接力重加密(与 iOS 同语义),
+        // 否则其他设备下次同步拿到无法解密的远端,走「密码已变更」流程
+        if settings.cloud != .none {
+            Task { await reencryptCloudAfterPasswordChange(old: current) }
+        } else {
+            Log.info("sync", "password changed with cloud unconfigured — other devices will see unreadable remote")
+        }
+    }
+
+    /// 改主密码后的云端接力:旧密码解密远端并合并(防丢对端改动),再用新密码重传。
+    /// 同时推送 Safari 快照(密文容器已换密钥,扩展侧下次解锁用新密码)。
+    private func reencryptCloudAfterPasswordChange(old: String) async {
+        guard let driver = makeCloudDriver() else { return }
+        do {
+            try await driver.testConnection()
+            if let remoteData = try await driver.download(),
+               let plain = try? DatabaseCipher.decryptedData(remoteData, password: old),
+               let remote = try? PasswordDatabase.parse(plain) {
+                var local = database
+                local.merge(with: remote)
+                database = local
+                save()
+                Log.info("sync", "cloud handoff: merged remote (\(remote.cards.count) cards) after password change")
+            }
+            let out = try DatabaseCipher.encryptedData(database.xmlData(), password: password)
+            try await driver.upload(out)
+            recordSyncBaseline(uploaded: out)
+            SafariSnapshotBridge.push(databaseName: databaseName, store: store)
+            Log.info("sync", "cloud handoff: remote re-encrypted with new password (\(out.count)B)")
+        } catch {
+            Log.warn("sync", "cloud handoff after password change failed: \(error)")
+        }
     }
 
     // MARK: - Backup

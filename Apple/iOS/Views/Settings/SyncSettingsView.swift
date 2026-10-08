@@ -11,6 +11,9 @@ struct SyncSettingsView: View {
 
     @State private var showFolderPicker = false
     @State private var showOverwriteConfirm = false
+    @State private var showAdoptPrompt = false
+    @State private var adoptPassword = ""
+    @State private var adoptFailed = false
 
     /// 自动同步间隔档位(与 macOS ConfigureCloudSheet 一致)。
     private let autoSyncChoices: [(String, Int)] = [
@@ -113,8 +116,22 @@ struct SyncSettingsView: View {
                       || (vault.cloud == .icloud && !vault.hasICloudFolder))
             .buttonStyle(.plain)
             statusLine
-            // 远端用旧主密码加密解不开时:提供以本地覆盖云端的修复入口
+            // 远端解不开时两条路:密码被其他设备改过 → 输入新密码接管;
+            // 否则以本地覆盖云端
             if vault.syncRemoteUnreadable {
+                Button {
+                    adoptPassword = ""
+                    adoptFailed = false
+                    showAdoptPrompt = true
+                } label: {
+                    Label(L10n.t("ios_sync_adopt_password_button"), systemImage: "key")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Brand.accent)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 38)
+                        .background(Brand.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
                 Button {
                     showOverwriteConfirm = true
                 } label: {
@@ -134,6 +151,26 @@ struct SyncSettingsView: View {
                 Task { await vault.overwriteUnreadableRemote() }
             }
             Button(L10n.t("cancel_button"), role: .cancel) {}
+        }
+        .alert(L10n.t("ios_sync_adopt_password_title"), isPresented: $showAdoptPrompt) {
+            SecureField("", text: $adoptPassword)
+            Button(L10n.t("unlock_button")) {
+                let pw = adoptPassword
+                Log.info("sync", "ios adopt remote password attempt")
+                Task {
+                    let ok = await vault.adoptRemotePassword(pw)
+                    if !ok {
+                        // 原地重试:重开弹窗并带错误文案
+                        adoptFailed = true
+                        try? await Task.sleep(nanoseconds: 300_000_000)
+                        showAdoptPrompt = true
+                    }
+                }
+            }
+            .disabled(adoptPassword.isEmpty)
+            Button(L10n.t("cancel_button"), role: .cancel) {}
+        } message: {
+            Text(adoptFailed ? L10n.t("wrong_password_error") : L10n.t("ios_sync_adopt_password_message"))
         }
     }
 

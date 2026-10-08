@@ -988,3 +988,6 @@
 "switch_database_unlock_title" = "Switch to “%@”";
 "switch_database_unlock_message" = "Enter the master password for this database.";
 "unlock_button" = "Unlock";
+"ios_sync_adopt_password_button" = "Password changed on another device?";
+"ios_sync_adopt_password_title" = "Enter New Password";
+"ios_sync_adopt_password_message" = "The cloud vault is encrypted with the new password. Enter it to decrypt and merge your data.";

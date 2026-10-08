@@ -170,6 +170,42 @@ extension Vault {
         }
     }
 
+    /// 远端用「其他设备改后的新主密码」加密时的接管流程:
+    /// 输入新密码 → 解密远端并合并进本地 → 本地以新密码重加密落盘并更新钥匙串
+    /// → 上传合并结果。返回是否成功(失败多半是密码不对,UI 层提示重试)。
+    @discardableResult
+    func adoptRemotePassword(_ newPassword: String) async -> Bool {
+        guard let mounted = makeCloudDriver() else { return false }
+        defer { mounted.releaseAccess?() }
+        do {
+            try await mounted.driver.testConnection()
+            guard let remoteData = try await mounted.driver.download(),
+                  let plain = try? DatabaseCipher.decryptedData(remoteData, password: newPassword),
+                  let remote = try? PasswordDatabase.parse(plain) else {
+                Log.warn("sync", "ios adopt remote password failed: cannot decrypt with given password")
+                return false
+            }
+            var merged = database
+            merged.merge(with: remote)
+            database = merged
+            try store.save(merged, name: databaseName, password: newPassword)
+            password = newPassword
+            PasswordStore.savePassword(newPassword, databaseName: databaseName)
+            if PasswordStore.hasBiometricItem(databaseName: databaseName) {
+                PasswordStore.savePasswordForBiometric(newPassword, databaseName: databaseName)
+            }
+            let out = try DatabaseCipher.encryptedData(merged.xmlData(), password: newPassword)
+            try await mounted.driver.upload(out)
+            recordSyncBaseline(uploaded: out)
+            syncRemoteUnreadable = false
+            Log.info("sync", "ios adopted remote password: merged \(remote.cards.count) remote cards, re-encrypted local+cloud")
+            return true
+        } catch {
+            Log.warn("sync", "ios adopt remote password failed: \(error)")
+            return false
+        }
+    }
+
     /// 远端不可解密(旧主密码加密/数据损坏)时的修复:以当前密码重传本地库并重设基线。
     /// 会丢弃云端现有内容,UI 层须先经用户确认。
     func overwriteUnreadableRemote() async {
