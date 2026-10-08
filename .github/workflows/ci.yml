@@ -13,10 +13,35 @@ jobs:
       - uses: actions/checkout@v7
       - name: Swift version
         run: swift --version
-      - name: Build
-        run: swift build
-      - name: Test
-        run: swift test
+      - name: Build & test library packages
+        run: |
+          for pkg in Core Persistence Networking; do
+            echo "==> SwiftPackages/$pkg"
+            (cd "SwiftPackages/$pkg" && swift build && swift test)
+          done
+      - name: Build & test macOS app package
+        run: |
+          cd Apple/macOS
+          swift build
+          swift test
+      - name: Build Xcode workspace (macOS + iOS + Safari extension)
+        run: |
+          (cd Apple && xcodegen generate)
+          xcodebuild -workspace UPasswords.xcworkspace -scheme UPasswords-macOS \
+            -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
+          xcodebuild -workspace UPasswords.xcworkspace -scheme UPasswords-iOS \
+            -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+      - name: Build web extensions
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test
       - name: Bundle .app (release)
         run: ./scripts/make-app.sh dist
       - name: Upload app artifact

@@ -1,0 +1,14 @@
+{
+  "name": "upasswords-monorepo",
+  "private": true,
+  "version": "1.0.0",
+  "description": "UPasswords root workspace: shared web-extension code + per-browser packaging",
+  "scripts": {
+    "build": "pnpm --filter @upasswords/extension-shared build && pnpm --filter @upasswords/extension-safari build && pnpm --filter @upasswords/extension-chrome build",
+    "clean": "rm -rf WebExtensions/shared/dist WebExtensions/safari/src/shared WebExtensions/chrome/src/shared",
+    "test": "pnpm --filter @upasswords/extension-shared test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

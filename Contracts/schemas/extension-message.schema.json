@@ -1,0 +1,106 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://upasswords.local/contracts/extension-message.schema.json",
+    "title": "UPasswords extension messaging",
+    "description": "Messages between the extension popup, background script and the native app bridge. TypeScript mirror: WebExtensions/shared/src/messaging/protocol.ts. Never carries plaintext secrets outside a fill request.",
+    "$defs": {
+        "fieldLite": {
+            "type": "object",
+            "required": ["name", "type", "value", "autofill"],
+            "properties": {
+                "name": { "type": "string" },
+                "type": { "type": "string" },
+                "value": { "type": "string" },
+                "autofill": { "type": "string" }
+            }
+        },
+        "item": {
+            "type": "object",
+            "required": ["id", "title", "fields", "host"],
+            "properties": {
+                "id": { "type": "integer" },
+                "title": { "type": "string" },
+                "symbol": { "type": ["string", "null"] },
+                "fields": { "type": "array", "items": { "$ref": "#/$defs/fieldLite" } },
+                "host": { "type": "string", "description": "Canonical site host; empty = any origin." }
+            }
+        },
+        "candidate": {
+            "type": "object",
+            "required": ["item", "username", "password"],
+            "properties": {
+                "item": { "$ref": "#/$defs/item" },
+                "username": { "type": "string" },
+                "password": { "type": "string" }
+            }
+        }
+    },
+    "oneOf": [
+        {
+            "title": "Request",
+            "type": "object",
+            "required": ["type"],
+            "oneOf": [
+                {
+                    "properties": {
+                        "type": { "const": "ping" }
+                    },
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": { "const": "query" },
+                        "host": { "type": "string" }
+                    },
+                    "required": ["host"],
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": { "const": "fill" },
+                        "candidate": { "$ref": "#/$defs/candidate" }
+                    },
+                    "required": ["candidate"],
+                    "additionalProperties": false
+                }
+            ]
+        },
+        {
+            "title": "Response",
+            "type": "object",
+            "required": ["type"],
+            "oneOf": [
+                {
+                    "properties": {
+                        "type": { "const": "pong" }
+                    },
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": { "const": "items" },
+                        "candidates": { "type": "array", "items": { "$ref": "#/$defs/candidate" } }
+                    },
+                    "required": ["candidates"],
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": { "const": "filled" },
+                        "ok": { "type": "boolean" }
+                    },
+                    "required": ["ok"],
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": { "const": "error" },
+                        "message": { "type": "string" }
+                    },
+                    "required": ["message"],
+                    "additionalProperties": false
+                }
+            ]
+        }
+    ]
+}

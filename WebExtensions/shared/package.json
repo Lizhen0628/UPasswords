@@ -1,0 +1,16 @@
+{
+  "name": "@upasswords/extension-shared",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "TypeScript core shared by the Safari and Chrome extensions",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

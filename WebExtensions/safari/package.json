@@ -1,0 +1,9 @@
+{
+  "name": "@upasswords/extension-safari",
+  "private": true,
+  "version": "1.0.0",
+  "description": "UPasswords Safari web extension packaging",
+  "scripts": {
+    "build": "rm -rf src/shared && cp -R ../shared/dist src/shared"
+  }
+}

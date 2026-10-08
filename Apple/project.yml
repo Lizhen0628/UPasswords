@@ -1,0 +1,197 @@
+name: UPasswords
+options:
+  bundleIdPrefix: com.upasswords
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+packages:
+  Core:
+    path: ../SwiftPackages/Core
+  Persistence:
+    path: ../SwiftPackages/Persistence
+  Networking:
+    path: ../SwiftPackages/Networking
+
+settings:
+  base:
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1000"
+    SWIFT_VERSION: "5.9"
+
+targets:
+  UPasswords-macOS:
+    type: application
+    platform: macOS
+    sources:
+      # macOS 有自己的组件体系,不编译 Shared/(避免与 macOS CardIconView 等重名)
+      - path: macOS/Sources
+    dependencies:
+      - package: Core
+        product: UPasswordsCore
+      - package: Persistence
+        product: UPasswordsPersistence
+      - package: Networking
+        product: UPasswordsNetworking
+      - target: SafariWebExtension
+        embed: true
+        codeSign: false
+    info:
+      path: macOS/Info.plist
+      properties:
+        CFBundleDisplayName: UPasswords
+        CFBundleIconFile: AppIcon
+        CFBundleIconName: AppIcon
+        LSMinimumSystemVersion: "14.0"
+        NSHighResolutionCapable: true
+        NSSupportsAutomaticTermination: false
+        NSSupportsSuddenTermination: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.upasswords.UPasswords
+        PRODUCT_NAME: UPasswords
+        ENABLE_PREVIEWS: "YES"
+
+  SafariWebExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: SafariWebExtension
+      # manifest.json 平铺到 appex Resources 根;src 目录以 folder reference
+      # 整体拷入,保住 manifest 里 "src/…" 引用的相对结构(组语义会打平,导致
+      # Safari 找不到 background/content 脚本)。
+      - path: ../WebExtensions/safari/manifest.json
+        buildPhase: resources
+      - path: ../WebExtensions/safari/src
+        buildPhase: resources
+        type: folder
+    dependencies:
+      - package: Core
+        product: UPasswordsCore
+    info:
+      path: SafariWebExtension/Info.plist
+      properties:
+        CFBundleDisplayName: UPasswords for Safari
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.Safari-web-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.upasswords.UPasswords.SafariWebExtension
+        PRODUCT_NAME: UPasswordsSafariWebExtension
+        SKIP_INSTALL: "YES"
+
+  UPasswords-iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: iOS
+        excludes:
+          - "AutoFill/**"
+          - "UPasswords.entitlements"
+      - path: Shared
+      - path: iOS/Resources/Assets.xcassets
+    dependencies:
+      - package: Core
+        product: UPasswordsCore
+      - package: Persistence
+        product: UPasswordsPersistence
+      - package: Networking
+        product: UPasswordsNetworking
+      - target: UPasswordsAutoFill
+        embed: true
+    info:
+      path: iOS/Info.plist
+      properties:
+        CFBundleDisplayName: UPasswords
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations:
+          - en
+          - zh-Hans
+        NSCameraUsageDescription: "需要使用相机扫描二维码，以添加一次性验证码（TOTP）"
+        NSFaceIDUsageDescription: "使用面容 ID 快速解锁你的密码库"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lizhen.upasswords
+        PRODUCT_NAME: UPasswords
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SUPPORTS_MACCATALYST: "NO"
+        CODE_SIGN_ENTITLEMENTS: iOS/UPasswords.entitlements
+        # 真机构建:自动签名(需在 Xcode 登录 2CV6VKVD26 团队的 Apple ID)
+        DEVELOPMENT_TEAM: 2CV6VKVD26
+        CODE_SIGN_STYLE: Automatic
+
+  UPasswordsAutoFill:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: iOS/AutoFill
+        excludes:
+          - "CredentialsProvider.entitlements"
+          - "Info.plist"
+      - path: Shared
+    dependencies:
+      - package: Core
+        product: UPasswordsCore
+      - package: Persistence
+        product: UPasswordsPersistence
+    info:
+      path: iOS/AutoFill/Info.plist
+      properties:
+        CFBundleDisplayName: UPasswords
+        NSFaceIDUsageDescription: "使用面容 ID 快速解锁你的密码库以自动填充"
+        NSExtension:
+          # iOS 26+ 该扩展点的系统规范标识符(见系统 ExtensionKit/ExtensionPoints 声明);
+          # 旧标识符 com.apple.authentication-services.credential-provider-extension 在
+          # iOS 26+ 上不再注册扩展(installd 报 missing extension cache entry 并跳过),
+          # 表现为「设置-自动填充与密码」里找不到 App
+          NSExtensionPointIdentifier: com.apple.authentication-services-credential-provider-ui
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).CredentialProviderViewController
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lizhen.upasswords.credentials
+        PRODUCT_NAME: UPasswordsAutoFill
+        SKIP_INSTALL: "YES"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_ENTITLEMENTS: iOS/AutoFill/CredentialsProvider.entitlements
+        DEVELOPMENT_TEAM: 2CV6VKVD26
+        CODE_SIGN_STYLE: Automatic
+
+  UPasswordsUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: iOSUITests
+    dependencies:
+      - target: UPasswords-iOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lizhen.upasswords.uitests
+        PRODUCT_NAME: UPasswordsUITests
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_TARGET_NAME: UPasswords-iOS
+        DEVELOPMENT_TEAM: 2CV6VKVD26
+        CODE_SIGN_STYLE: Automatic
+
+schemes:
+  UPasswords-macOS:
+    build:
+      targets:
+        UPasswords-macOS: all
+  UPasswords-iOS:
+    build:
+      targets:
+        UPasswords-iOS: all
+  UPasswordsUITests:
+    build:
+      targets:
+        UPasswords-iOS: all
+        UPasswordsUITests: [test]
+    test:
+      targets: [UPasswordsUITests]

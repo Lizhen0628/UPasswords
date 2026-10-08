@@ -20,19 +20,122 @@
 ## 1. 项目速览（动手前必读）
 
 ```
-Sources/UPasswords/
-├── App/          入口、AppDelegate、StatusItemController、AppContext(+扩展)、设置、命令、本地化
-├── Models/       Card/Field/CardLabel 等值类型模型、模板、侧栏、符号
-├── Services/     加密、XML、存储、钥匙串、生成器、强度、TOTP、云同步、日志（Import/ 为导入导出）
-├── Views/        Main/ Window/ Sheets/ Setup/ Preferences/ Components/
-└── Resources/    lproj 字符串 + 菜单栏图标
+UPasswords/
+├─ UPasswords.xcworkspace          根工作区：Xcode 开发入口（引用 Apple/UPasswords.xcodeproj）
+├─ Apple/
+│  ├─ project.yml                  xcodegen 工程定义（唯一真源：改 target/依赖/Info.plist 属性后
+│  │                               需 `cd Apple && xcodegen generate` 重新生成工程）
+│  ├─ UPasswords.xcodeproj/        生成物，不入库：UPasswords-macOS / UPasswords-iOS /
+│  │                               UPasswordsAutoFill / SafariWebExtension 四 target，
+│  │                               本地包经 packages: 路径引入
+│  ├─ macOS/                        完整 macOS 应用（SPM 可执行包，即原有全部功能）
+│  │  ├─ Package.swift             可执行目标 UPasswords + 测试目标，依赖下方三个本地包
+│  │  ├─ Sources/UPasswords/
+│  │  │  ├─ App/                   入口与全局状态：UPasswordsApp、AppDelegate、AppContext(本体)
+│  │  │  │                         与 +Actions/+CardList/+Icons/+Security/+Sync 扩展、AppSettings、
+│  │  │  │                         AppSheet(弹窗路由)、Commands(菜单与快捷键)、
+│  │  │  │                         SearchInputDebouncer、StatusItemController(菜单栏)、
+│  │  │  │                         AppResources(SPM/xcodeproj 双构建的资源取包入口)
+│  │  │  ├─ Models/                UI 侧模型：SidebarModels(侧栏+Sorting 排序)、
+│  │  │  │                         SymbolModel(SF Symbol 词表)、Card+IconSource(图标来源词汇)
+│  │  │  ├─ Services/              AppKit 绑定服务(仅 macOS)：IconService、BrandIcons、
+│  │  │  │                         QRCodeService(扫码+生成)、NotesMarkdown、
+│  │  │  │                         LockScreenImageStore、ClipboardToast(剪贴板自动清除+Toast)
+│  │  │  ├─ Views/                 Main/(Root/Sidebar/CardList/CardDetail 四视图)、
+│  │  │  │                         Window/(Toolbar 自绘工具栏、WindowChrome)、
+│  │  │  │                         Sheets/(SheetFactory 统一登记：Card/EditCard/Database/
+│  │  │  │                         ExportImport/IconPicker/Info/Security 七域弹窗)、
+│  │  │  │                         Setup/(SetupAndLock 锁屏+初始化向导)、
+│  │  │  │                         Preferences/(设置+纹理选择)、Components/(共享组件+快捷键录制)
+│  │  │  └─ Resources/             MenuBarKeys.png（SPM 打入 UPasswords_UPasswords.bundle）
+│  │  ├─ Tests/UPasswordsTests/    Icon/NotesMarkdown/QRCode/SearchInputDebouncer/
+│  │  │                             SortingSearch/AppResources 六组测试
+│  │  └─ Resources/                AppIcon.icns + AppIconMaster.png（make-app.sh 打包图标）
+│  ├─ iOS/                          iOS 完整应用（消费 Core/Persistence/Networking）：
+│  │  ├─ App/                      UPasswordsApp 入口 + RootView/MainTabView 四 Tab
+│  │  ├─ Services/Vault.swift      会话层：真实加密库上的建库/解锁/条目操作/泄露检查
+│  │  │                            （数据库经 SharedVaultStore 落 App Group 容器）
+│  │  ├─ Models/IOSModels.swift    SortOrder、Card 的 iOS 派生标记与 Hashable、
+│  │  │                            TemplateGroups（内置模板分组/配色展示适配）、拼音分组键
+│  │  ├─ Views/                    LockScreen + Home/CardList/CardDetail/CardEdit/
+│  │  │                            Generator/Security/Settings 七大界面（文案全走 L10n，
+│  │  │                            新增键已同步 en/zh-Hans 双表，前缀 ios_）
+│  │  └─ AutoFill/                 iOS 凭据自动填充扩展（ASCredentialProvider）：
+│  │                                 Controller/Model(真实加密库数据源:钥匙串或主密码
+│  │                                 解锁 + host 匹配)/View + Info.plist + entitlements
+│  ├─ Shared/                       iOS 主 App 与 AutoFill 扩展共享（macOS target 不编译，
+│  │                                避免与其组件重名）：Brand(色板/Logo/通用组件)、
+│  │                                SharedVaultStore(App Group 库容器 + DatabaseStore)、
+│  │                                SharedAppInfo(品牌名/扩展名/AppGroup 标识)
+│  └─ SafariWebExtension/           Safari 扩展原生侧：SafariWebExtensionHandler.swift
+│                                   (NSExtensionRequestHandling 消息桥) + Info.plist；
+│                                   扩展 JS/manifest 资源注入 ../WebExtensions/safari（见 project.yml，
+│                                   manifest 平铺到 appex Resources 根、src/ 以 folder reference 保结构）
+├─ WebExtensions/                   pnpm workspace（构建：pnpm build；测试：pnpm test）
+│  ├─ shared/                       Safari+Chrome 共享 TS（严格模式，tsc 编译到 dist/）
+│  │  ├─ src/core/                  types(字段/autofill 词表，镜像 Contracts)、
+│  │  │                              domain(host 规范化/匹配、凭据抽取)、crypto(WebCrypto 指纹)
+│  │  ├─ src/storage/               vault-store（browser.storage.local 快照封装）
+│  │  ├─ src/messaging/             protocol(消息契约) + bus(请求/响应总线)
+│  │  ├─ src/platform/              adapter(平台接口) + safari/chrome 双适配器
+│  │  ├─ src/index.ts               汇总导出
+│  │  └─ test/                      node:test：host 匹配矩阵、SHA-256 向量、
+│  │                                 Contracts Schema 校验、双 manifest 一致性
+│  ├─ safari/                        manifest.json(MV3) + src/{background,content,popup.*}；
+│  │                                 src/shared/ 为构建拷贝产物（pnpm build 生成，不入库）
+│  └─ chrome/                        MV3 同构壳（service_worker 版 manifest + 同套 JS）
+├─ SwiftPackages/
+│  ├─ Core/  (UPasswordsCore)        领域核心，无 UI 依赖（macOS 14+ / iOS 17+）
+│  │  ├─ Sources/UPasswordsCore/     CoreModels(Card/Field/CardLabel/Attachment 等值类型)、
+│  │  │                              Templates(15 模板)、DatabaseXML(PasswordDatabase 编解码+合并)、
+│  │  │                              DatabaseCipher(.upw 加密容器)、PasswordGenerator、
+│  │  │                              PasswordStrength(评分+缓存)、TOTP、AppLog(Log 门控日志)、
+│  │  │                              L10n(本地化取词)、SamePasswordsService(同密码分析)
+│  │  ├─ …/Resources/{en,zh-Hans}.lproj/   Localizable.strings + Database.strings
+│  │  │                              （两张表键集合必须齐平，测试 L10nParityTests 把关）
+│  │  └─ Tests/CoreTests/            Cipher/TOTP/DatabaseXML/Templates/Generator/Strength/
+│  │                                 FieldType/L10nParity 八组测试
+│  ├─ Persistence/  (UPasswordsPersistence)  存储与同步层，依赖 Core
+│  │  ├─ Sources/UPasswordsPersistence/      DatabaseStore(库文件+备份+恢复)、
+│  │  │                              PasswordStore(钥匙串/Touch ID)、
+│  │  │                              CloudSync(WebDAV/iCloud 驱动+SyncConflict 冲突判定)
+│  │  ├─ …/Import/                  CSV、CSVImporter、ImportFormat+ImportFormats(18 种导入)、
+│  │  │                              ExportCardsTask(XML/CSV/TXT 导出)
+│  │  └─ Tests/PersistenceTests/    Store/Backup/ImportExport/CloudDriverList/ICloudDriver/
+│  │                                 SyncConflict/TouchIDKeychain 七组测试
+│  └─ Networking/  (UPasswordsNetworking)    网络安全层，依赖 Core
+│     ├─ Sources/UPasswordsNetworking/       CompromisedService(HIBP k-匿名泄露检查+
+│     │                              本地动态清单+Card.compromised 扩展)
+│     └─ Tests/NetworkingTests/     BreachList（CRLF 解析/动态清单/快标）
+├─ Contracts/                       跨端契约（改动须与 Core 模型、shared TS 三方同步）
+│  ├─ README.md                     容器格式/时间戳/墓碑语义说明
+│  └─ schemas/                      upw-database.schema.json(.upw 结构 JSON 镜像)、
+│                                   extension-message.schema.json(扩展消息契约)
+├─ scripts/make-app.sh              release 编译 Apple/macOS 并打包 dist/UPasswords.app
+│                                   （拷贝 .build 下全部资源 bundle，含 Core 字符串表 bundle）
+├─ .github/workflows/ci.yml         Swift 四包测试 → xcodegen+xcodebuild 双平台 → pnpm build/test
+│                                   → make-app.sh 打包并上传产物
+├─ package.json / pnpm-workspace.yaml    Web 扩展 monorepo 根（build/test/clean 脚本）
+└─ README.md / AGENTS.md / LICENSE
 ```
 
-- 构建：`swift build`；测试：`swift test`；打包：`./scripts/make-app.sh`
-- 基线：swift-tools 5.9 / macOS 14+（见 `Package.swift`），可用 API 以 macOS 14 为界；
+生成物（勿手动编辑、不入库）：`Apple/UPasswords.xcodeproj`、各包 `.build/`、`dist/`、
+`node_modules/`、`WebExtensions/shared/dist/`、`WebExtensions/{safari,chrome}/src/shared/`。
+
+- 构建/测试（每个 Swift 包独立进行）：
+  `cd SwiftPackages/Core|Persistence|Networking && swift build && swift test`；
+  macOS 应用：`cd Apple/macOS && swift build && swift test`；
+  Xcode 工程（macOS/iOS/AutoFill/Safari 四 target）：`cd Apple && xcodegen generate` 后用
+  根工作区 `xcodebuild -workspace UPasswords.xcworkspace …`；
+  Web 扩展：`pnpm install && pnpm build`；打包：`./scripts/make-app.sh`
+- 基线：swift-tools 5.9 / macOS 14+（库包另支持 iOS 17+），可用 API 以 macOS 14 为界
+  （库包代码不得使用 AppKit 等 macOS-only 框架，需跨平台的类型放库包、
+  UI 绑定留在 `Apple/macOS`）；
   状态管理沿用 `ObservableObject` 既有模式，不引入 `@Observable` 宏（如要切换需先修订本规范）。
-- 架构：SwiftUI MV + 单例会话 `AppContext`（@MainActor ObservableObject）；
-  数据层为值类型 `PasswordDatabase`（struct），动作全部经由 `AppContext` 方法进入。
+- 包间依赖：`Apple/macOS → {Core, Persistence, Networking}`、
+  `Persistence/Networking → Core`；库包对外的类型与成员须 `public`（含显式构造器）。
+- 架构：SwiftUI MV + 单例会话 `AppContext`（@MainActor ObservableObject，在 macOS 应用包内）；
+  数据层为值类型 `PasswordDatabase`（struct，Core 包），动作全部经由 `AppContext` 方法进入。
 - **隐私红线【必须】**：密码、字段值、笔记内容等敏感数据**绝不进入日志**，
   只记录操作、对象名/ID、字节长度、错误与耗时。内存中需要以密码为键缓存时，
   使用 SHA-256 散列作键（参考 `PasswordStrength.scoreCache`）。
@@ -239,8 +342,12 @@ IUO（`var x: T!`）仅允许用于 init 期无法赋值的框架注入点（本
    弹窗视图按域放 `Views/Sheets/` 并在 `SheetFactory` 登记。
 6. 【必须】本项目是独立开发的密码管理器：代码注释、文档与可见文案中不得出现
    “复刻 / 逆向 / 对应原版”等描述，不得引用其他商业软件的类名、nib 或内部资料。
-7. 【推荐】新逻辑配测试：`Tests/UPasswordsTests/`，运行 `swift test` 全绿方可提交
-   （已知历史遗留失败 `testCrackTimeText` 除外，修复它时请单独提交；豁免项修复后从本条移除）。
+7. 【推荐】新逻辑配测试：按所属包放置——`SwiftPackages/Core/Tests/CoreTests/`、
+   `SwiftPackages/Persistence/Tests/PersistenceTests/`、`SwiftPackages/Networking/Tests/NetworkingTests/`、
+   `Apple/macOS/Tests/UPasswordsTests/`（Web 扩展共享逻辑后续配 `WebExtensions/shared` 的测试）；
+   在对应包目录运行 `swift test` 全绿方可提交
+   （已知历史遗留失败 `testCrackTimeText`（Core 包 StrengthTests）除外，修复它时请单独提交；
+   豁免项修复后从本条移除）。
 8. 【必须】**改完即部署并启动**：每轮代码修改完成后（无需用户要求），自动执行
    `./scripts/make-app.sh` 重新打包更新 `dist/UPasswords.app`（脚本内含 release 编译），
    并在答复中报告部署结果；随后自动启动应用供用户直接测试最新改动——
@@ -283,5 +390,7 @@ IUO（`var x: T!`）仅允许用于 init 期无法赋值的框架注入点（本
 
 - 【可选】SwiftLint / SwiftFormat 可在本地安装辅助检查，配置文件未入库前不阻塞 CI；
   若引入，规则以本文档为准裁剪。
-- 参考实现就在仓库中：拿不准风格时，先看 `AppContext+CardList.swift`（guard/策略分组）、
-  `Services/AppLog.swift`（门控与并发保护）、`Services/PasswordStrength.swift`（缓存与隐私）。
+- 参考实现就在仓库中：拿不准风格时，先看
+  `Apple/macOS/Sources/UPasswords/App/AppContext+CardList.swift`（guard/策略分组）、
+  `SwiftPackages/Core/Sources/UPasswordsCore/AppLog.swift`（门控与并发保护）、
+  `SwiftPackages/Core/Sources/UPasswordsCore/PasswordStrength.swift`（缓存与隐私）。

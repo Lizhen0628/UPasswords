@@ -1,16 +1,17 @@
 #!/bin/bash
-# Bundle the SPM executable into a runnable UPasswords.app.
+# Bundle the macOS SPM executable into a runnable UPasswords.app.
 # Usage: ./scripts/make-app.sh [output-dir]
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 OUT_DIR="${1:-dist}"
 CONFIG="${CONFIG:-release}"
+APP_PKG="Apple/macOS"
 
-echo "==> swift build -c $CONFIG"
-swift build -c "$CONFIG"
+echo "==> swift build -c $CONFIG ($APP_PKG)"
+(cd "$APP_PKG" && swift build -c "$CONFIG")
 
-BIN=".build/$CONFIG/UPasswords"
+BIN="$APP_PKG/.build/$CONFIG/UPasswords"
 APP="$OUT_DIR/UPasswords.app"
 CONTENTS="$APP/Contents"
 
@@ -19,10 +20,13 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 
 echo "==> copying binary + module bundle"
 cp "$BIN" "$CONTENTS/MacOS/UPasswords"
-# SPM resources land next to the binary as UPasswords_UPasswords.bundle
-if [ -d ".build/$CONFIG/UPasswords_UPasswords.bundle" ]; then
-  cp -R ".build/$CONFIG/UPasswords_UPasswords.bundle" "$CONTENTS/MacOS/"
-fi
+# SPM 资源 bundle 落在 .build/<config>/ 下:应用自身的 UPasswords_UPasswords.bundle
+# (菜单栏图标)与依赖包的 UPasswordsCore_UPasswordsCore.bundle(lproj 字符串表)——
+# 必须全部拷入,漏掉 Core bundle 会让 L10n 取词全部回显键名。
+for bundle in "$APP_PKG/.build/$CONFIG/"*.bundle; do
+  [ -d "$bundle" ] || continue
+  cp -R "$bundle" "$CONTENTS/MacOS/"
+done
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -60,11 +64,11 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 PLIST
 
 # 应用图标(程序坞/Finder/锁屏展示用)
-if [ -f "Resources/AppIcon.icns" ]; then
-  cp "Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
+if [ -f "$APP_PKG/Resources/AppIcon.icns" ]; then
+  cp "$APP_PKG/Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 fi
 # 菜单栏三钥匙 template 图随 SPM 资源打入 UPasswords_UPasswords.bundle(见上),
-# 由 StatusItemController 经 Bundle.module 加载。
+# 由 StatusItemController 经 AppResources.bundle 加载。
 
 echo "==> $APP"
 du -sh "$APP"

@@ -1,0 +1,128 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://upasswords.local/contracts/upw-database.schema.json",
+    "title": "UPasswords database (JSON mirror of the .upw plaintext XML)",
+    "description": "Canonical entry/field shapes shared by the native app (SwiftPackages/Core) and the web extensions. Property names match the XML attributes of the .upw plaintext format; timestamps are Unix epoch milliseconds. The encrypted .upw container wraps this structure (see Contracts/README.md).",
+    "type": "object",
+    "required": ["cards"],
+    "properties": {
+        "labels": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/label" }
+        },
+        "cards": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/card" }
+        },
+        "ghosts": {
+            "type": "array",
+            "description": "Deletion tombstones for convergent sync merges.",
+            "items": { "$ref": "#/$defs/ghost" }
+        }
+    },
+    "$defs": {
+        "fieldType": {
+            "enum": [
+                "login", "password", "pin", "number", "date", "phone",
+                "website", "email", "one_time_password", "text", "expiry", "secret"
+            ]
+        },
+        "autofill": {
+            "enum": [
+                "off", "username", "current-password", "url", "one-time-code",
+                "cc-number", "cc-name", "cc-exp", "cc-csc"
+            ]
+        },
+        "historyEntry": {
+            "type": "object",
+            "required": ["value", "time"],
+            "properties": {
+                "value": { "type": "string" },
+                "time": { "type": "number", "description": "Epoch millis." }
+            }
+        },
+        "field": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+                "name": { "type": "string" },
+                "type": { "$ref": "#/$defs/fieldType", "default": "text" },
+                "value": { "type": "string", "default": "" },
+                "autofill": { "$ref": "#/$defs/autofill", "default": "off" },
+                "history": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/historyEntry" },
+                    "default": []
+                }
+            }
+        },
+        "attachment": {
+            "type": "object",
+            "required": ["name", "data"],
+            "properties": {
+                "name": { "type": "string" },
+                "data": { "type": "string", "contentEncoding": "base64" }
+            }
+        },
+        "label": {
+            "type": "object",
+            "required": ["id", "name"],
+            "properties": {
+                "id": { "type": "integer" },
+                "name": { "type": "string" },
+                "color": { "type": ["string", "null"] },
+                "type": { "type": ["string", "null"] },
+                "pinToTop": { "type": "boolean", "default": false },
+                "timeStamp": { "type": "number", "default": 0 }
+            }
+        },
+        "ghost": {
+            "type": "object",
+            "required": ["id", "time"],
+            "properties": {
+                "id": { "type": "integer" },
+                "time": { "type": "number", "description": "Epoch millis." }
+            }
+        },
+        "card": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+                "id": { "type": "integer" },
+                "title": { "type": "string", "default": "" },
+                "symbol": { "type": ["string", "null"] },
+                "color": { "type": ["string", "null"] },
+                "template": { "type": "boolean", "default": false },
+                "autofillEnabled": { "type": "boolean", "default": false },
+                "favorite": { "type": "boolean", "default": false },
+                "archived": { "type": "boolean", "default": false },
+                "trashed": { "type": "boolean", "default": false },
+                "expiration": { "type": ["number", "null"] },
+                "reminder": { "type": ["number", "null"] },
+                "created": { "type": "number", "default": 0 },
+                "modified": { "type": "number", "default": 0 },
+                "fields": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/field" },
+                    "default": []
+                },
+                "notes": { "type": "string", "default": "" },
+                "labelIds": {
+                    "type": "array",
+                    "items": { "type": "integer" },
+                    "default": []
+                },
+                "images": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/attachment" },
+                    "default": []
+                },
+                "files": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/attachment" },
+                    "default": []
+                }
+            }
+        }
+    }
+}

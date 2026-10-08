@@ -1,0 +1,9 @@
+{
+  "name": "@upasswords/extension-chrome",
+  "private": true,
+  "version": "1.0.0",
+  "description": "UPasswords Chrome web extension packaging",
+  "scripts": {
+    "build": "rm -rf src/shared && cp -R ../shared/dist src/shared"
+  }
+}

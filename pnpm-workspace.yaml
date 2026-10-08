@@ -1,0 +1,4 @@
+packages:
+  - WebExtensions/shared
+  - WebExtensions/safari
+  - WebExtensions/chrome

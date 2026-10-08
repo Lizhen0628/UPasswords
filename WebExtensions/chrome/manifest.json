@@ -1,0 +1,24 @@
+{
+    "manifest_version": 3,
+    "name": "UPasswords",
+    "version": "1.0",
+    "description": "UPasswords password manager companion for Chrome.",
+    "permissions": ["activeTab", "scripting", "storage"],
+    "background": {
+        "service_worker": "src/background.js"
+    },
+    "content_scripts": [
+        {
+            "matches": ["<all_urls>"],
+            "js": ["src/content.js"],
+            "run_at": "document_idle"
+        }
+    ],
+    "action": {
+        "default_title": "UPasswords",
+        "default_popup": "src/popup.html"
+    },
+    "content_security_policy": {
+        "extension_pages": "script-src 'self'; default-src 'self'; style-src 'self' 'unsafe-inline'"
+    }
+}
