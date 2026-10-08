@@ -62,7 +62,19 @@ struct LockWindowView: View {
                 .font(.system(size: 12))
                 .foregroundStyle(titleColor.opacity(0.8))
 
-            Spacer().frame(height: 21)
+            Spacer().frame(height: 10)
+
+            // 当前解锁目标库名胶囊:锁屏不再让人猜输哪个库的密码
+            if !ctx.databaseName.isEmpty {
+                Label(ctx.databaseName, systemImage: "cylinder.fill")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(titleColor.opacity(0.75))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(titleColor.opacity(0.12), in: Capsule())
+            }
+
+            Spacer().frame(height: 12)
 
             passwordField
 
