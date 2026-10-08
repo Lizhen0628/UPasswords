@@ -67,12 +67,19 @@ final class NotesMarkdownTests: XCTestCase {
         XCTAssertEqual(NotesMarkdown.serialize(storage), "a*斜*<u>线</u>")
     }
 
+    /// 楷体在部分系统(如 CI 镜像)属于按需下载字体,缺失时跳过相关断言。
+    private func requireKaiti() throws {
+        try XCTSkipIf(NSFont(name: "Kaiti SC", size: 12) == nil && NSFont(name: "STKaiti", size: 12) == nil,
+                      "Kaiti font not installed on this host")
+    }
+
     /// 斜体字体选择:西文 → 系统真斜体(SFNS-Italic);中文 → 楷体(中文排版
     /// 惯例,苹方等中文字体的 italic trait 会被 CoreText 静默忽略)。
-    func testItalicFontSelection() {
+    func testItalicFontSelection() throws {
         let latin = NotesMarkdown.italicFont(for: "English 123", size: 13, italic: true)
         XCTAssertTrue(NSFontManager.shared.traits(of: latin).contains(.italicFontMask), "西文应取系统真斜体")
 
+        try requireKaiti()
         let cjk = NotesMarkdown.italicFont(for: "斜体中文", size: 13, italic: true)
         XCTAssertTrue(cjk.fontName.lowercased().contains("kaiti"), "中文应使用楷体替代斜体")
 
@@ -82,7 +89,8 @@ final class NotesMarkdownTests: XCTestCase {
 
     /// 中文斜体回归测试:楷体替代必须产生可见渲染差异;
     /// 取消斜体后渲染应与正体一致。
-    func testItalicFallbackForCJKFont() {
+    func testItalicFallbackForCJKFont() throws {
+        try requireKaiti()
         func snap(_ font: NSFont) -> Data {
             let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 40))
             tv.textStorage?.setAttributedString(
