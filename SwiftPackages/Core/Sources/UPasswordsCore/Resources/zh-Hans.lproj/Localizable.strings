@@ -980,3 +980,6 @@
 "ios_cloud_databases_section" = "云端密码库";
 "ios_db_import_query" = "从云端下载该密码库并切换为当前库？";
 "ios_autolock_custom" = "自定义";
+"sync_remote_unreadable_error" = "云端数据无法解密（可能由修改前的主密码加密）";
+"ios_sync_overwrite_cloud_button" = "用本地数据覆盖云端";
+"ios_sync_overwrite_cloud_query" = "云端现有内容将被本地数据替换，确定继续吗？";

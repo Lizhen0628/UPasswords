@@ -135,6 +135,64 @@ extension Vault {
         }
     }
 
+    /// 云端是否已就绪(iCloud 已选文件夹 / WebDAV 已填主机)。
+    var cloudConfigured: Bool {
+        switch cloud {
+        case .icloud: return hasICloudFolder
+        case .webdav: return !webdav.host.isEmpty
+        default: return false
+        }
+    }
+
+    /// 主密码变更后的云端接力:远端容器仍是旧密码加密,用旧密码解密合并后
+    /// 以新密码重传并重设基线;失败仅记日志,下次同步走「远端不可解密」修复路径。
+    func reencryptCloudAfterPasswordChange(old: String) async {
+        guard let mounted = makeCloudDriver() else { return }
+        defer { mounted.releaseAccess?() }
+        do {
+            try await mounted.driver.testConnection()
+            if let remoteData = try await mounted.driver.download(),
+               let plain = try? DatabaseCipher.decryptedData(remoteData, password: old),
+               let remote = try? PasswordDatabase.parse(plain) {
+                var local = database
+                local.merge(with: remote)
+                database = local
+                persist()
+                Log.info("sync", "ios cloud handoff: merged remote (\(remote.cards.count) cards) after password change")
+            }
+            let out = try DatabaseCipher.encryptedData(database.xmlData(), password: password)
+            try await mounted.driver.upload(out)
+            recordSyncBaseline(uploaded: out)
+            syncRemoteUnreadable = false
+            Log.info("sync", "ios cloud handoff: remote re-encrypted with new password (\(out.count)B)")
+        } catch {
+            Log.warn("sync", "ios cloud handoff after password change failed: \(error)")
+        }
+    }
+
+    /// 远端不可解密(旧主密码加密/数据损坏)时的修复:以当前密码重传本地库并重设基线。
+    /// 会丢弃云端现有内容,UI 层须先经用户确认。
+    func overwriteUnreadableRemote() async {
+        guard let mounted = makeCloudDriver() else { return }
+        defer { mounted.releaseAccess?() }
+        syncState = .syncing
+        do {
+            try await mounted.driver.testConnection()
+            let out = try DatabaseCipher.encryptedData(database.xmlData(), password: password)
+            try await mounted.driver.upload(out)
+            recordSyncBaseline(uploaded: out)
+            syncRemoteUnreadable = false
+            syncState = .idle
+            Log.info("sync", "ios sync \"\(databaseName)\": overwrote unreadable remote (\(out.count)B)")
+            showToast(L10n.t("last_sync_completed_prompt") + " "
+                + (lastSync?.formatted(date: .abbreviated, time: .shortened) ?? ""))
+        } catch {
+            syncState = .failed(error.localizedDescription)
+            Log.error("sync", "ios overwrite unreadable remote failed: \(error)")
+            showToast("\(L10n.t("sync_error")): \(error.localizedDescription)")
+        }
+    }
+
     /// 上次成功同步的基线哈希键(按数据库分开):本地明文 XML 与远端容器字节。
     private var baselineLocalXMLKey: String { "sync.baseline.local.\(databaseName)" }
     private var baselineRemoteDataKey: String { "sync.baseline.remote.\(databaseName)" }
@@ -231,7 +289,17 @@ extension Vault {
             let remoteData = try await driver.download()
             var local = database
             if let remoteData {
-                let plain = try DatabaseCipher.decryptedData(remoteData, password: password)
+                let plain: Data
+                do {
+                    plain = try DatabaseCipher.decryptedData(remoteData, password: password)
+                } catch {
+                    // 远端仍是旧主密码加密(或已损坏):不进入合并,挂起修复入口由用户裁决
+                    syncRemoteUnreadable = true
+                    syncState = .failed(L10n.t("sync_remote_unreadable_error"))
+                    Log.error("sync", "ios sync \"\(databaseName)\": remote undecryptable — overwrite option offered")
+                    if !auto { showToast(L10n.t("sync_remote_unreadable_error")) }
+                    return
+                }
                 let remote = try PasswordDatabase.parse(plain)
                 Log.info("sync", "ios remote: \(remote.cards.count) cards, \(remote.labels.count) labels; local: \(local.cards.count) cards")
                 let verdict = SyncConflict.evaluate(
@@ -262,6 +330,7 @@ extension Vault {
             let out = try DatabaseCipher.encryptedData(database.xmlData(), password: password)
             try await driver.upload(out)
             recordSyncBaseline(uploaded: out)
+            syncRemoteUnreadable = false
             syncState = .idle
             Log.info("sync", "ios sync \"\(databaseName)\" finished (uploaded \(out.count)B)")
             if !auto {

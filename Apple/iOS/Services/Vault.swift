@@ -62,6 +62,8 @@ final class Vault: ObservableObject {
     /// 同步进行态与上次成功同步时间(持久化;Vault+Sync 扩展写入)。
     @Published var syncState: SyncPhase = .idle
     @Published var lastSync: Date? = nil
+    /// 远端容器用当前密码解不开(常见于改主密码后):设置页据此展示覆盖云端的修复入口。
+    @Published var syncRemoteUnreadable = false
     /// 未决同步冲突(密文现场);由 RootView 呈现裁决弹窗。
     @Published var pendingSyncConflict: PendingSyncConflict? = nil
     /// 已选 iCloud 云盘文件夹名(书签本体在共享 defaults,不进 @Published)。
@@ -241,6 +243,12 @@ final class Vault: ObservableObject {
                 PasswordStore.savePasswordForBiometric(new, databaseName: databaseName)
             }
             Log.info("app", "ios master password changed db=\(databaseName)")
+            // 远端容器仍是旧密码加密:云端已就绪则接力重加密,否则下次同步走覆盖修复
+            if cloudConfigured {
+                Task { await reencryptCloudAfterPasswordChange(old: old) }
+            } else {
+                Log.info("sync", "ios password changed with cloud unconfigured — next sync may hit unreadable remote")
+            }
             return true
         } catch {
             Log.error("app", "ios master password change failed: \(error)")

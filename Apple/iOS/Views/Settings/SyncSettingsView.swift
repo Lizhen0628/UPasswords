@@ -10,6 +10,7 @@ struct SyncSettingsView: View {
     @EnvironmentObject var vault: Vault
 
     @State private var showFolderPicker = false
+    @State private var showOverwriteConfirm = false
 
     /// 自动同步间隔档位(与 macOS ConfigureCloudSheet 一致)。
     private let autoSyncChoices: [(String, Int)] = [
@@ -112,8 +113,28 @@ struct SyncSettingsView: View {
                       || (vault.cloud == .icloud && !vault.hasICloudFolder))
             .buttonStyle(.plain)
             statusLine
+            // 远端用旧主密码加密解不开时:提供以本地覆盖云端的修复入口
+            if vault.syncRemoteUnreadable {
+                Button {
+                    showOverwriteConfirm = true
+                } label: {
+                    Label(L10n.t("ios_sync_overwrite_cloud_button"), systemImage: "arrow.up.doc")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Brand.red)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 38)
+                        .background(Brand.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.vertical, 4)
+        .confirmationDialog(L10n.t("ios_sync_overwrite_cloud_query"), isPresented: $showOverwriteConfirm, titleVisibility: .visible) {
+            Button(L10n.t("ios_sync_overwrite_cloud_button"), role: .destructive) {
+                Task { await vault.overwriteUnreadableRemote() }
+            }
+            Button(L10n.t("cancel_button"), role: .cancel) {}
+        }
     }
 
     @ViewBuilder
