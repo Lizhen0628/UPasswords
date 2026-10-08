@@ -23,12 +23,25 @@ struct VaultManageSheet: View {
     @State private var deleteTarget: DatabaseFile? = nil
     @State private var showRename = false
     @State private var showImporter = false
+    /// 云端(已配置同步)里存在但本地没有的库。
+    @State private var cloudOnlyNames: [String] = []
+    @State private var cloudImportTarget: String? = nil
 
     var body: some View {
         NavigationStack {
             List {
                 ForEach(vault.databases, id: \.name) { db in
                     manageRow(db)
+                }
+                // 云端分区:已配置同步时列出“云上有、本地没有”的库,点按下载
+                if !cloudOnlyNames.isEmpty {
+                    Section {
+                        ForEach(cloudOnlyNames, id: \.self) { name in
+                            cloudRow(name)
+                        }
+                    } header: {
+                        Text(L10n.t("ios_cloud_databases_section"))
+                    }
                 }
                 Section {
                     Text(L10n.t("ios_databases_section_footer"))
@@ -65,12 +78,24 @@ struct VaultManageSheet: View {
                     }
                 }
             }
-            .onAppear { vault.refreshDatabases() }
+            .onAppear {
+                vault.refreshDatabases()
+                Task { await loadCloudOnly() }
+            }
             .fileImporter(isPresented: $showImporter, allowedContentTypes: Vault.vaultFileTypes) { result in
                 // 导入成功后库即切换并锁定,本页随锁屏自动退场
                 if case .success(let url) = result {
                     vault.importDatabaseFile(from: url)
                 }
+            }
+            .confirmationDialog(L10n.t("ios_db_import_query"), isPresented: Binding(
+                get: { cloudImportTarget != nil },
+                set: { if !$0 { cloudImportTarget = nil } }
+            ), titleVisibility: .visible, presenting: cloudImportTarget) { name in
+                Button(L10n.t("ios_cloud_restore_button")) {
+                    Task { _ = await vault.importCloudDatabase(name: name) }
+                }
+                Button(L10n.t("cancel_button"), role: .cancel) {}
             }
             .sheet(isPresented: $showRename) { DatabaseRenameSheet() }
             .confirmationDialog(L10n.t("ios_db_switch_query"), isPresented: Binding(
@@ -92,6 +117,38 @@ struct VaultManageSheet: View {
                 Text(L10n.t("ios_db_delete_detail"))
             }
         }
+    }
+
+    /// 云端库行:点按弹确认后下载并切换。
+    private func cloudRow(_ name: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "icloud")
+                .font(.body)
+                .foregroundStyle(Brand.accent)
+                .frame(width: 26)
+            Text(name)
+                .font(.body)
+                .foregroundStyle(Brand.fg)
+            Spacer()
+            if vault.importingCloud {
+                ProgressView().tint(Brand.accent)
+            } else {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(Brand.accent)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { if !vault.importingCloud { cloudImportTarget = name } }
+        .listRowBackground(Brand.card)
+        .listRowInsets(EdgeInsets(top: 11, leading: 16, bottom: 11, trailing: 16))
+    }
+
+    /// 列出云端有而本地没有的库(未配置同步时为空,分区自动隐藏)。
+    private func loadCloudOnly() async {
+        guard vault.cloud == .icloud || vault.cloud == .webdav else { return }
+        let names = await vault.listCloudDatabases()
+        let localNames = Set(vault.databases.map(\.name))
+        cloudOnlyNames = names.filter { !localNames.contains($0) }
     }
 
     /// 库行:右滑(leading)揭示 删除/切换;点按非当前库弹切换确认。
