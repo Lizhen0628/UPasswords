@@ -358,9 +358,11 @@ extension Vault {
                 }
                 let remote = try PasswordDatabase.parse(plain)
                 Log.info("sync", "ios remote: \(remote.cards.count) cards, \(remote.labels.count) labels; local: \(local.cards.count) cards")
+                let localHash = SyncConflict.sha256Hex(local.xmlData())
+                let remoteHash = SyncConflict.sha256Hex(remoteData)
                 let verdict = SyncConflict.evaluate(
-                    localXMLHash: SyncConflict.sha256Hex(local.xmlData()),
-                    remoteDataHash: SyncConflict.sha256Hex(remoteData),
+                    localXMLHash: localHash,
+                    remoteDataHash: remoteHash,
                     baselines: SyncConflict.Baselines(
                         localXMLHash: d.string(forKey: baselineLocalXMLKey),
                         remoteDataHash: d.string(forKey: baselineRemoteDataKey)))
@@ -374,6 +376,16 @@ extension Vault {
                         remoteCards: remote.cards.count,
                         remoteLabels: remote.labels.count)
                     syncState = .idle
+                    return
+                }
+                // 双方自基线起均无变化:纯轮询命中,跳过上传。
+                // (iCloud 分歧期本端会不断读回自己的旧版本;盲传会把「最后写入者」
+                //  反复拉回旧版本,阻碍云端收敛)
+                if localHash == d.string(forKey: baselineLocalXMLKey),
+                   remoteHash == d.string(forKey: baselineRemoteDataKey) {
+                    lastSync = Date()
+                    syncState = .idle
+                    Log.info("sync", "ios no changes since baseline — skipping upload")
                     return
                 }
                 Log.info("sync", "ios no conflict — merging")

@@ -385,9 +385,11 @@ extension AppContext {
                 }
                 let remote = try PasswordDatabase.parse(plain)
                 Log.info("sync", "remote: \(remote.cards.count) cards, \(remote.labels.count) labels; local: \(local.cards.count) cards")
+                let localHash = SyncConflict.sha256Hex(local.xmlData())
+                let remoteHash = SyncConflict.sha256Hex(remoteData)
                 let verdict = SyncConflict.evaluate(
-                    localXMLHash: SyncConflict.sha256Hex(local.xmlData()),
-                    remoteDataHash: SyncConflict.sha256Hex(remoteData),
+                    localXMLHash: localHash,
+                    remoteDataHash: remoteHash,
                     baselines: SyncConflict.Baselines(
                         localXMLHash: UserDefaults.standard.string(forKey: baselineLocalXMLKey),
                         remoteDataHash: UserDefaults.standard.string(forKey: baselineRemoteDataKey)))
@@ -402,6 +404,14 @@ extension AppContext {
                         remoteLabels: remote.labels.count)
                     syncState = .conflict
                     presentSyncConflictSheetIfPossible()
+                    return
+                }
+                // 双方自基线起均无变化:跳过上传(与 iOS 同款,防 iCloud 分歧期乒乓)
+                if localHash == UserDefaults.standard.string(forKey: baselineLocalXMLKey),
+                   remoteHash == UserDefaults.standard.string(forKey: baselineRemoteDataKey) {
+                    lastSync = Date()
+                    syncState = .idle
+                    Log.info("sync", "no changes since baseline — skipping upload")
                     return
                 }
                 Log.info("sync", "no conflict — merging")
