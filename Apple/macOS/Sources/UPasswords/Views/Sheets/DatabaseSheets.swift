@@ -53,6 +53,7 @@ struct ChangePasswordSheet: View {
     @State private var new = ""
     @State private var confirm = ""
     @State private var error = ""
+    @State private var showNewPasswords = false
 
     var body: some View {
         SheetShell(
@@ -82,10 +83,28 @@ struct ChangePasswordSheet: View {
                         SecureField("", text: $current).textFieldStyle(.roundedBorder)
                     }
                     LabeledRow(label: L10n.t("set_password_prompt")) {
-                        SecureField("", text: $new).textFieldStyle(.roundedBorder)
+                        HStack(spacing: 6) {
+                            if showNewPasswords {
+                                TextField("", text: $new).textFieldStyle(.roundedBorder)
+                            } else {
+                                SecureField("", text: $new).textFieldStyle(.roundedBorder)
+                            }
+                            // 明文开关:防止输错不自知(改错密码会导致多端同步连环问题)
+                            Button {
+                                showNewPasswords.toggle()
+                            } label: {
+                                Image(systemName: showNewPasswords ? "eye.slash" : "eye")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                     LabeledRow(label: L10n.t("confirm_password_prompt")) {
-                        SecureField("", text: $confirm).textFieldStyle(.roundedBorder)
+                        if showNewPasswords {
+                            TextField("", text: $confirm).textFieldStyle(.roundedBorder)
+                        } else {
+                            SecureField("", text: $confirm).textFieldStyle(.roundedBorder)
+                        }
                     }
                     Text(L10n.t("change_password_on_all_devices_message"))
                         .font(.caption).foregroundStyle(.secondary)
