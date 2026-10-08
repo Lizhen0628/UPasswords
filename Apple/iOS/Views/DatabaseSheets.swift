@@ -20,6 +20,15 @@ struct VaultManageSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var switchTarget: DatabaseFile? = nil
+    @State private var switchPassword = ""
+    @State private var switchFailed = false
+
+    /// 发起切换:重置密码与错误状态后弹出验证框(重试路径不走这里,以保留错误文案)。
+    private func beginSwitch(_ db: DatabaseFile) {
+        switchPassword = ""
+        switchFailed = false
+        beginSwitch(db)
+    }
     @State private var deleteTarget: DatabaseFile? = nil
     @State private var showRename = false
     @State private var showImporter = false
@@ -98,14 +107,30 @@ struct VaultManageSheet: View {
                 Button(L10n.t("cancel_button"), role: .cancel) {}
             }
             .sheet(isPresented: $showRename) { DatabaseRenameSheet() }
-            .confirmationDialog(L10n.t("ios_db_switch_query"), isPresented: Binding(
-                get: { switchTarget != nil },
-                set: { if !$0 { switchTarget = nil } }
-            ), titleVisibility: .visible, presenting: switchTarget) { target in
-                Button(L10n.t("ios_db_switch_button")) { vault.switchDatabase(to: target.name) }
+            .alert(String(format: L10n.t("switch_database_unlock_title"), switchTarget?.name ?? ""),
+                   isPresented: Binding(
+                    get: { switchTarget != nil },
+                    set: { if !$0 { switchTarget = nil } }
+                   ), presenting: switchTarget) { target in
+                // 先验证目标库密码,成功才切换(与 macOS 一致;错误原地重试)
+                SecureField("", text: $switchPassword)
+                Button(L10n.t("unlock_button")) {
+                    if vault.switchDatabase(to: target.name, password: switchPassword) {
+                        switchTarget = nil
+                    } else {
+                        switchFailed = true
+                        switchPassword = ""
+                        let name = target.name
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 300_000_000)
+                            switchTarget = vault.databases.first { $0.name == name }
+                        }
+                    }
+                }
+                .disabled(switchPassword.isEmpty)
                 Button(L10n.t("cancel_button"), role: .cancel) {}
             } message: { _ in
-                Text(L10n.t("ios_db_switch_detail"))
+                Text(switchFailed ? L10n.t("wrong_password_error") : L10n.t("switch_database_unlock_message"))
             }
             .confirmationDialog(L10n.t("ios_db_delete_query"), isPresented: Binding(
                 get: { deleteTarget != nil },
@@ -157,7 +182,7 @@ struct VaultManageSheet: View {
         vaultRow(db)
             .contentShape(Rectangle())
             .onTapGesture {
-                if db.name != vault.databaseName { switchTarget = db }
+                if db.name != vault.databaseName { beginSwitch(db) }
             }
             .listRowBackground(Brand.card)
         .listRowInsets(EdgeInsets(top: 11, leading: 16, bottom: 11, trailing: 16))
@@ -170,7 +195,7 @@ struct VaultManageSheet: View {
             .tint(Brand.red)
 
             Button {
-                switchTarget = db
+                beginSwitch(db)
             } label: {
                 Label(L10n.t("ios_db_switch_button"), systemImage: "arrow.left.arrow.right")
             }
@@ -205,7 +230,7 @@ struct VaultManageSheet: View {
             // 不依赖手势的可靠入口:个别真机(iOS 27.0.1)swipeActions 不响应
             Menu {
                 Button {
-                    switchTarget = db
+                    beginSwitch(db)
                 } label: {
                     Label(L10n.t("ios_db_switch_button"), systemImage: "arrow.left.arrow.right")
                 }

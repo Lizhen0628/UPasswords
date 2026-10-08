@@ -366,16 +366,28 @@ final class Vault: ObservableObject {
         d.removeObject(forKey: "sync.last.\(name)")
     }
 
-    /// 切换当前数据库:落盘当前库、更新共享指针并立即锁定——需用目标库的
-    /// 主密码重新解锁(与 macOS 语义一致)。
-    func switchDatabase(to name: String) {
-        guard store.exists(name), name != databaseName else { return }
+    /// 切换数据库:先验证目标库主密码,成功才切换并直接解锁(与 macOS 一致)。
+    /// 失败(密码错)留在当前库,返回 false 由 UI 原地重试。
+    @discardableResult
+    func switchDatabase(to name: String, password pw: String) -> Bool {
+        guard store.exists(name), name != databaseName else { return false }
+        guard let db = try? store.load(name: name, password: pw) else {
+            Log.warn("app", "ios switch database → \"\(name)\" failed: wrong password")
+            return false
+        }
         persist()
         SharedVaultStore.currentDatabaseName = name
         databaseName = name
-        lock()
+        database = db
+        password = pw
+        locked = false
         reloadPerDatabaseState()
-        Log.info("app", "ios switched database → \"\(name)\" (locked for unlock)")
+        healBiometricEntry(with: pw)
+        startAutoSyncTickerIfNeeded()
+        maybeRunAutoBreachCheck()
+        maybeRunAutoBackup()
+        Log.info("app", "ios switched database → \"\(name)\" (password verified)")
+        return true
     }
 
     /// 新建数据库并切换为当前库(手上有新主密码,直接解锁进入空库)。
@@ -437,7 +449,13 @@ final class Vault: ObservableObject {
             showToast(L10n.t("ios_db_deleted_message"))
             if name == databaseName {
                 if let next = store.list().first {
-                    switchDatabase(to: next.name)
+                    // 删除当前库后的内部转移:无密码可验,切指针并锁定,
+                    // 锁屏预填新库名由用户解锁(不同于用户主动切换的验证流程)
+                    persist()
+                    SharedVaultStore.currentDatabaseName = next.name
+                    databaseName = next.name
+                    lock()
+                    Log.info("app", "ios current database deleted → moved to \"\(next.name)\" (locked)")
                 } else {
                     SharedVaultStore.currentDatabaseName = nil
                     databaseName = SharedVaultStore.defaultDatabaseName
