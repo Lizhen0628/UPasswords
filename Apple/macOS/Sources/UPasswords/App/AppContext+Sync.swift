@@ -351,11 +351,16 @@ extension AppContext {
                     plain = try DatabaseCipher.decryptedData(remoteData, password: password)
                 } catch {
                     // 远端被其他设备用新主密码重加密(或损坏):不进入合并,
-                    // 挂起修复入口(云同步设置页)由用户裁决(与 iOS 同语义)
+                    // 主动弹窗引导输入新密码接管(边沿触发:同一事件只弹一次)
+                    let firstHit = !syncRemoteUnreadable
                     syncRemoteUnreadable = true
                     syncState = .error(L10n.t("sync_remote_unreadable_error"))
-                    Log.error("sync", "sync \"\(databaseName)\": remote undecryptable — repair options offered")
-                    AppToast.shared.show(L10n.t("sync_remote_unreadable_error"))
+                    Log.error("sync", "sync \"\(databaseName)\": remote undecryptable — adopt prompt offered (firstHit=\(firstHit))")
+                    if firstHit {
+                        promptAdoptRemotePassword()
+                    } else {
+                        AppToast.shared.show(L10n.t("sync_remote_unreadable_error"))
+                    }
                     return
                 }
                 let remote = try PasswordDatabase.parse(plain)

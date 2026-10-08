@@ -86,6 +86,10 @@ struct RootView: View {
 
 struct MainTabView: View {
     @Binding var selectedTab: Int
+    @EnvironmentObject private var vault: Vault
+    @State private var showAdoptPrompt = false
+    @State private var adoptPassword = ""
+    @State private var adoptFailed = false
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -98,6 +102,34 @@ struct MainTabView: View {
             NavigationStack { SettingsView() }
                 .tabItem { Label(L10n.t("ios_tab_settings"), systemImage: "gearshape") }
                 .tag(2)
+        }
+        // 远端被「其他设备改后的新主密码」重加密:主动弹窗引导接管(边沿触发,
+        // 同一事件只弹一次;修复或成功后标志清除)
+        .onChange(of: vault.syncRemoteUnreadable) { _, unreadable in
+            if unreadable {
+                Log.info("sync", "ios adopt password prompt shown (unreadable remote)")
+                adoptPassword = ""
+                adoptFailed = false
+                showAdoptPrompt = true
+            }
+        }
+        .alert(L10n.t("ios_sync_adopt_password_title"), isPresented: $showAdoptPrompt) {
+            SecureField("", text: $adoptPassword)
+            Button(L10n.t("unlock_button")) {
+                let pw = adoptPassword
+                Task {
+                    let ok = await vault.adoptRemotePassword(pw)
+                    if !ok {
+                        adoptFailed = true
+                        try? await Task.sleep(nanoseconds: 300_000_000)
+                        showAdoptPrompt = true
+                    }
+                }
+            }
+            .disabled(adoptPassword.isEmpty)
+            Button(L10n.t("cancel_button"), role: .cancel) {}
+        } message: {
+            Text(adoptFailed ? L10n.t("wrong_password_error") : L10n.t("ios_sync_adopt_password_message"))
         }
     }
 }

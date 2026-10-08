@@ -93,7 +93,8 @@ async function unlock() {
             passwordInput.value = "";
             await query();
         } else {
-            statusEl.textContent = t("密码错误或库文件损坏", "Wrong password or corrupt vault");
+            statusEl.textContent = t("密码错误，或主密码已在其他设备修改——请输入最新密码",
+                                     "Wrong password, or the master password was changed on another device — enter the latest one");
             statusEl.className = "error";
         }
     } catch {
