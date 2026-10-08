@@ -109,6 +109,63 @@ extension AppContext {
     /// 自动同步间隔下限(秒):防止误设过小的间隔频繁打云端。
     private static let minAutoSyncSeconds = 30
 
+    /// 远端不可解密修复 A:输入「其他设备改后的新主密码」接管远端——
+    /// 解密远端并合并进本地 → 本地以新密码重加密落盘并更新钥匙串 → 上传合并结果。
+    /// 返回是否成功(失败多半是密码不对,UI 层提示重试)。
+    @discardableResult
+    func adoptRemotePassword(_ newPassword: String) async -> Bool {
+        guard let driver = makeCloudDriver() else { return false }
+        do {
+            try await driver.testConnection()
+            guard let remoteData = try await driver.download(),
+                  let plain = try? DatabaseCipher.decryptedData(remoteData, password: newPassword),
+                  let remote = try? PasswordDatabase.parse(plain) else {
+                Log.warn("sync", "adopt remote password failed: cannot decrypt with given password")
+                return false
+            }
+            var merged = database
+            merged.merge(with: remote)
+            database = merged
+            try store.save(merged, name: databaseName, password: newPassword)
+            password = newPassword
+            PasswordStore.savePassword(newPassword, databaseName: databaseName)
+            if settings.fastUnlock && PasswordStore.biometricAvailable() {
+                PasswordStore.savePasswordForBiometric(newPassword, databaseName: databaseName)
+            }
+            let out = try DatabaseCipher.encryptedData(merged.xmlData(), password: newPassword)
+            try await driver.upload(out)
+            recordSyncBaseline(uploaded: out)
+            syncRemoteUnreadable = false
+            SafariSnapshotBridge.push(databaseName: databaseName, store: store)
+            Log.info("sync", "adopted remote password: merged \(remote.cards.count) remote cards, re-encrypted local+cloud")
+            return true
+        } catch {
+            Log.warn("sync", "adopt remote password failed: \(error)")
+            return false
+        }
+    }
+
+    /// 远端不可解密修复 B:以本地数据覆盖云端(确认后调用),会丢弃云端现有内容。
+    func overwriteUnreadableRemote() async {
+        guard let driver = makeCloudDriver() else { return }
+        syncState = .syncing
+        do {
+            try await driver.testConnection()
+            let out = try DatabaseCipher.encryptedData(database.xmlData(), password: password)
+            try await driver.upload(out)
+            recordSyncBaseline(uploaded: out)
+            syncRemoteUnreadable = false
+            lastSync = Date()
+            syncState = .idle
+            Log.info("sync", "overwrite unreadable remote ok (\(out.count)B)")
+            AppToast.shared.show(L10n.t("last_sync_completed_prompt"))
+        } catch {
+            syncState = .error(error.localizedDescription)
+            Log.error("sync", "overwrite unreadable remote failed: \(error)")
+            AppToast.shared.show(error.localizedDescription)
+        }
+    }
+
     /// 当前云类型对应的同步驱动;none 或尚未实现驱动的网盘返回 nil。
     /// - Parameter name: 覆盖数据库名。云端恢复流程在目标库尚未打开时使用。
     func makeCloudDriver(databaseName name: String? = nil) -> CloudDriver? {
@@ -289,7 +346,18 @@ extension AppContext {
             let remoteData = try await driver.download()
             var local = database
             if let remoteData {
-                let plain = try DatabaseCipher.decryptedData(remoteData, password: password)
+                let plain: Data
+                do {
+                    plain = try DatabaseCipher.decryptedData(remoteData, password: password)
+                } catch {
+                    // 远端被其他设备用新主密码重加密(或损坏):不进入合并,
+                    // 挂起修复入口(云同步设置页)由用户裁决(与 iOS 同语义)
+                    syncRemoteUnreadable = true
+                    syncState = .error(L10n.t("sync_remote_unreadable_error"))
+                    Log.error("sync", "sync \"\(databaseName)\": remote undecryptable — repair options offered")
+                    AppToast.shared.show(L10n.t("sync_remote_unreadable_error"))
+                    return
+                }
                 let remote = try PasswordDatabase.parse(plain)
                 Log.info("sync", "remote: \(remote.cards.count) cards, \(remote.labels.count) labels; local: \(local.cards.count) cards")
                 let verdict = SyncConflict.evaluate(
@@ -321,6 +389,7 @@ extension AppContext {
             let out = try DatabaseCipher.encryptedData(database.xmlData(), password: password)
             try await driver.upload(out)
             recordSyncBaseline(uploaded: out)
+            syncRemoteUnreadable = false
             let finished = Date()
             lastSync = finished
             syncState = .idle

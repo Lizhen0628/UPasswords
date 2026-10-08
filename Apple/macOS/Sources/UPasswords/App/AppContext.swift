@@ -61,6 +61,9 @@ final class AppContext: ObservableObject {
     }
     @Published var syncState: SyncState = .disabled
     @Published var lastSync: Date? = nil
+    /// 远端密文用本机不知道的密码加密(对端刚改过主密码/数据损坏):
+    /// 云同步设置页据此展示「接管/覆盖」修复入口(与 iOS 同语义)。
+    @Published var syncRemoteUnreadable = false
     @Published var lastSyncFailed: Date? = nil
     @Published var failedUnlockAttempts = 0
 
