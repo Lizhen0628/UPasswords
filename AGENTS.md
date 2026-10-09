@@ -359,7 +359,10 @@ IUO（`var x: T!`）仅允许用于 init 期无法赋值的框架注入点（本
    需要用户验收/介入），用 curl 推送 Bark 通知到用户 iPhone：
 
    ```bash
-   curl -s -G "https://api.day.app/Ujcj9UtWAosDUPDuWKANCR/标题/正文" \
+   # title/body 含中文须先百分号编码(路径段不支持裸 UTF-8)
+   T=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "标题")
+   B=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "正文")
+   curl -s -G "https://api.day.app/Ujcj9UtWAosDUPDuWKANCR/$T/$B" \
      --data-urlencode "group=UPasswords" --data-urlencode "ttl=600"
    ```
 
