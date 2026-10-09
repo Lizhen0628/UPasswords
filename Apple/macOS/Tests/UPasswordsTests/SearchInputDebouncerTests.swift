@@ -24,13 +24,17 @@ final class SearchInputDebouncerTests: XCTestCase {
     /// 快速连续键入只应用最后一个值(重排取消旧任务)。
     func testRapidInputCoalescesToLastValue() async throws {
         var applied: [String] = []
-        let debouncer = SearchInputDebouncer(interval: .milliseconds(100)) { applied.append($0) }
+        // CI 虚拟机定时不准:防抖窗口拉到 300ms,键入间隔 50ms(250ms 余量),
+        // 结尾轮询等待而非一次性 sleep,消除慢机上的时序抖动
+        let debouncer = SearchInputDebouncer(interval: .milliseconds(300)) { applied.append($0) }
         debouncer.textChanged("g")
-        try await Task.sleep(for: .milliseconds(40))
+        try await Task.sleep(for: .milliseconds(50))
         debouncer.textChanged("gi")
-        try await Task.sleep(for: .milliseconds(40))
+        try await Task.sleep(for: .milliseconds(50))
         debouncer.textChanged("git")
-        try await Task.sleep(for: .milliseconds(400))
+        for _ in 0..<40 where applied != ["git"] {
+            try await Task.sleep(for: .milliseconds(50))
+        }
         XCTAssertEqual(applied, ["git"], "连续键入只应用最后一个值")
     }
 
