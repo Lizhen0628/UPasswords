@@ -356,10 +356,15 @@ IUO（`var x: T!`）仅允许用于 init 期无法赋值的框架注入点（本
    不要自行截图/运行界面做视觉验证——验证测试由用户完成；只需保证
    `swift build` 无警告、`swift test` 通过（豁免项见第 7 条）。
 9. 【必须】**任务完成 Bark 通知**：每轮任务执行完毕后（代码部署、长任务结束、
-   需要用户验收/介入），调用 `.agents/skills/bark-notify/notify.sh "标题" "正文"`
-   推送通知到用户 iPhone（凭证由脚本从 ~/.zshrc 读取，禁止入库）。
-   文案一行说清结果+所需动作；隐私红线同日志（不含密码/密钥/敏感内容）；
-   发送失败不阻塞主流程，记日志即可。
+   需要用户验收/介入），用 curl 推送 Bark 通知到用户 iPhone：
+
+   ```bash
+   curl -s -G "https://api.day.app/Ujcj9UtWAosDUPDuWKANCR/标题/正文" \
+     --data-urlencode "group=UPasswords" --data-urlencode "ttl=600"
+   ```
+
+   title/body 按本轮结果自行填写（一行说清结果+所需动作），group 固定用项目名。
+   隐私红线同日志：不含密码/密钥/字段值等敏感内容；发送失败不阻塞主流程。
 
 ## 15. 常见反模式（禁止清单）
 
