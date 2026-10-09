@@ -1,11 +1,6 @@
 # AGENTS.md — UPasswords Swift 代码开发规范
 
 本文件是本项目（macOS 密码管理器，SwiftUI + AppKit + SPM 可执行目标）的统一开发规范，
-**所有编码 Agent 与贡献者必须遵守**。规范综合以下来源并结合本项目实践整理：
-
-- [Swift 编程代码规范指南（杨充）](https://yccoding.com/pages/swift-style-guide/)（章节编号沿用，如 7.4）
-- [Swift 开发规范·修订版（CoderStar）](https://juejin.cn/post/6979966262591881246)
-- [Swift API Design Guidelines](https://www.swift.org/documentation/api-design-guidelines/)
 
 ## 0. 要求等级
 
