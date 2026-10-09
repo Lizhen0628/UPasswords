@@ -262,7 +262,7 @@ extension AppContext {
                                                      }) {
                 return scoped
             }
-            // 未选文件夹:回落旧直读路径(未沙盒构建可用;沙盒下报 icloudUnavailable)
+            // 未选文件夹:回落旧直读路径(未沙盒构建可用;沙盒下报 icloudFolderInaccessible)
             return ICloudDriver(databaseName: dbName)
         default:
             return nil

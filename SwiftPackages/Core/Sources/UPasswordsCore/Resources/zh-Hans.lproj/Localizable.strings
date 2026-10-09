@@ -241,6 +241,7 @@
 "https_protocol_warning" = "若要与自己的 WebDAV 服务器通过 HTTPS 同步，您可能需要导出服务器的 SSL 证书并将其安装在您的设备上。请参阅程序 WebDAV 手册的详细说明。";
 "icloud_account_error" = "在系统首选项中登录到您的 iCloud 帐户。 选择 Apple ID 并打开 iCloud Drive 。";
 "icloud_extra_database_warning" = "iCloud 上的额外密码库无法与他人共享。如需与家人或同事共享额外密码库，请使用其他云端。";
+"icloud_folder_inaccessible_error" = "当前构建无法直接访问 iCloud 云盘。请点按「选择 iCloud 云盘文件夹」按钮，授权访问 iCloud 云盘中的 UPasswords 文件夹。";
 "icloud_sync_info" = "加密密码库保存在 iCloud 云盘的 UPasswords 文件夹中，由 macOS 自动同步到您的其他 Mac。需要在每台要同步的 Mac 上登录同一 Apple 账户并开启 iCloud 云盘。";
 "icons_prompt" = "图标";
 "ignore_button" = "忽略";

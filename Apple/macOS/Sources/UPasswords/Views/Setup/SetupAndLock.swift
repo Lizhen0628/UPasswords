@@ -407,6 +407,21 @@ struct RestoreCloudForm: View {
                                 Label(L10n.t("icloud_sync_info"), systemImage: "icloud")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                // 沙盒构建无法直读 CloudDocs 根,必须经选择器授权书签访问
+                                HStack(spacing: 8) {
+                                    Text(L10n.t("ios_icloud_folder_label"))
+                                        .font(.caption)
+                                    Button(settings.icloudFolderName.isEmpty
+                                           ? L10n.t("ios_icloud_pick_folder_button")
+                                           : settings.icloudFolderName) {
+                                        Log.info("ui", "icloud folder pick from restore form")
+                                        ctx.pickICloudFolder()
+                                    }
+                                    if !settings.icloudFolderName.isEmpty {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                    }
+                                }
                             }
 
                             HStack(spacing: 8) {

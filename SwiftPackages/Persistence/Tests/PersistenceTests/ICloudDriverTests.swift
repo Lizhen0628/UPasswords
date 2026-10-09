@@ -50,6 +50,15 @@ final class ICloudDriverTests: XCTestCase {
         XCTAssertEqual(downloaded, newer)
     }
 
+    /// CloudDocs 根缺失按沙盒与否映射不同错误:沙盒引导选文件夹授权,
+    /// 非沙盒(目录缺失多为 iCloud Drive 未开启)沿用「登录/开启」提示。
+    func testMissingCloudDocsRootErrorMapping() {
+        XCTAssertEqual(ICloudDriver.missingCloudDocsRootError(sandboxed: true),
+                       SyncError.icloudFolderInaccessible)
+        XCTAssertEqual(ICloudDriver.missingCloudDocsRootError(sandboxed: false),
+                       SyncError.icloudUnavailable)
+    }
+
     // MARK: - 夹具
 
     /// 独立临时目录充当 iCloud 云盘根;测试结束自动清理。

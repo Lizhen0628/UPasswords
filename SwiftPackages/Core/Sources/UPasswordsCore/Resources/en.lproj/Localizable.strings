@@ -241,6 +241,7 @@
 "https_protocol_warning" = "To sync with own WebDAV server via HTTPS, you might need to export the server's SSL certificate and install it on your computer. Refer to your WebDAV provider's manual for detailed instructions.";
 "icloud_account_error" = "Sign into your iCloud account in System Preferences. Select Apple ID and turn iCloud Drive on.";
 "icloud_extra_database_warning" = "Extra databases on iCloud cannot be shared with others. Use another cloud if you want to share an extra database with your family or colleagues.";
+"icloud_folder_inaccessible_error" = "This build cannot access iCloud Drive directly. Use the \"Choose iCloud Drive Folder\" button to grant access to the UPasswords folder in your iCloud Drive.";
 "icloud_sync_info" = "The encrypted database is stored in the UPasswords folder of your iCloud Drive; macOS transfers it to your other Macs automatically. Sign in to the same Apple ID and enable iCloud Drive on every Mac you want to sync.";
 "icons_prompt" = "Icons";
 "ignore_button" = "Ignore";

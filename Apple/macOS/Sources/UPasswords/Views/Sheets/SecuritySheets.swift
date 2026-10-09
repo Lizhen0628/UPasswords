@@ -157,6 +157,21 @@ struct ConfigureCloudSheet: View {
                         Label(L10n.t("icloud_sync_info"), systemImage: "icloud")
                             .font(.callout).foregroundStyle(.secondary)
                             .frame(width: cloudSheetContentWidth, alignment: .leading)
+                        // 沙盒构建无法直读 CloudDocs 根,必须经选择器授权书签访问
+                        HStack(spacing: 8) {
+                            Text(L10n.t("ios_icloud_folder_label"))
+                                .font(.callout)
+                            Button(settings.icloudFolderName.isEmpty
+                                   ? L10n.t("ios_icloud_pick_folder_button")
+                                   : settings.icloudFolderName) {
+                                Log.info("ui", "icloud folder pick from setup sheet")
+                                ctx.pickICloudFolder()
+                            }
+                            if !settings.icloudFolderName.isEmpty {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                            }
+                        }
                     } else if settings.cloud != .none {
                         Label(L10n.t("not_configured_state"), systemImage: "info.circle")
                             .font(.callout).foregroundStyle(.secondary)

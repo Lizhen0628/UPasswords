@@ -59,12 +59,15 @@ public enum CloudType: String, CaseIterable, Identifiable {
 }
 
 /// 同步失败错误域(文案走字符串表)。
-public enum SyncError: LocalizedError {
+public enum SyncError: LocalizedError, Equatable {
     case badUrl
     case http(Int)
     case notConfigured
     case wrongPassword
     case icloudUnavailable
+    /// 沙盒进程看不到 iCloud Drive 根目录(无 ubiquity entitlement):
+    /// 只能经「选择 iCloud 文件夹」授权访问,与"未登录 iCloud"区分开。
+    case icloudFolderInaccessible
     case databaseNotFound
     case localNameConflict
     /// iCloud 文件未物化/下载中超时:上层应视为「同步失败待重试」而非「解不开」
@@ -81,6 +84,7 @@ public enum SyncError: LocalizedError {
         case .notConfigured: return L10n.t("not_configured_state")
         case .wrongPassword: return L10n.t("wrong_password_error")
         case .icloudUnavailable: return L10n.t("icloud_account_error")
+        case .icloudFolderInaccessible: return L10n.t("icloud_folder_inaccessible_error")
         case .databaseNotFound: return L10n.t("cloud_database_not_found")
         case .localNameConflict: return L10n.t("local_database_exists_error")
         case .notDownloaded: return L10n.t("icloud_download_pending_error")
@@ -292,8 +296,11 @@ extension WebDavDriver: CloudDriver {}
 /// iCloud Drive driver: the encrypted container lives in the user's iCloud
 /// Drive (`UPasswords/` folder); the system CloudDocs daemon transfers it to
 /// every Mac signed into the same Apple ID, so no iCloud entitlement or
-/// special signing is needed. All file access goes through NSFileCoordinator
-/// to avoid racing the daemon's downloads/uploads.
+/// special signing is needed — **for non-sandboxed builds**. Sandboxed builds
+/// cannot see the real CloudDocs root (no ubiquity entitlement) and must go
+/// through the user-picked folder (`iCloudFolder:` init, security-scoped
+/// bookmark). All file access goes through NSFileCoordinator to avoid racing
+/// the daemon's downloads/uploads.
 public final class ICloudDriver: CloudDriver {
     public let databaseName: String
     /// iCloud 云盘根目录(CloudDocs);单元测试可注入临时目录替代。
@@ -343,11 +350,24 @@ public final class ICloudDriver: CloudDriver {
         }
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: cloudRoot.path, isDirectory: &isDir), isDir.boolValue else {
-            Log.warn("sync", "icloud unavailable: CloudDocs root missing at \(cloudRoot.path)")
-            throw SyncError.icloudUnavailable
+            let sandboxed = Self.isSandboxedProcess
+            Log.warn("sync", "icloud unavailable: CloudDocs root missing at \(cloudRoot.path) (sandboxed=\(sandboxed))")
+            throw Self.missingCloudDocsRootError(sandboxed: sandboxed)
         }
         try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
         Log.debug("sync", "icloud folder ready: \(folderURL.path)")
+    }
+
+    /// 进程是否沙盒化:沙盒容器的 home 下没有 CloudDocs(除非带 ubiquity
+    /// entitlement,本应用不带),直读路径必然失败,须走文件夹选择授权。
+    static let isSandboxedProcess: Bool =
+        ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
+
+    /// CloudDocs 根缺失时的错误映射:沙盒 → 引导选文件夹授权;
+    /// 非沙盒缺目录多为 iCloud Drive 未开启 → 沿用「登录/开启」提示。
+    /// internal 供 PersistenceTests 验证映射。
+    static func missingCloudDocsRootError(sandboxed: Bool) -> SyncError {
+        sandboxed ? .icloudFolderInaccessible : .icloudUnavailable
     }
 
     public func download() async throws -> Data? {
