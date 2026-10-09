@@ -5,7 +5,7 @@ compatibility_date = "2026-01-01"
 # 部署后把 `wrangler kv namespace create VAULTS` 返回的 id 填到这里
 [[kv_namespaces]]
 binding = "VAULTS"
-id = "REPLACE_AFTER_KV_CREATE"
+id = "c715b8b579634d0c80005e3e45a8cda1"
 
 # 绑定到 upasswords.com 的 Workers 自定义域(需域名托管在 Cloudflare)
 routes = [{ pattern = "api.upasswords.com", custom_domain = true }]
