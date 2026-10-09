@@ -995,3 +995,6 @@
 "sync_repair_button" = "修复同步…";
 "icloud_download_pending_error" = "云端文件尚未下载到本机，请稍后重试。";
 "sync_remote_empty_clobber_hint" = "检测到云端数据已被异常清空（旧版本的锁屏同步缺陷所致）。请直接点「用本地数据覆盖云端」恢复，本机数据是完好的。";
+
+"sync_cloud_api_label" = "同步加速（upasswords.com）";
+"sync_cloud_api_footer" = "通过零知识通道即时同步密码变更信封；服务器只存密文，永远无法读取你的任何数据。";

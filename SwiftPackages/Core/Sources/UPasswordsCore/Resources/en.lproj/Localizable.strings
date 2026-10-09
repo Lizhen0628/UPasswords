@@ -995,3 +995,6 @@
 "sync_repair_button" = "Repair Sync…";
 "icloud_download_pending_error" = "The cloud file hasn't downloaded to this device yet. Please try again later.";
 "sync_remote_empty_clobber_hint" = "The cloud vault was wiped by a legacy locked-sync bug. Tap “Overwrite Cloud with Local Data” to restore — your local data is intact.";
+
+"sync_cloud_api_label" = "Sync Acceleration (upasswords.com)";
+"sync_cloud_api_footer" = "Relays password-change envelopes instantly over a zero-knowledge channel. The server only stores ciphertext and can never read your data.";

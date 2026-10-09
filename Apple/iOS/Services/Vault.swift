@@ -60,6 +60,8 @@ final class Vault: ObservableObject {
     @Published var webdav: WebDavSettings { didSet { saveWebDav() } }
     @Published var autoSyncEnabled: Bool { didSet { d.set(autoSyncEnabled, forKey: "sync.autoEnabled") } }
     @Published var autoSyncSeconds: Int { didSet { d.set(autoSyncSeconds, forKey: "sync.autoSeconds") } }
+    /// upasswords.com 信封同步加速通道(零知识,默认开;见 CloudEnvelopeService)。
+    @Published var cloudAPIEnabled: Bool { didSet { d.set(cloudAPIEnabled, forKey: "sync.cloudAPI.enabled") } }
     /// 同步进行态与上次成功同步时间(持久化;Vault+Sync 扩展写入)。
     @Published var syncState: SyncPhase = .idle
     @Published var lastSync: Date? = nil
@@ -120,6 +122,7 @@ final class Vault: ObservableObject {
         }
         autoSyncEnabled = d.object(forKey: "sync.autoEnabled") as? Bool ?? false
         autoSyncSeconds = d.object(forKey: "sync.autoSeconds") as? Int ?? 60
+        cloudAPIEnabled = d.object(forKey: "sync.cloudAPI.enabled") as? Bool ?? true
         if let main = SharedVaultStore.mainDatabase() {
             databaseName = main.name
             if SharedVaultStore.currentDatabaseName == nil {

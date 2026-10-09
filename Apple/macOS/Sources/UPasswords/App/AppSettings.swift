@@ -90,6 +90,10 @@ final class AppSettings: ObservableObject {
         get { d.string(forKey: "sync.icloud.mode") ?? "explicit" }
         set { d.set(newValue, forKey: "sync.icloud.mode") }
     }
+    /// upasswords.com 信封同步加速通道(零知识,默认开;见 CloudEnvelopeService)。
+    @Published var cloudAPIEnabled: Bool {
+        didSet { d.set(cloudAPIEnabled, forKey: "sync.cloudAPI.enabled") }
+    }
 
     // MARK: Misc
     /// 主窗口侧栏显隐(工具栏左一按钮切换,布局记忆跨启动保留)。
@@ -136,6 +140,7 @@ final class AppSettings: ObservableObject {
         autoSyncEnabled = d.object(forKey: "sync.autoEnabled") as? Bool ?? false
         autoSyncSeconds = d.object(forKey: "sync.autoSeconds") as? Int ?? 60
         icloudFolderName = d.string(forKey: "sync.icloud.name") ?? ""
+        cloudAPIEnabled = d.object(forKey: "sync.cloudAPI.enabled") as? Bool ?? true
         sidebarVisible = d.object(forKey: "app.sidebarVisible") as? Bool ?? true
         sidebarOptionalItems = (d.string(forKey: "app.sidebarOptional") ?? "")
             .split(separator: ",").map(String.init).filter { !$0.isEmpty }

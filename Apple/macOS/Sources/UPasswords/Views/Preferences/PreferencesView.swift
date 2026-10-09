@@ -854,7 +854,15 @@ struct ConfigureCloudSheetContents: View {
                             PopupPicker(selection: $settings.autoSyncSeconds, items: autoSyncChoices)
                                 .disabled(!settings.autoSyncEnabled)
                         }
+                        GridRow {
+                            Text(L10n.t("sync_cloud_api_label"))
+                            Toggle("", isOn: $settings.cloudAPIEnabled)
+                                .labelsHidden()
+                        }
                     }
+                    Text(L10n.t("sync_cloud_api_footer"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 // 远端密文解不开(对端改过主密码/数据损坏)时的修复入口:
                 // 统一收进一个对话框(接管/覆盖两条路都在里面),避免与弹窗重复

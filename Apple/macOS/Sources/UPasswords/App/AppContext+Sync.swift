@@ -1,6 +1,7 @@
 import Foundation
 import CryptoKit
 import UPasswordsCore
+import UPasswordsNetworking
 import UPasswordsPersistence
 
 /// 修改密码、备份、云同步(WebDAV / iCloud Drive)。
@@ -34,12 +35,21 @@ extension AppContext {
     }
 
     /// 改主密码后的云端接力:v2 只需上传本地信封(~100B),本体不重传。
+    /// 推送本地信封到 upasswords.com 零知识通道(改密/覆盖后调用)。
+    private func pushEnvelopeToCloudAPI() async {
+        guard settings.cloudAPIEnabled, let vaultKey,
+              let envelope = store.envelopeData(for: databaseName) else { return }
+        let changedAt = DatabaseCipher.envelopeChangedAt(envelope) ?? Date()
+        await CloudEnvelopeService.push(vaultKey: vaultKey, envelope: envelope, changedAt: changedAt)
+    }
+
     private func uploadCloudEnvelope() async {
         guard let driver = makeCloudDriver(),
               let envelope = store.envelopeData(for: databaseName) else { return }
         do {
             try await driver.testConnection()
             try await driver.uploadKey(envelope)
+            await pushEnvelopeToCloudAPI()
             SafariSnapshotBridge.push(databaseName: databaseName, store: store)
             Log.info("sync", "cloud handoff: envelope uploaded (\(envelope.count)B) after password change")
         } catch {
@@ -132,8 +142,16 @@ extension AppContext {
         guard let driver = makeCloudDriver() else { return .wrongPassword }
         do {
             try await driver.testConnection()
+            // 信封取最新来源:upasswords.com 通道通常比云端驱动更快
+            var keyData = try await driver.downloadKey()
+            if let vaultKey, settings.cloudAPIEnabled,
+               let apiEnvelope = await CloudEnvelopeService.fetch(vaultKey: vaultKey)?.envelope {
+                let apiChanged = DatabaseCipher.envelopeChangedAt(apiEnvelope) ?? .distantPast
+                let driverChanged = keyData.flatMap { DatabaseCipher.envelopeChangedAt($0) } ?? .distantPast
+                if apiChanged > driverChanged { keyData = apiEnvelope }
+            }
             // v2 路径:只需解开远端信封——收敛库身份(云端为准),顺带合并本体
-            if let keyData = try await driver.downloadKey() {
+            if let keyData {
                 guard let remoteVEK = try? DatabaseCipher.unwrapVaultKey(keyData, password: newPassword) else {
                     Log.warn("sync", "adopt: envelope unwrap failed with given password")
                     return .wrongPassword
@@ -214,6 +232,7 @@ extension AppContext {
             if let envelope = store.envelopeData(for: databaseName) {
                 try await driver.uploadKey(envelope)
             }
+            await pushEnvelopeToCloudAPI()
             recordSyncBaseline(uploaded: out)
             syncRemoteUnreadable = false
             lastSync = Date()
@@ -410,10 +429,49 @@ extension AppContext {
         do {
             try await driver.testConnection()
             Log.debug("sync", "\(settings.cloud.rawValue) connection ok")
+            // upasswords.com 信封通道(强一致零知识):优先于云端驱动发现改密
+            var sessionKey = vaultKey
+            var driverEnvelopeNeeded = true
+            if let vaultKey, settings.cloudAPIEnabled,
+               let remote = await CloudEnvelopeService.fetch(vaultKey: vaultKey) {
+                let localChangedAt = store.envelopeData(for: databaseName)
+                    .flatMap { DatabaseCipher.envelopeChangedAt($0) } ?? .distantPast
+                if remote.changedAt.timeIntervalSince(localChangedAt) > 1 {
+                    if let remoteVEK = try? DatabaseCipher.unwrapVaultKey(remote.envelope, password: password) {
+                        joinRemoteVaultIdentity(remoteVEK)
+                        sessionKey = remoteVEK
+                        // 云端驱动的信封追平(iCloud/WebDAV 上还是改密前的旧信封)
+                        if let envelope = store.envelopeData(for: databaseName) {
+                            try? await driver.uploadKey(envelope)
+                        }
+                        driverEnvelopeNeeded = false
+                        Log.info("sync", "cloud api envelope adopted (remote changedAt newer)")
+                    } else {
+                        let firstHit = !syncRemoteUnreadable
+                        syncRemoteUnreadable = true
+                        syncState = .error(L10n.t("sync_remote_unreadable_error"))
+                        Log.error("sync", "cloud api envelope unwrap failed — peer changed password (firstHit=\(firstHit))")
+                        if firstHit {
+                            promptAdoptRemotePassword()
+                        } else if !auto {
+                            AppToast.shared.show(L10n.t("sync_remote_unreadable_error"))
+                        }
+                        return
+                    }
+                } else if localChangedAt.timeIntervalSince(remote.changedAt) > 1,
+                          let envelope = store.envelopeData(for: databaseName) {
+                    // 本地信封更新:自愈推送到 API 通道
+                    Task { await CloudEnvelopeService.push(vaultKey: vaultKey, envelope: envelope, changedAt: localChangedAt) }
+                }
+            } else if let vaultKey, settings.cloudAPIEnabled,
+                      let envelope = store.envelopeData(for: databaseName) {
+                // API 侧尚无记录(首次接入):登记本地信封
+                let changedAt = DatabaseCipher.envelopeChangedAt(envelope) ?? Date()
+                Task { await CloudEnvelopeService.push(vaultKey: vaultKey, envelope: envelope, changedAt: changedAt) }
+            }
             // v2 信封先行:远端有信封 → 本体用库密钥解密(与主密码解耦)。
             // 信封解不开 = 对端刚改密 → 走接管提示;无信封 = v1 远端(兼容期)。
-            var sessionKey = vaultKey
-            if let keyData = try await driver.downloadKey() {
+            if driverEnvelopeNeeded, let keyData = try await driver.downloadKey() {
                 if let remoteVEK = try? DatabaseCipher.unwrapVaultKey(keyData, password: password) {
                     sessionKey = remoteVEK
                     joinRemoteVaultIdentity(remoteVEK)

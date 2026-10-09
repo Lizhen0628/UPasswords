@@ -1,0 +1,11 @@
+name = "upasswords-sync"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+# 部署后把 `wrangler kv namespace create VAULTS` 返回的 id 填到这里
+[[kv_namespaces]]
+binding = "VAULTS"
+id = "REPLACE_AFTER_KV_CREATE"
+
+# 绑定到 upasswords.com 的 Workers 自定义域(需域名托管在 Cloudflare)
+routes = [{ pattern = "api.upasswords.com", custom_domain = true }]

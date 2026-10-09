@@ -75,6 +75,12 @@ struct SyncSettingsView: View {
                     }
                 }
                 Section {
+                    Toggle(L10n.t("sync_cloud_api_label"), isOn: $vault.cloudAPIEnabled)
+                        .tint(Brand.accent)
+                } footer: {
+                    Text(L10n.t("sync_cloud_api_footer"))
+                }
+                Section {
                     syncNowRow
                 } footer: {
                     Text(L10n.t("cloud_sync_text"))
