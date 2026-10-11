@@ -350,9 +350,9 @@ IUO（`var x: T!`）仅允许用于 init 期无法赋值的框架注入点（本
 7. 【推荐】新逻辑配测试：按所属包放置——`SwiftPackages/Core/Tests/CoreTests/`、
    `SwiftPackages/Persistence/Tests/PersistenceTests/`、`SwiftPackages/Networking/Tests/NetworkingTests/`、
    `Apple/macOS/Tests/UPasswordsTests/`（Web 扩展共享逻辑后续配 `WebExtensions/shared` 的测试）；
-   在对应包目录运行 `swift test` 全绿方可提交
-   （已知历史遗留失败 `testCrackTimeText`（Core 包 StrengthTests）除外，修复它时请单独提交；
-   豁免项修复后从本条移除）。
+   在对应包目录运行 `swift test` 全绿方可提交。
+   测试断言不得依赖运行环境（语言/时区/机器路径）：可见文案断言用同一
+   `L10n` 键取期望值，跨平台向量 fixture 路径经 `#filePath` 推导仓库根。
 8. 【必须】**改完即部署并启动**：每轮代码修改完成后（无需用户要求），自动执行
    `./scripts/make-app.sh` 重新打包更新 `dist/UPasswords.app`（脚本内含 release 编译），
    并在答复中报告部署结果；随后自动启动应用供用户直接测试最新改动——
