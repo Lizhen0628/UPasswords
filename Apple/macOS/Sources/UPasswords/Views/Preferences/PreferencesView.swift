@@ -755,6 +755,20 @@ struct CloudPane: View {
 struct ConfigureCloudSheetContents: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
+    @State private var relayEmail = ""
+    @State private var relayCode = ""
+    @State private var relayBusy = false
+    @State private var relayDevices: [RelayClient.DeviceSession] = []
+    @State private var showRelayDevices = false
+    @State private var relayCodePrompt: RelayCodePrompt? = nil
+    @State private var relayCodeInput = ""
+    @State private var showRelayTransfer = false
+
+    /// 需要敏感验证码确认的操作(解绑库 / 注销账户)。
+    enum RelayCodePrompt {
+        case unbind, deregister
+    }
+
     @State private var testing = false
     @State private var testResult: String? = nil
 
@@ -769,101 +783,27 @@ struct ConfigureCloudSheetContents: View {
     var body: some View {
         PaneContainer {
             VStack(alignment: .leading, spacing: 20) {
-                // Grid 版式同其他页:标签按文字自然宽度紧贴内容
+                // 网盘(iCloud/WebDAV)配置入口已隐藏:同步默认走 relay API;
+                // 网盘代码保留作老库迁移兜底,已配置用户的存量设置不受影响
                 Grid(alignment: .leading, horizontalSpacing: settingsRowSpacing, verticalSpacing: 14) {
                     GridRow {
-                        Text(L10n.t("cloud_prompt"))
-                        Picker("", selection: Binding(
-                            get: { settings.cloud }, set: { settings.cloudType = $0.rawValue }
-                        )) {
-                            ForEach(CloudType.allCases) { c in
-                                Text(c.name).tag(c)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.radioGroup)
+                        Text(L10n.t("auto_sync_setting"))
+                        Toggle("", isOn: $settings.autoSyncEnabled)
+                            .labelsHidden()
                     }
-                    if settings.cloud == .webdav {
-                        GridRow {
-                            Color.clear.frame(width: 0, height: 0)
-                            Toggle("HTTPS", isOn: $settings.webdav.useHTTPS)
-                        }
-                        GridRow {
-                            Text(L10n.t("host_prompt"))
-                            field("dav.example.com", text: $settings.webdav.host)
-                        }
-                        GridRow {
-                            Text(L10n.t("port_prompt"))
-                            field("443", value: $settings.webdav.port)
-                        }
-                        GridRow {
-                            Text(L10n.t("local_path_prompt"))
-                            field("/UPasswords/", text: $settings.webdav.path)
-                        }
-                        GridRow {
-                            Text(L10n.t("user_name_prompt"))
-                            field("", text: $settings.webdav.user)
-                        }
-                        GridRow {
-                            Text(L10n.t("password_prompt"))
-                            SecureField("", text: $settings.webdav.password)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 240)
-                        }
+                    GridRow {
+                        Text(L10n.t("auto_sync_interval_setting"))
+                        PopupPicker(selection: $settings.autoSyncSeconds, items: autoSyncChoices)
+                            .disabled(!settings.autoSyncEnabled)
                     }
-                    if settings.cloud == .icloud {
-                        GridRow {
-                            Text(L10n.t("ios_icloud_folder_label"))
-                            HStack(spacing: 8) {
-                                Button(settings.icloudFolderName.isEmpty
-                                       ? L10n.t("ios_icloud_pick_folder_button")
-                                       : settings.icloudFolderName) {
-                                    Log.info("ui", "icloud folder pick from preferences")
-                                    ctx.pickICloudFolder()
-                                }
-                                if !settings.icloudFolderName.isEmpty {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(.green)
-                                }
-                            }
-                        }
+                    GridRow {
+                        Text(L10n.t("relay_account_label"))
+                        relayAccountControl
                     }
-                    if settings.cloud == .webdav || settings.cloud == .icloud {
-                        GridRow {
-                            Color.clear.frame(width: 0, height: 0)
-                            HStack(spacing: 8) {
-                                Button(L10n.t("test_connection_button")) {
-                                    Log.info("ui", "cloud connection test from preferences")
-                                    Task { await test() }
-                                }
-                                if testing {
-                                    ProgressView().controlSize(.small)
-                                }
-                                if let testResult {
-                                    Text(testResult).font(.caption)
-                                }
-                            }
-                        }
-                        GridRow {
-                            Text(L10n.t("auto_sync_setting"))
-                            Toggle("", isOn: $settings.autoSyncEnabled)
-                                .labelsHidden()
-                        }
-                        GridRow {
-                            Text(L10n.t("auto_sync_interval_setting"))
-                            PopupPicker(selection: $settings.autoSyncSeconds, items: autoSyncChoices)
-                                .disabled(!settings.autoSyncEnabled)
-                        }
-                        GridRow {
-                            Text(L10n.t("sync_cloud_api_label"))
-                            Toggle("", isOn: $settings.cloudAPIEnabled)
-                                .labelsHidden()
-                        }
-                    }
-                    Text(L10n.t("sync_cloud_api_footer"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
+                Text(L10n.t("relay_account_footer"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 // 远端密文解不开(对端改过主密码/数据损坏)时的修复入口:
                 // 统一收进一个对话框(接管/覆盖两条路都在里面),避免与弹窗重复
                 if ctx.syncRemoteUnreadable {
@@ -877,15 +817,35 @@ struct ConfigureCloudSheetContents: View {
                         }
                     }
                 }
-                if settings.cloud == .icloud {
-                    Label(L10n.t("icloud_sync_info"), systemImage: "icloud")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                } else if settings.cloud != .none && settings.cloud != .webdav {
-                    Label(L10n.t("not_configured_state"), systemImage: "info.circle")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+            }
+            .sheet(isPresented: $showRelayTransfer) {
+                RelayTransferSheet()
+            }
+            .alert(L10n.t("relay_sensitive_code_title"), isPresented: Binding(
+                get: { relayCodePrompt != nil },
+                set: { if !$0 { relayCodePrompt = nil } }
+            )) {
+                TextField(L10n.t("relay_code_placeholder"), text: $relayCodeInput)
+                Button(L10n.t("ok_button")) {
+                    let code = relayCodeInput
+                    let prompt = relayCodePrompt
+                    relayCodeInput = ""
+                    relayCodePrompt = nil
+                    guard let prompt else { return }
+                    Task {
+                        if prompt == .unbind {
+                            await ctx.relayUnbindVault(code: code)
+                        } else {
+                            await ctx.relayDeregisterAccount(code: code)
+                        }
+                    }
                 }
+                Button(L10n.t("cancel_button"), role: .cancel) {
+                    relayCodePrompt = nil
+                }
+            } message: {
+                Text(relayCodePrompt == .deregister
+                     ? L10n.t("relay_deregister_message") : L10n.t("relay_sensitive_code_sent"))
             }
             .frame(width: cloudPaneWidth, alignment: .leading)
         }
@@ -897,24 +857,121 @@ struct ConfigureCloudSheetContents: View {
             .frame(width: 240)
     }
 
+    /// UPasswords 云同步账户:未登录=邮箱+验证码登录(登录即为当前库启用);
+    /// 已登录=账户邮箱 + 登出/设备管理/解绑/注销。登录需库处于解锁态(要上传本地信封)。
+    @ViewBuilder
+    private var relayAccountControl: some View {
+        if let email = ctx.relayAccountEmail, ctx.relayBound {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Text(email)
+                    Button(L10n.t("relay_logout_button")) {
+                        Log.info("ui", "relay logout from preferences")
+                        Task { await ctx.relayLogout() }
+                    }
+                }
+                Text(L10n.t("relay_enabled_label"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    Button(L10n.t("relay_devices_button")) {
+                        Log.info("ui", "relay devices toggle from preferences")
+                        Task {
+                            relayDevices = await ctx.relaySessions()
+                            showRelayDevices.toggle()
+                        }
+                    }
+                    Button(L10n.t("relay_transfer_button")) {
+                        Log.info("ui", "relay transfer sheet from preferences")
+                        showRelayTransfer = true
+                    }
+                    Button(L10n.t("relay_unbind_button")) {
+                        Log.info("ui", "relay unbind prompt from preferences")
+                        Task {
+                            await ctx.relayRequestSensitiveCode()
+                            relayCodeInput = ""
+                            relayCodePrompt = .unbind
+                        }
+                    }
+                    Button(L10n.t("relay_deregister_button"), role: .destructive) {
+                        Log.info("ui", "relay deregister prompt from preferences")
+                        Task {
+                            await ctx.relayRequestSensitiveCode()
+                            relayCodeInput = ""
+                            relayCodePrompt = .deregister
+                        }
+                    }
+                }
+                if showRelayDevices {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(relayDevices) { device in
+                            HStack(spacing: 8) {
+                                Image(systemName: "desktopcomputer.and.iphone")
+                                Text(device.deviceName.isEmpty
+                                     ? String(device.id.prefix(8)) + "…" : device.deviceName)
+                                Button(L10n.t("relay_revoke_button")) {
+                                    Log.info("ui", "relay session revoke from preferences")
+                                    Task {
+                                        await ctx.relayRevokeSession(id: device.id)
+                                        relayDevices = await ctx.relaySessions()
+                                    }
+                                }
+                                .controlSize(.small)
+                            }
+                            .font(.caption)
+                        }
+                    }
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    TextField(L10n.t("relay_email_placeholder"), text: $relayEmail)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 180)
+                    Button(L10n.t("relay_send_code_button")) {
+                        let email = relayEmail.trimmingCharacters(in: .whitespaces)
+                        guard email.contains("@"), email.contains(".") else {
+                            AppToast.shared.show(L10n.t("invalid_email_error"))
+                            return
+                        }
+                        relayBusy = true
+                        Log.info("ui", "relay code request from preferences")
+                        Task {
+                            await ctx.relaySendCode(email: email)
+                            relayBusy = false
+                        }
+                    }
+                    if relayBusy { ProgressView().controlSize(.small) }
+                }
+                HStack(spacing: 8) {
+                    SecureField(L10n.t("relay_code_placeholder"), text: $relayCode)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 120)
+                    Button(L10n.t("relay_login_button")) {
+                        relayBusy = true
+                        Log.info("ui", "relay login from preferences")
+                        let email = relayEmail.trimmingCharacters(in: .whitespaces)
+                        let code = relayCode
+                        relayCode = ""
+                        Task {
+                            await ctx.relayLoginAndEnable(email: email, code: code)
+                            relayBusy = false
+                        }
+                    }
+                    .disabled(relayEmail.isEmpty || relayCode.count < 6 || ctx.phase != .unlocked)
+                }
+            }
+        }
+    }
+
     private func field(_ placeholder: String, value: Binding<Int>) -> some View {
         TextField(placeholder, value: value, format: .number)
             .textFieldStyle(.roundedBorder)
             .frame(width: 240)
     }
 
-    private func test() async {
-        guard let driver = ctx.makeCloudDriver() else { return }
-        testing = true
-        do {
-            try await driver.testConnection()
-            testResult = L10n.t("success_title")
-            ctx.markSetupTaskDone(.cloudSync)
-        } catch {
-            testResult = error.localizedDescription
-        }
-        testing = false
-    }
 }
 
 // MARK: - Shortcuts
@@ -973,5 +1030,72 @@ private struct WindowTitleSync: NSViewRepresentable {
             guard let title else { return }
             window?.title = title
         }
+    }
+}
+
+/// 换绑邮箱表单:当前主密码(本地验证) + 新邮箱(收敏感码) + 验证码 →
+/// 注册表记录迁移到新邮箱名下,云端同步结构随之换主。
+private struct RelayTransferSheet: View {
+    @EnvironmentObject var ctx: AppContext
+    @Environment(\.dismiss) var dismiss
+
+    @State private var masterPassword = ""
+    @State private var newEmail = ""
+    @State private var code = ""
+    @State private var busy = false
+    @State private var sending = false
+
+    var body: some View {
+        SheetShell(
+            title: L10n.t("relay_transfer_title"),
+            okTitle: L10n.t("relay_transfer_button"),
+            okDisabled: masterPassword.isEmpty || !newEmail.contains("@") || code.count < 6 || busy,
+            onCancel: { dismiss() },
+            onOk: {
+                busy = true
+                let pw = masterPassword
+                masterPassword = ""
+                let email = newEmail.trimmingCharacters(in: .whitespaces)
+                let entered = code
+                code = ""
+                Task {
+                    if await ctx.relayTransferVault(masterPassword: pw, newEmail: email, code: entered) {
+                        dismiss()
+                    }
+                    busy = false
+                }
+            },
+            content: {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(L10n.t("relay_transfer_hint"))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    LabeledRow(label: L10n.t("relay_transfer_master_password")) {
+                        SecureField("", text: $masterPassword)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    LabeledRow(label: L10n.t("relay_transfer_new_email")) {
+                        TextField("", text: $newEmail)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    HStack(spacing: 8) {
+                        SecureField(L10n.t("relay_code_placeholder"), text: $code)
+                            .textFieldStyle(.roundedBorder)
+                        Button(L10n.t("relay_send_code_button")) {
+                            Log.info("ui", "relay transfer code request")
+                            sending = true
+                            let email = newEmail.trimmingCharacters(in: .whitespaces)
+                            Task {
+                                await ctx.relaySendSensitiveCode(to: email)
+                                sending = false
+                            }
+                        }
+                        .disabled(!newEmail.contains("@") || sending)
+                        if sending { ProgressView().controlSize(.small) }
+                    }
+                }
+                .frame(maxWidth: 380)
+            }
+        )
     }
 }

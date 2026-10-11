@@ -36,6 +36,11 @@ struct HomeView: View {
         }
         .background(Brand.bg)
         .navigationTitle(L10n.t("ios_tab_passwords"))
+        // 下拉刷新 = 手动同步一轮(含注册表版本检查:他机改密即刻强制锁定换新密码)
+        .refreshable {
+            Log.info("ui", "ios pull-to-refresh sync from passwords tab")
+            await vault.sync()
+        }
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always),
                     prompt: L10n.t("ios_search_prompt"))
         .onChange(of: searchText) { newText in

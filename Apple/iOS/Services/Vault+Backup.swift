@@ -23,7 +23,7 @@ extension Vault {
     func backupNow() {
         persist()
         do {
-            try store.backup(name: databaseName, password: password)
+            try store.backup(name: databaseName)
             Log.info("backup", "ios manual backup of \"\(databaseName)\" ok")
             showToast(L10n.t("database_saved_message") + " " + L10n.t("backup_command"))
         } catch {
@@ -45,7 +45,7 @@ extension Vault {
             return
         }
         do {
-            try store.backup(name: databaseName, password: password)
+            try store.backup(name: databaseName)
             d.set(Date().timeIntervalSince1970, forKey: Self.backupLastKeyPrefix + databaseName)
             Log.info("backup", "ios auto backup of \"\(databaseName)\" ok (interval \(days)d)")
         } catch {

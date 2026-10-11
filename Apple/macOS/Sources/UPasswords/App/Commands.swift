@@ -81,7 +81,6 @@ struct UPasswordsCommands: Commands {
             Button(L10n.t("check_passwords_command")) { perform { AppContext.shared.activeSheet = .compromised } }
             Divider()
             Button(L10n.t("change_password_command")) { perform { AppContext.shared.activeSheet = .changePassword } }
-            Button(L10n.t("configure_cloud_command")) { perform { AppContext.shared.activeSheet = .configureCloud } }
             Divider()
             Button(L10n.t("restore_templates_command")) { perform { AppContext.shared.activeSheet = .restoreTemplates } }
             Divider()

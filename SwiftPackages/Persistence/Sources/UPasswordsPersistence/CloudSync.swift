@@ -112,8 +112,10 @@ public struct PendingSyncConflict {
 }
 
 /// 同步冲突判定:以上次成功同步记录的基线哈希为参照——本地明文 XML 与
-/// 远端容器字节**双方都变化**即判定冲突,交由用户决定覆盖方向;
+/// 远端明文 XML **双方内容都变化**即判定冲突,交由用户决定覆盖方向;
 /// 单侧变化或首次同步(尚无基线)沿用条目级合并。
+/// 两侧均在明文内容域比较而非密文字节:容器每次落盘都换随机 nonce,
+/// 同内容重传密文哈希必变,会把"对端无意义重传"误判成远端有修改。
 /// 哈希仅做变更检测,不含任何敏感数据。
 public enum SyncConflict {
     public enum Verdict: Equatable {
@@ -123,23 +125,23 @@ public enum SyncConflict {
 
     /// 上次成功同步的基线哈希;nil = 首次同步(或从未成功同步过),无从比较。
     public struct Baselines: Equatable {
-    public init(localXMLHash: String? = nil, remoteDataHash: String? = nil) {
+    public init(localXMLHash: String? = nil, remoteXMLHash: String? = nil) {
         self.localXMLHash = localXMLHash
-        self.remoteDataHash = remoteDataHash
+        self.remoteXMLHash = remoteXMLHash
     }
 
         public var localXMLHash: String?
-        public var remoteDataHash: String?
+        public var remoteXMLHash: String?
     }
 
     /// - Parameters:
     ///   - localXMLHash: 当前本地明文 XML 的 SHA-256。
-    ///   - remoteDataHash: 当前远端容器字节的 SHA-256;nil = 云端还没有文件。
-    public static func evaluate(localXMLHash: String, remoteDataHash: String?, baselines: Baselines) -> Verdict {
-        guard let remoteDataHash else { return .merge }
-        guard let baseLocal = baselines.localXMLHash, let baseRemote = baselines.remoteDataHash else { return .merge }
+    ///   - remoteXMLHash: 当前远端明文 XML 内容的 SHA-256;nil = 云端还没有文件。
+    public static func evaluate(localXMLHash: String, remoteXMLHash: String?, baselines: Baselines) -> Verdict {
+        guard let remoteXMLHash else { return .merge }
+        guard let baseLocal = baselines.localXMLHash, let baseRemote = baselines.remoteXMLHash else { return .merge }
         let localChanged = localXMLHash != baseLocal
-        let remoteChanged = remoteDataHash != baseRemote
+        let remoteChanged = remoteXMLHash != baseRemote
         return localChanged && remoteChanged ? .conflict : .merge
     }
 
@@ -150,8 +152,8 @@ public enum SyncConflict {
 
 /// 云同步驱动的统一接口:sync() 以相同的 test/download/upload 流程驱动各实现;
 /// listDatabases 供云端恢复流程枚举远端数据库。
-/// v2 信封(<名>.upwkey)经 downloadKey/uploadKey 同步;v1 远端无信封,
-/// 默认实现返回 nil/空操作,由调用方回落旧路径。
+/// v2 信封(<名>.upwkey)经 downloadKey/uploadKey 同步;
+/// 默认实现返回 nil/空操作(不支持信封的驱动由调用方跳过信封环节)。
 public protocol CloudDriver {
     func testConnection() async throws
     func download() async throws -> Data?
@@ -165,6 +167,13 @@ public protocol CloudDriver {
 public extension CloudDriver {
     func downloadKey() async throws -> Data? { nil }
     func uploadKey(_ data: Data) async throws {}
+    /// 上传替换前把远端当前件改名为 `<名>.upw.old` 留档(只保留一代),
+    /// 作为上传失败恢复点(见 Cloud/DESIGN.md §4.3)。
+    /// 默认无操作:未实现改名语义的驱动退化为直接覆盖。
+    func backupRemoteForUpload() async throws {}
+    /// 本地库改名后的远端文件改名(.upw/.upwkey/.upw.old 三件套);
+    /// 缺失的文件跳过。默认无操作(旧文件残留由下轮同步自愈重建)。
+    func renameRemoteFiles(to newName: String) async throws {}
 }
 
 /// WebDAV driver: PUT/GET of the encrypted database container, with an
@@ -222,9 +231,71 @@ public final class WebDavDriver {
         let req = request(method: "GET", url: url)
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw SyncError.badUrl }
-        if http.statusCode == 404 { return nil }
+        if http.statusCode == 404 {
+            // 上传失败恢复路径:当前件缺失时尝试备份件(.upw.old)
+            guard let backup = settings.baseURL?
+                .appendingPathComponent("\(databaseName).upw.old") else { return nil }
+            let oldReq = request(method: "GET", url: backup)
+            let (oldData, oldResp) = try await URLSession.shared.data(for: oldReq)
+            guard let oldHttp = oldResp as? HTTPURLResponse,
+                  (200..<300).contains(oldHttp.statusCode) else { return nil }
+            Log.info("sync", "webdav: current file missing — recovered from .upw.old (\(oldData.count)B)")
+            return oldData
+        }
         guard (200..<300).contains(http.statusCode) else { throw SyncError.http(http.statusCode) }
         return data
+    }
+
+    /// 上传备份:远端当前件 MOVE 改名为 .upw.old;服务器不支持 MOVE 时
+    /// 降级为"下载旧件→上传为 .old"的拷贝语义;当前件不存在则跳过(恢复路径)。
+    public func backupRemoteForUpload() async throws {
+        guard let base = settings.baseURL else { throw SyncError.badUrl }
+        let src = base.appendingPathComponent("\(databaseName).upw")
+        let dest = base.appendingPathComponent("\(databaseName).upw.old")
+        var req = request(method: "MOVE", url: src)
+        req.setValue(dest.absoluteString, forHTTPHeaderField: "Destination")
+        req.setValue("T", forHTTPHeaderField: "Overwrite")
+        let (_, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse else { throw SyncError.badUrl }
+        if http.statusCode == 404 { return }
+        guard (200..<300).contains(http.statusCode) else {
+            guard http.statusCode == 405 || http.statusCode == 501 else {
+                throw SyncError.http(http.statusCode)
+            }
+            // MOVE 不支持:拷贝语义兜底(读当前件 → 写 .old)
+            guard let current = try await download(), DatabaseCipher.isV2Container(current) else { return }
+            var put = request(method: "PUT", url: dest)
+            put.httpBody = current
+            put.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+            let (_, putResp) = try await URLSession.shared.data(for: put)
+            guard let putHttp = putResp as? HTTPURLResponse,
+                  (200..<300).contains(putHttp.statusCode) else {
+                throw SyncError.http((putResp as? HTTPURLResponse)?.statusCode ?? 0)
+            }
+            Log.debug("sync", "webdav backup via copy fallback (MOVE unsupported)")
+            return
+        }
+        Log.debug("sync", "webdav backup: current renamed to .upw.old")
+    }
+
+    /// 库改名后的远端三件套改名(.upw/.upwkey/.upw.old);缺失件跳过。
+    public func renameRemoteFiles(to newName: String) async throws {
+        guard let base = settings.baseURL else { throw SyncError.badUrl }
+        for ext in ["upw", "upwkey", "upw.old"] {
+            let src = base.appendingPathComponent("\(databaseName).\(ext)")
+            let dest = base.appendingPathComponent("\(newName).\(ext)")
+            var req = request(method: "MOVE", url: src)
+            req.setValue(dest.absoluteString, forHTTPHeaderField: "Destination")
+            req.setValue("F", forHTTPHeaderField: "Overwrite")
+            let (_, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse else { throw SyncError.badUrl }
+            if http.statusCode == 404 { continue }
+            guard (200..<300).contains(http.statusCode) else {
+                Log.warn("sync", "webdav rename .\(ext) failed: HTTP \(http.statusCode) — next sync will rebuild")
+                continue
+            }
+        }
+        Log.info("sync", "webdav remote files renamed \"\(databaseName)\" → \"\(newName)\"")
     }
 
     public func upload(_ data: Data) async throws {
@@ -371,46 +442,118 @@ public final class ICloudDriver: CloudDriver {
     }
 
     public func download() async throws -> Data? {
-        let fm = FileManager.default
-        // 文件不在但占位符在(dataless):先触发物化
-        if !fm.fileExists(atPath: remoteURL.path) {
-            let placeholder = folderURL.appendingPathComponent(".\(remoteURL.lastPathComponent).icloud")
-            if fm.fileExists(atPath: placeholder.path) {
-                Log.info("sync", "icloud \"\(remoteURL.lastPathComponent)\" is dataless — requesting download")
-                try? fm.startDownloadingUbiquitousItem(at: placeholder)
-            } else {
-                return nil
-            }
-        }
-        try await ensureMaterialized(remoteURL)
-        let data = try coordinatedRead(remoteURL)
-        // 防御:读到的不是 UPWDB 容器(占位符残体/下载半截),按未就绪处理而非交给上层误判为「解不开」
-        guard DatabaseCipher.checkFileMagic(data) else {
-            Log.warn("sync", "icloud read \"\(remoteURL.lastPathComponent)\" got \(data.count)B without UPWDB magic — treating as not-ready")
+        if let data = try await readContainer(remoteURL) { return data }
+        // 上传失败恢复路径:当前件缺失时尝试备份件(.upw.old)
+        guard let backup = try await readContainer(remoteBackupURL) else { return nil }
+        Log.info("sync", "icloud: current file missing — recovered from .upw.old (\(backup.count)B)")
+        return backup
+    }
+
+    /// 远端备份件:`<数据库名>.upw.old`(上代留档,只保留一代)。
+    private var remoteBackupURL: URL {
+        folderURL.appendingPathComponent("\(databaseName).upw.old")
+    }
+
+    /// 读取并校验一个 v2 容器文件(处理占位符物化);文件与占位符都不存在返回 nil。
+    private func readContainer(_ url: URL) async throws -> Data? {
+        guard let data = try await readRemoteFile(url) else { return nil }
+        // 防御:读到的不是 v2 容器(占位符残体/下载半截),
+        // 按未就绪处理而非交给上层误判为「解不开」
+        guard DatabaseCipher.isV2Container(data) else {
+            Log.warn("sync", "icloud read \"\(url.lastPathComponent)\" got \(data.count)B without UPWDB magic — treating as not-ready")
             throw SyncError.notDownloaded
         }
-        Log.debug("sync", "icloud read \(data.count)B from \"\(remoteURL.lastPathComponent)\"")
+        Log.debug("sync", "icloud read \(data.count)B from \"\(url.lastPathComponent)\"")
         return data
+    }
+
+    /// 读取 iCloud 上的一个文件:dataless 占位符先触发下载并等待物化;
+    /// 文件与占位符都不存在返回 nil(远端确无此文件)。
+    private func readRemoteFile(_ url: URL) async throws -> Data? {
+        let fm = FileManager.default
+        var placeholder: URL? = nil
+        if !fm.fileExists(atPath: url.path) {
+            let candidate = folderURL.appendingPathComponent(".\(url.lastPathComponent).icloud")
+            guard fm.fileExists(atPath: candidate.path) else { return nil }
+            placeholder = candidate
+            Log.info("sync", "icloud \"\(url.lastPathComponent)\" is dataless — requesting download")
+            try? fm.startDownloadingUbiquitousItem(at: candidate)
+        }
+        try await ensureMaterialized(url, placeholder: placeholder)
+        return try coordinatedRead(url)
+    }
+
+    /// 上传备份:iCloud 无原子改名保障(占位符/未物化),用拷贝语义:
+    /// 读当前件 → 写 .old(与下一句 upload 新内容构成两步替换)。
+    public func backupRemoteForUpload() async throws {
+        guard let current = try await readContainer(remoteURL) else { return }
+        try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        try coordinatedWrite(current, to: remoteBackupURL)
+        Log.debug("sync", "icloud backup: current copied to .upw.old (\(current.count)B)")
+    }
+
+    /// 库改名后的远端三件套改名;仅移动已物化的实体文件
+    /// (占位符不动,残留旧名文件由下轮同步自愈重建)。
+    public func renameRemoteFiles(to newName: String) async throws {
+        let fm = FileManager.default
+        try? fm.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        for ext in ["upw", "upwkey", "upw.old"] {
+            let src = folderURL.appendingPathComponent("\(databaseName).\(ext)")
+            let dest = folderURL.appendingPathComponent("\(newName).\(ext)")
+            guard fm.fileExists(atPath: src.path) else { continue }
+            if fm.fileExists(atPath: dest.path) {
+                try? fm.removeItem(at: dest)
+            }
+            do {
+                try coordinatedMove(from: src, to: dest)
+            } catch {
+                Log.warn("sync", "icloud rename .\(ext) failed: \(error) — next sync will rebuild")
+            }
+        }
+        Log.info("sync", "icloud remote files renamed \"\(databaseName)\" → \"\(newName)\"")
+    }
+
+    /// 经文件协调的移动(与 CloudDocs 守护进程互不竞争)。
+    private func coordinatedMove(from src: URL, to dest: URL) throws {
+        var coordError: NSError?
+        var moveError: Error?
+        NSFileCoordinator().coordinate(readingItemAt: src, writingItemAt: dest,
+                                       error: &coordError) { readURL, writeURL in
+            do {
+                try FileManager.default.moveItem(at: readURL, to: writeURL)
+            } catch {
+                moveError = error
+            }
+        }
+        if let moveError { throw moveError }
+        if let coordError { throw coordError }
     }
 
     /// 等待 iCloud 文件物化完成(占位符 → 实体)。轮询 ubiquitous 下载状态,
     /// 超时抛错让上层走失败路径(而不是读到占位符残体误判密码)。
-    private func ensureMaterialized(_ url: URL, timeout: TimeInterval = 30) async throws {
+    /// 等待 iCloud 文件物化完成(占位符 → 实体)。关键点:dataless 项的**真实路径
+    /// 在下载完成前并不存在**,资源值查询必须落在占位符 URL 上;物化完成的标志
+    /// 是真实路径出现。本地路径(测试的假云端)与已下载文件直接放行——
+    /// 陈旧性由上层复检护栏负责。
+    private func ensureMaterialized(_ url: URL, placeholder: URL?, timeout: TimeInterval = 120) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         var logged = false
+        var ticks = 0
         while Date() < deadline {
-            let values = try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey, .ubiquitousItemDownloadingErrorKey])
-            if let err = values?.ubiquitousItemDownloadingError {
+            if FileManager.default.fileExists(atPath: url.path) { return }
+            guard let placeholder, url.path.contains("/Mobile Documents/") else { return }
+            ticks += 1
+            if let values = try? placeholder.resourceValues(forKeys: [.ubiquitousItemDownloadingErrorKey]),
+               let err = values.ubiquitousItemDownloadingError {
                 throw SyncError.downloadFailed(err.localizedDescription)
             }
-            // 只有 ubiquity 路径且明确「未下载」才等待;本地路径(测试的假云端)
-            // 与已下载(.downloaded/.current)都直接放行——陈旧性由上层复检护栏负责
-            let isUbiquitous = url.path.contains("/Mobile Documents/")
-            let notDownloaded = values?.ubiquitousItemDownloadingStatus == .some(.notDownloaded)
-            guard isUbiquitous, notDownloaded else { return }
             if !logged {
                 Log.info("sync", "icloud waiting for \"\(url.lastPathComponent)\" to materialize…")
                 logged = true
+            }
+            // 长等待时每 10s 补一次下载触发(首拉慢网/请求丢失的兜底)
+            if ticks % 20 == 0 {
+                try? FileManager.default.startDownloadingUbiquitousItem(at: placeholder)
             }
             try await Task.sleep(nanoseconds: 500_000_000)
         }
@@ -428,8 +571,16 @@ public final class ICloudDriver: CloudDriver {
     }
 
     public func downloadKey() async throws -> Data? {
-        guard FileManager.default.fileExists(atPath: remoteKeyURL.path) else { return nil }
-        return try coordinatedRead(remoteKeyURL)
+        // 与本体同等待遇:信封是 dataless 占位符时先触发物化并等待,
+        // 否则新装设备上永远拿到 nil(误判为「远端无信封」)
+        guard let data = try await readRemoteFile(remoteKeyURL) else { return nil }
+        // 防御:读到的不是 UPWKEY 信封(占位符残体/下载半截),按未就绪处理
+        guard DatabaseCipher.envelopeChangedAt(data) != nil else {
+            Log.warn("sync", "icloud read envelope \"\(remoteKeyURL.lastPathComponent)\" got \(data.count)B without UPWKEY magic — treating as not-ready")
+            throw SyncError.notDownloaded
+        }
+        Log.debug("sync", "icloud read envelope \(data.count)B from \"\(remoteKeyURL.lastPathComponent)\"")
+        return data
     }
 
     public func uploadKey(_ data: Data) async throws {

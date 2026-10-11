@@ -22,6 +22,7 @@ struct MainToolbarView: View {
     private static let groups: [[ToolbarButtonSpec]] = [
         [.add, .generator],
         [.sync, .sorting],
+        [.importData, .exportData],
         [.delete, .lock],
         [.aboveAll, .preferences],
     ]
@@ -144,7 +145,7 @@ struct MainToolbarView: View {
     }
 }
 
-// MARK: - 按钮描述(8 项,纯图标无文字标签)
+// MARK: - 按钮描述(10 项,纯图标无文字标签)
 
 struct ToolbarButtonSpec {
     let labelKey: String
@@ -180,6 +181,22 @@ struct ToolbarButtonSpec {
         symbol: { "arrow.up.arrow.down.square" },
         isActive: { _ in false }, isEnabled: { _ in true },
         action: { $0.activeSheet = .sorting })
+    static let importData = ToolbarButtonSpec(
+        labelKey: "import_command", helpKey: "import_command",
+        symbol: { "square.and.arrow.down.on.square" },
+        isActive: { _ in false }, isEnabled: { $0.phase == .unlocked },
+        action: {
+            Log.info("ui", "toolbar import button")
+            $0.activeSheet = .importData
+        })
+    static let exportData = ToolbarButtonSpec(
+        labelKey: "export_command", helpKey: "export_command",
+        symbol: { "square.and.arrow.up.on.square" },
+        isActive: { _ in false }, isEnabled: { $0.phase == .unlocked },
+        action: {
+            Log.info("ui", "toolbar export button")
+            $0.activeSheet = .exportAs
+        })
     static let aboveAll = ToolbarButtonSpec(
         labelKey: "above_all_button", helpKey: "above_all_button",
         symbol: { WindowFloatState.shared.floating ? "pin.fill" : "pin" },

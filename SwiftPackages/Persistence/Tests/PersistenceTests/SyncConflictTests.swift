@@ -7,13 +7,13 @@ import UPasswordsCore
 /// (无基线)、云端无文件均沿用条目级合并。
 final class SyncConflictTests: XCTestCase {
 
-    private let baseline = SyncConflict.Baselines(localXMLHash: "base-local", remoteDataHash: "base-remote")
+    private let baseline = SyncConflict.Baselines(localXMLHash: "base-local", remoteXMLHash: "base-remote")
 
     /// 双方都有修改 → 冲突,交由用户决定覆盖方向。
     func testBothChangedSinceBaselineIsConflict() {
         let verdict = SyncConflict.evaluate(
             localXMLHash: "new-local",
-            remoteDataHash: "new-remote",
+            remoteXMLHash: "new-remote",
             baselines: baseline)
         XCTAssertEqual(verdict, .conflict)
     }
@@ -22,7 +22,7 @@ final class SyncConflictTests: XCTestCase {
     func testOnlyLocalChangedMerges() {
         let verdict = SyncConflict.evaluate(
             localXMLHash: "new-local",
-            remoteDataHash: "base-remote",
+            remoteXMLHash: "base-remote",
             baselines: baseline)
         XCTAssertEqual(verdict, .merge)
     }
@@ -31,7 +31,7 @@ final class SyncConflictTests: XCTestCase {
     func testOnlyRemoteChangedMerges() {
         let verdict = SyncConflict.evaluate(
             localXMLHash: "base-local",
-            remoteDataHash: "new-remote",
+            remoteXMLHash: "new-remote",
             baselines: baseline)
         XCTAssertEqual(verdict, .merge)
     }
@@ -40,7 +40,7 @@ final class SyncConflictTests: XCTestCase {
     func testNeitherChangedMerges() {
         let verdict = SyncConflict.evaluate(
             localXMLHash: "base-local",
-            remoteDataHash: "base-remote",
+            remoteXMLHash: "base-remote",
             baselines: baseline)
         XCTAssertEqual(verdict, .merge)
     }
@@ -49,8 +49,8 @@ final class SyncConflictTests: XCTestCase {
     func testFirstSyncWithoutBaselinesMerges() {
         let verdict = SyncConflict.evaluate(
             localXMLHash: "new-local",
-            remoteDataHash: "new-remote",
-            baselines: .init(localXMLHash: nil, remoteDataHash: nil))
+            remoteXMLHash: "new-remote",
+            baselines: .init(localXMLHash: nil, remoteXMLHash: nil))
         XCTAssertEqual(verdict, .merge)
     }
 
@@ -58,7 +58,18 @@ final class SyncConflictTests: XCTestCase {
     func testMissingRemoteFileMerges() {
         let verdict = SyncConflict.evaluate(
             localXMLHash: "new-local",
-            remoteDataHash: nil,
+            remoteXMLHash: nil,
+            baselines: baseline)
+        XCTAssertEqual(verdict, .merge)
+    }
+
+    /// 回归:对端把**相同内容**重新加密上传(密文 nonce 变了,明文没变)
+    /// → 远端内容哈希仍等于基线,不算远端修改;即便本地此时也有真修改,
+    /// 也只是"仅本地修改"的合并,不得弹冲突(旧版密文域比较会误报)。
+    func testPeerReuploadWithSameContentIsNotRemoteChange() {
+        let verdict = SyncConflict.evaluate(
+            localXMLHash: "new-local",
+            remoteXMLHash: "base-remote",
             baselines: baseline)
         XCTAssertEqual(verdict, .merge)
     }

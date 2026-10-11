@@ -76,8 +76,6 @@ extension AppContext {
             switch result {
             case .success:
                 AppToast.shared.show(L10n.t("last_sync_completed_prompt"))
-            case .emptyClobber:
-                AppToast.shared.show(L10n.t("sync_remote_empty_clobber_hint"))
             case .wrongPassword:
                 AppToast.shared.show(L10n.t("sync_adopt_failed_hint"))
             }

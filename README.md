@@ -3,7 +3,8 @@
 **一款独立开发的密码管理器**（macOS 优先：SwiftUI + AppKit；领域核心为跨平台 Swift 包，
 macOS 14+ / iOS 17+）。
 
-核心能力：AES-256-GCM 加密数据库容器（PBKDF2-SHA256 ×310,000）、Touch ID 快速解锁、
+核心能力：v2 双密钥信封加密（主密码经 PBKDF2-SHA256 ×310,000 包裹永不变的库密钥，
+库密钥以 AES-256-GCM 加密数据库本体，改密只重写信封、零重写）、Touch ID 快速解锁、
 15 个内置模板、密码生成与强度评估、TOTP 一次性代码、WebDAV/iCloud Drive 云同步
 （条目级合并 + 冲突裁决）、自动备份、18 种第三方密码管理器数据导入、XML/CSV/TXT 导出、
 泄露密码检查（haveibeenpwned k-匿名）、菜单栏常驻、中英双语界面。
@@ -67,7 +68,7 @@ pnpm install && pnpm build
 |---|---|
 | 数据模型 | `SwiftPackages/Core/…/CoreModels.swift`（`Card / Field / CardLabel / Attachment / HistoryEntry` 等值类型） |
 | XML 解析/序列化 | `SwiftPackages/Core/…/DatabaseXML.swift`（逐属性往返 + 删除墓碑，支撑同步合并） |
-| 加密容器 | `SwiftPackages/Core/…/DatabaseCipher.swift` — `.upw` 容器：PBKDF2-SHA256 ×310,000 + AES-256-GCM |
+| 加密容器 | `SwiftPackages/Core/…/DatabaseCipher.swift` — v2 双密钥信封：`.upw` 本体（库密钥 AES-256-GCM）+ `.upwkey` 信封（主密码 PBKDF2-SHA256 ×310,000 包裹库密钥） |
 | 数据库/会话 | `SwiftPackages/Persistence/…/DatabaseStore.swift` + `Apple/macOS/…/App/AppContext.swift` |
 | 内置模板 | `SwiftPackages/Core/…/Templates.swift`（15 个，`@string/…` 经字符串表解析） |
 | 密码生成器 | `SwiftPackages/Core/…/PasswordGenerator.swift`（随机/便于记忆/字母数字/纯数字 4 型 + 历史） |
@@ -87,10 +88,14 @@ pnpm install && pnpm build
 
 ## 数据与安全
 
-- 数据库：`~/Library/Application Support/UPasswords/Databases/<名称>.upw`
-- 容器格式：`"UPWDB1\0\0"` magic + 版本 + 迭代次数 + 16B 盐 + AES-GCM 密封盒
+- 数据库：`~/Library/Application Support/UPasswords/Databases/<名称>.upw`，配套同名
+  `<名称>.upwkey` 信封（v2 双密钥，两者须成对存在，缺信封无法解锁）
+- 容器格式（v2 为唯一受支持格式）：本体 `"UPWDB2\0\0"` magic + 版本 + flags +
+  AES-GCM 密封盒（密钥 = 库密钥）；信封 `"UPWKEY1\0"` magic + PBKDF2 迭代次数 +
+  16B 盐 + 被包裹的库密钥 + 改密时间戳
 - 密码/Touch ID 副本存 Keychain（`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`）
-- 自动备份：`~/Library/Application Support/UPasswords/Backups/<名称>/`（加密备份）
+- 自动备份：`~/Library/Application Support/UPasswords/Backups/<名称>/`（加密备份，
+  每份含配套 `.upwkey` 信封，恢复时缺信封即拒绝）
 - XML 交换格式支持导入导出（可导入 SafeInCloud 导出的 XML）
 - 日志：`~/Library/Application Support/UPasswords/Logs/UPasswords.log`（超 1MB 自动轮转为
   `.old.log`）。DEBUG 构建记录 debug 级，release 默认 info 级；排查问题时可用
@@ -99,7 +104,9 @@ pnpm install && pnpm build
 
 ## 实现说明
 
-1. **加密**：PBKDF2-SHA256 ×310,000 派生密钥 + AES-256-GCM 认证加密（`.upw` 容器）。
+1. **加密**：v2 双密钥信封——随机库密钥（永不变）以 AES-256-GCM 加密数据库本体
+   （`.upw`）；主密码经 PBKDF2-SHA256 ×310,000 派生密钥包裹库密钥成信封
+   （`.upwkey`）。改主密码只重写信封，本体不动，云端传播零重写。
 2. **图标/纹理**：全部使用 SF Symbol 与程序化渐变自绘，不含第三方素材。
 3. **云同步**：WebDAV 与 iCloud Drive 可用（含测试连接/条目级合并/冲突裁决）。
    Google Drive/Dropbox/OneDrive 需要厂商 OAuth 应用凭据，界面保留但标注“未配置”。

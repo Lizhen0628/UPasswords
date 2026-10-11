@@ -2,19 +2,14 @@ import Foundation
 import CryptoKit
 import CommonCrypto
 
-/// Encrypted database container:
-/// PBKDF2-SHA256 × 310,000 + AES-256-GCM.
+/// Encrypted database vault: v2 envelope cipher (dual-key) only.
 ///
-/// Container layout (little-endian fixed fields + ciphertext):
-/// ```
-/// offset 0  : magic "UPWDB1\0\0"        (8 bytes)
-/// offset 8  : format version            (UInt32)
-/// offset 12 : PBKDF2 iterations          (UInt32)
-/// offset 16 : salt                       (16 bytes)
-/// offset 32 : AES-GCM sealed box         (nonce 12 + ct + tag 16)
-/// ```
+/// 主密码(可改)只加密一个 32 字节随机「库密钥」(vault key);库密钥(永不变)
+/// 加密数据库本体。改主密码只重写 ~100 字节的信封文件(<名>.upwkey),
+/// 本体(<名>.upw)不动——改密传播零重写、零竞态窗口,其他端输一次新密码
+/// 解开信封即完成接管。
 public enum DatabaseCipher {
-    public static let magic = Data("UPWDB1\0\0".utf8)
+    /// 信封格式版本号
     public static let version: UInt32 = 1
     public static let saltLength = 16
     public static let iterations: UInt32 = 310_000
@@ -26,42 +21,6 @@ public enum DatabaseCipher {
     }
 
     // MARK: - DatabaseCipher class methods
-
-    public static func encryptedData(_ plaintext: Data, password: String) throws -> Data {
-        let salt = Data((0..<saltLength).map { _ in UInt8.random(in: 0...255) })
-        let key = deriveKey(password: password, salt: salt, iterations: iterations)
-        let sealed = try AES.GCM.seal(plaintext, using: key)
-        guard let combined = sealed.combined else {
-            throw CipherError(message: "AES-GCM combined representation unavailable")
-        }
-        var out = magic
-        out.append(withUnsafeBytes(of: version.littleEndian) { Data($0) })
-        out.append(withUnsafeBytes(of: iterations.littleEndian) { Data($0) })
-        out.append(salt)
-        out.append(combined)
-        return out
-    }
-
-    public static func decryptedData(_ data: Data, password: String) throws -> Data {
-        guard checkFileMagic(data) else {
-            throw CipherError(message: L10n.t("wrong_database_format_error"))
-        }
-        let iters = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 12, as: UInt32.self) }
-        let salt = data.subdata(in: 16..<(16 + saltLength))
-        let boxData = data.subdata(in: (16 + saltLength)..<data.count)
-        let key = deriveKey(password: password, salt: salt, iterations: iters)
-        do {
-            let box = try AES.GCM.SealedBox(combined: boxData)
-            return try AES.GCM.open(box, using: key)
-        } catch {
-            throw CipherError(message: L10n.t("wrong_password_error"))
-        }
-    }
-
-    public static func checkFileMagic(_ data: Data) -> Bool {
-        guard data.count >= 16 + saltLength else { return false }
-        return data.prefix(magic.count) == magic
-    }
 
     public static func deriveKey(password: String, salt: Data, iterations: UInt32) -> SymmetricKey {
         var derived = Data(repeating: 0, count: 32)
@@ -84,12 +43,7 @@ public enum DatabaseCipher {
     }
 }
 
-// MARK: - v2 信封加密(双密钥)
-//
-// 主密码(可改)只加密一个 32 字节随机「库密钥」(vault key);库密钥(永不变)
-// 加密数据库本体。改主密码只重写 ~100 字节的信封文件(<名>.upwkey),
-// 本体(<名>.upw)不动——改密传播零重写、零竞态窗口,其他端输一次新密码
-// 解开信封即完成接管。
+// MARK: - 容器布局
 //
 // 本体 v2 容器布局:
 // ```
@@ -114,7 +68,7 @@ extension DatabaseCipher {
     /// v2 头固定 16 字节(magic+version+flags),其后即密封盒
     private static let v2HeaderLength = 16
 
-    /// 生成随机 256 位库密钥(每库一个,创建/v1 迁移时生成,永不变)。
+    /// 生成随机 256 位库密钥(每库一个,创建时生成,永不变)。
     public static func generateVaultKey() -> SymmetricKey { SymmetricKey(size: .bits256) }
 
     public static func isV2Container(_ data: Data) -> Bool {

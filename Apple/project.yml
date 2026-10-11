@@ -34,9 +34,6 @@ targets:
         product: UPasswordsPersistence
       - package: Networking
         product: UPasswordsNetworking
-      - target: SafariWebExtension
-        embed: true
-        codeSign: false
     info:
       path: macOS/Info.plist
       properties:
@@ -53,6 +50,33 @@ targets:
         PRODUCT_NAME: UPasswords
         ENABLE_PREVIEWS: "YES"
         CODE_SIGN_ENTITLEMENTS: macOS/UPasswords.entitlements
+        DEVELOPMENT_TEAM: 2CV6VKVD26
+        CODE_SIGN_STYLE: Automatic
+
+  # Safari 扩展独立容器 App(不依赖桌面完整版):数据通路全在扩展 JS 内
+  # 直连 relay API,本 App 仅承载 appex 供 Safari 注册。
+  UPasswordsSafari:
+    type: application
+    platform: macOS
+    sources:
+      - path: SafariApp
+    dependencies:
+      - package: Core
+        product: UPasswordsCore
+      - target: SafariWebExtension
+        embed: true
+    info:
+      path: SafariApp/Info.plist
+      properties:
+        CFBundleDisplayName: UPasswords for Safari
+        LSUIElement: true
+        LSMinimumSystemVersion: "14.0"
+        NSSupportsAutomaticTermination: false
+        NSSupportsSuddenTermination: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.upasswords.UPasswords.Safari
+        PRODUCT_NAME: UPasswordsSafari
         DEVELOPMENT_TEAM: 2CV6VKVD26
         CODE_SIGN_STYLE: Automatic
 
@@ -85,7 +109,7 @@ targets:
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SafariWebExtensionHandler
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.upasswords.UPasswords.SafariWebExtension
+        PRODUCT_BUNDLE_IDENTIFIER: com.upasswords.UPasswords.Safari.Extension
         PRODUCT_NAME: UPasswordsSafariWebExtension
         SKIP_INSTALL: "YES"
         CODE_SIGN_ENTITLEMENTS: SafariWebExtension/SafariWebExtension.entitlements
@@ -200,6 +224,10 @@ schemes:
     build:
       targets:
         UPasswords-macOS: all
+  UPasswordsSafari:
+    build:
+      targets:
+        UPasswordsSafari: all
   UPasswords-iOS:
     build:
       targets:

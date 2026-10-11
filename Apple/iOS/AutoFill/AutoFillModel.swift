@@ -1,5 +1,6 @@
 import Foundation
 import AuthenticationServices
+import CryptoKit
 
 import UPasswordsCore
 import UPasswordsPersistence
@@ -35,10 +36,10 @@ final class AutoFillModel: ObservableObject {
     private var passkeyParams: ASPasskeyCredentialRequestParameters? = nil
     /// 指定请求(断言精确流 / 注册流)。
     private var passkeyRequest: ASPasskeyCredentialRequest? = nil
-    /// 解锁后的库与凭据(通行密钥写回 signCount / 注册入库用)。
+    /// 解锁后的库与库密钥(通行密钥写回 signCount / 注册入库用)。
     private var vaultDB: PasswordDatabase? = nil
     private var vaultName: String? = nil
-    private var vaultPassword: String? = nil
+    private var vaultKey: SymmetricKey? = nil
 
     var biometricAvailable: Bool { PasswordStore.biometricAvailable() }
 
@@ -113,14 +114,14 @@ final class AutoFillModel: ObservableObject {
     /// 手输主密码解锁(解密失败即拒绝)。
     func unlock() {
         guard let main = SharedVaultStore.mainDatabase() else { return }
-        guard let db = try? SharedVaultStore.store.load(name: main.name, password: masterInput) else {
+        guard let (db, vek) = try? SharedVaultStore.store.loadUnlocked(name: main.name, password: masterInput) else {
             Log.warn("app", "autofill: manual unlock rejected (wrong password)")
             showUnlockError = true
             masterInput = ""
             return
         }
         showUnlockError = false
-        vaultPassword = masterInput
+        vaultKey = vek
         accept(database: db)
         Log.info("app", "autofill: manual unlock ok cards=\(db.cards.count)")
     }
@@ -131,21 +132,21 @@ final class AutoFillModel: ObservableObject {
               let pw = PasswordStore.loadPassword(databaseName: main.name, biometric: true) else { return }
         biometricWorking = true
         defer { biometricWorking = false }
-        guard let db = try? SharedVaultStore.store.load(name: main.name, password: pw) else {
+        guard let (db, vek) = try? SharedVaultStore.store.loadUnlocked(name: main.name, password: pw) else {
             Log.warn("keychain", "autofill: biometric password rejected")
             return
         }
-        vaultPassword = pw
+        vaultKey = vek
         accept(database: db)
     }
 
     private func unlock(withStoredPassword name: String) {
         guard let pw = PasswordStore.loadPassword(databaseName: name),
-              let db = try? SharedVaultStore.store.load(name: name, password: pw) else {
+              let (db, vek) = try? SharedVaultStore.store.loadUnlocked(name: name, password: pw) else {
             stage = .locked
             return
         }
-        vaultPassword = pw
+        vaultKey = vek
         accept(database: db)
     }
 
@@ -170,9 +171,9 @@ final class AutoFillModel: ObservableObject {
     /// 解锁后的写库(signCount 写回 / 注册入库);失败仅记日志。
     @discardableResult
     private func saveDatabase(_ db: PasswordDatabase, reason: String) -> Bool {
-        guard let name = vaultName, let password = vaultPassword else { return false }
+        guard let name = vaultName, let vaultKey else { return false }
         do {
-            try SharedVaultStore.store.save(db, name: name, password: password)
+            try SharedVaultStore.store.save(db, name: name, vaultKey: vaultKey)
             vaultDB = db
             return true
         } catch {

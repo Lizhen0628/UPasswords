@@ -49,6 +49,10 @@ final class ScopedICloudFolderDriver: CloudDriver {
     func download() async throws -> Data? { try await base.download() }
     func upload(_ data: Data) async throws { try await base.upload(data) }
     func listDatabases() async throws -> [String] { try await base.listDatabases() }
+    func backupRemoteForUpload() async throws { try await base.backupRemoteForUpload() }
+    func renameRemoteFiles(to newName: String) async throws {
+        try await base.renameRemoteFiles(to: newName)
+    }
 }
 
 extension AppContext {

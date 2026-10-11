@@ -9,11 +9,23 @@ import UPasswordsPersistence
 struct SyncSettingsView: View {
     @EnvironmentObject var vault: Vault
 
-    @State private var showFolderPicker = false
     @State private var showOverwriteConfirm = false
     @State private var showAdoptPrompt = false
     @State private var adoptPassword = ""
     @State private var adoptFailed = false
+    @State private var relayEmail = ""
+    @State private var relayCode = ""
+    @State private var relayBusy = false
+    @State private var relayDevices: [RelayClient.DeviceSession] = []
+    @State private var showRelayDevices = false
+    @State private var relayCodePrompt: RelayCodePrompt? = nil
+    @State private var relayCodeInput = ""
+    @State private var showRelayTransfer = false
+
+    /// 需要敏感验证码确认的操作(解绑库 / 注销账户)。
+    enum RelayCodePrompt {
+        case unbind, deregister
+    }
 
     /// 自动同步间隔档位(与 macOS ConfigureCloudSheet 一致)。
     private let autoSyncChoices: [(String, Int)] = [
@@ -26,76 +38,182 @@ struct SyncSettingsView: View {
 
     var body: some View {
         Form {
+            // 网盘(iCloud/WebDAV)配置入口已隐藏:同步默认走 relay API;
+            // 网盘代码保留作老库迁移兜底,已配置用户的存量设置不受影响
             Section {
-                Picker(L10n.t("cloud_prompt"), selection: Binding(
-                    get: { vault.cloud },
-                    set: { vault.cloudTypeRaw = $0.rawValue }
-                )) {
-                    ForEach(CloudType.allCases.filter { $0.functional }, id: \.self) { type in
-                        Text(type.name).tag(type)
-                    }
-                }
-                if vault.cloud == .webdav {
-                    NavigationLink(L10n.t("ios_webdav_config_title")) { WebDavConfigSheet() }
-                }
-                if vault.cloud == .icloud {
-                    Text(L10n.t("ios_icloud_sync_info"))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    // iOS 沙盒访问不到云盘根,经安全作用域书签选定云端 UPasswords 文件夹
-                    // (与 macOS 版同一个目录),书签持久化后自动同步即可无感运行
-                    Button { showFolderPicker = true } label: {
-                        Label(vault.hasICloudFolder ? L10n.t("ios_icloud_repick_folder_button")
-                                                    : L10n.t("ios_icloud_pick_folder_button"),
-                              systemImage: "folder")
-                            .foregroundStyle(.primary)
-                    }
-                    if vault.hasICloudFolder {
-                        Label(String(format: L10n.t("ios_icloud_selected_folder_fmt"),
-                                     vault.icloudFolderName.isEmpty ? "UPasswords" : vault.icloudFolderName),
-                              systemImage: "checkmark.circle.fill")
-                            .font(.footnote)
-                            .foregroundStyle(Brand.green)
-                        Text(String(format: L10n.t("ios_icloud_sync_db_fmt"), vault.databaseName))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            if vault.cloud != .none {
-                Section {
-                    Toggle(L10n.t("auto_sync_setting"), isOn: $vault.autoSyncEnabled)
-                        .tint(Brand.accent)
-                    if vault.autoSyncEnabled {
-                        Picker(L10n.t("auto_sync_interval_setting"), selection: $vault.autoSyncSeconds) {
-                            ForEach(autoSyncChoices, id: \.1) { label, seconds in
-                                Text(label).tag(seconds)
-                            }
+                Toggle(L10n.t("auto_sync_setting"), isOn: $vault.autoSyncEnabled)
+                    .tint(Brand.accent)
+                if vault.autoSyncEnabled {
+                    Picker(L10n.t("auto_sync_interval_setting"), selection: $vault.autoSyncSeconds) {
+                        ForEach(autoSyncChoices, id: \.1) { label, seconds in
+                            Text(label).tag(seconds)
                         }
                     }
                 }
-                Section {
-                    Toggle(L10n.t("sync_cloud_api_label"), isOn: $vault.cloudAPIEnabled)
-                        .tint(Brand.accent)
-                } footer: {
-                    Text(L10n.t("sync_cloud_api_footer"))
-                }
-                Section {
-                    syncNowRow
-                } footer: {
-                    Text(L10n.t("cloud_sync_text"))
-                }
-            } else {
-                Section {
-                } footer: {
-                    Text(L10n.t("cloud_sync_text"))
-                }
+            }
+            Section {
+                relayAccountSection
+            } footer: {
+                Text(L10n.t("relay_account_footer"))
+            }
+            Section {
+                syncNowRow
+            } footer: {
+                Text(L10n.t("cloud_sync_text"))
             }
         }
         .navigationTitle(L10n.t("cloud_sync_title"))
-        .sheet(isPresented: $showFolderPicker) {
-            FolderPickerView { url in
-                Task { await vault.setICloudFolder(url) }
+        .alert(L10n.t("relay_sensitive_code_title"), isPresented: Binding(
+            get: { relayCodePrompt != nil },
+            set: { if !$0 { relayCodePrompt = nil } }
+        )) {
+            TextField(L10n.t("relay_code_placeholder"), text: $relayCodeInput)
+                .keyboardType(.numberPad)
+            Button(L10n.t("ok_button")) {
+                let code = relayCodeInput
+                let prompt = relayCodePrompt
+                relayCodeInput = ""
+                relayCodePrompt = nil
+                guard let prompt else { return }
+                Task {
+                    if prompt == .unbind {
+                        await vault.relayUnbindVault(code: code)
+                    } else {
+                        await vault.relayDeregisterAccount(code: code)
+                    }
+                }
+            }
+            Button(L10n.t("cancel_button"), role: .cancel) {
+                relayCodePrompt = nil
+            }
+        } message: {
+            Text(relayCodePrompt == .deregister
+                 ? L10n.t("relay_deregister_message") : L10n.t("relay_sensitive_code_sent"))
+        }
+        .sheet(isPresented: $showRelayTransfer) {
+            RelayTransferSheet()
+        }
+    }
+
+    /// UPasswords 云同步账户:未登录=邮箱+验证码登录(登录即为当前库启用);
+    /// 已登录=账户邮箱 + 登出/设备管理/解绑/注销。登录需库处于解锁态(要上传本地信封)。
+    @ViewBuilder
+    private var relayAccountSection: some View {
+        if let email = vault.relayAccountEmail, vault.relayBound {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Brand.green)
+                    Text(email)
+                    Spacer()
+                    Button(L10n.t("relay_logout_button")) {
+                        Log.info("ui", "ios relay logout from settings")
+                        Task { await vault.relayLogout() }
+                    }
+                    .buttonStyle(.borderless)
+                }
+                Text(L10n.t("relay_enabled_label"))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 16) {
+                    Button {
+                        Log.info("ui", "ios relay devices toggle from settings")
+                        Task {
+                            relayDevices = await vault.relaySessions()
+                            showRelayDevices.toggle()
+                        }
+                    } label: {
+                        Label(L10n.t("relay_devices_button"), systemImage: "laptopcomputer.and.iphone")
+                    }
+                    .buttonStyle(.borderless)
+                    Button(L10n.t("relay_transfer_button")) {
+                        Log.info("ui", "ios relay transfer sheet from settings")
+                        showRelayTransfer = true
+                    }
+                    .buttonStyle(.borderless)
+                    Button(L10n.t("relay_unbind_button")) {
+                        Log.info("ui", "ios relay unbind prompt from settings")
+                        Task {
+                            await vault.relayRequestSensitiveCode()
+                            relayCodeInput = ""
+                            relayCodePrompt = .unbind
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    Button(L10n.t("relay_deregister_button"), role: .destructive) {
+                        Log.info("ui", "ios relay deregister prompt from settings")
+                        Task {
+                            await vault.relayRequestSensitiveCode()
+                            relayCodeInput = ""
+                            relayCodePrompt = .deregister
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                }
+                .font(.footnote)
+                if showRelayDevices {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(relayDevices) { device in
+                            HStack(spacing: 8) {
+                                Image(systemName: "iphone")
+                                Text(device.deviceName.isEmpty
+                                     ? String(device.id.prefix(8)) + "…" : device.deviceName)
+                                Spacer()
+                                Button(L10n.t("relay_revoke_button"), role: .destructive) {
+                                    Log.info("ui", "ios relay session revoke from settings")
+                                    Task {
+                                        await vault.relayRevokeSession(id: device.id)
+                                        relayDevices = await vault.relaySessions()
+                                    }
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                            .font(.footnote)
+                        }
+                    }
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    TextField(L10n.t("relay_email_placeholder"), text: $relayEmail)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .textFieldStyle(.roundedBorder)
+                    Button(L10n.t("relay_send_code_button")) {
+                        let email = relayEmail.trimmingCharacters(in: .whitespaces)
+                        guard email.contains("@"), email.contains(".") else {
+                            vault.showToast(L10n.t("invalid_email_error"))
+                            return
+                        }
+                        relayBusy = true
+                        Log.info("ui", "ios relay code request from settings")
+                        Task {
+                            await vault.relaySendCode(email: email)
+                            relayBusy = false
+                        }
+                    }
+                    .disabled(relayBusy)
+                    if relayBusy { ProgressView().controlSize(.small) }
+                }
+                HStack(spacing: 8) {
+                    TextField(L10n.t("relay_code_placeholder"), text: $relayCode)
+                        .keyboardType(.numberPad)
+                        .textFieldStyle(.roundedBorder)
+                    Button(L10n.t("relay_login_button")) {
+                        relayBusy = true
+                        Log.info("ui", "ios relay login from settings")
+                        let email = relayEmail.trimmingCharacters(in: .whitespaces)
+                        let code = relayCode
+                        relayCode = ""
+                        Task {
+                            await vault.relayLoginAndEnable(email: email, code: code)
+                            relayBusy = false
+                        }
+                    }
+                    .disabled(relayEmail.isEmpty || relayCode.count < 6 || vault.locked)
+                }
             }
         }
     }
@@ -190,6 +308,79 @@ struct SyncSettingsView: View {
             Text(L10n.t("last_sync_completed_prompt") + " " + last.formatted(date: .abbreviated, time: .shortened))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// 换绑邮箱表单:当前主密码(本地验证) + 新邮箱(收敏感码) + 验证码 →
+/// 注册表记录迁移到新邮箱名下,云端同步结构随之换主。
+struct RelayTransferSheet: View {
+    @EnvironmentObject var vault: Vault
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var masterPassword = ""
+    @State private var newEmail = ""
+    @State private var code = ""
+    @State private var busy = false
+    @State private var sending = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(L10n.t("relay_transfer_hint"))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Section {
+                    SecureField(L10n.t("relay_transfer_master_password"), text: $masterPassword)
+                    TextField(L10n.t("relay_transfer_new_email"), text: $newEmail)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    HStack {
+                        SecureField(L10n.t("relay_code_placeholder"), text: $code)
+                            .keyboardType(.numberPad)
+                        Button(L10n.t("relay_send_code_button")) {
+                            Log.info("ui", "ios relay transfer code request")
+                            sending = true
+                            let email = newEmail.trimmingCharacters(in: .whitespaces)
+                            Task {
+                                await vault.relaySendSensitiveCode(to: email)
+                                sending = false
+                            }
+                        }
+                        .disabled(!newEmail.contains("@") || sending)
+                        .buttonStyle(.borderless)
+                    }
+                } footer: {
+                    if sending { ProgressView().controlSize(.small) }
+                }
+            }
+            .navigationTitle(L10n.t("relay_transfer_title"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L10n.t("cancel_button")) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L10n.t("relay_transfer_button")) {
+                        busy = true
+                        let pw = masterPassword
+                        masterPassword = ""
+                        let email = newEmail.trimmingCharacters(in: .whitespaces)
+                        let entered = code
+                        code = ""
+                        Task {
+                            if await vault.relayTransferVault(masterPassword: pw, newEmail: email, code: entered) {
+                                dismiss()
+                            }
+                            busy = false
+                        }
+                    }
+                    .disabled(masterPassword.isEmpty || !newEmail.contains("@") || code.count < 6 || busy)
+                }
+            }
         }
     }
 }

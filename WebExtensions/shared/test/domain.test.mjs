@@ -101,7 +101,7 @@ test('Contracts: extension message schema covers all request/response tags', () 
     const tag = (branch) => branch.properties.type.const
     const [request, response] = schema.oneOf
     assert.deepEqual(request.oneOf.map(tag).sort(), ['fill', 'ping', 'query', 'unlock'])
-    assert.deepEqual(response.oneOf.map(tag).sort(), ['error', 'filled', 'items', 'locked', 'pong', 'unlocked'])
+    assert.deepEqual(response.oneOf.map(tag).sort(), ['error', 'filled', 'items', 'locked', 'noVault', 'pong', 'unlocked'])
 })
 
 test('Contracts: safari and chrome manifests agree on shared entry points', () => {

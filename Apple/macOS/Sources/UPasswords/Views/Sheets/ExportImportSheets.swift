@@ -9,6 +9,8 @@ struct ExportAsSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
     @State private var format: ExportFormat = .xml
+    @State private var exportPassword = ""
+    @State private var wrongPassword = false
 
     var body: some View {
         SheetShell(
@@ -27,12 +29,28 @@ struct ExportAsSheet: View {
                     Label(L10n.t("export_warning_message"), systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                         .font(.callout)
+                    Divider()
+                    // 导出前验密:数据文件一旦落盘即为明文,必须确认持库者本人
+                    LabeledRow(label: L10n.t("export_password_prompt")) {
+                        SecureField("", text: $exportPassword)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    if wrongPassword {
+                        Text(L10n.t("wrong_password_error")).font(.callout).foregroundStyle(.red)
+                    }
                 }
             }
         )
     }
 
     @MainActor private func export() {
+        guard (try? ctx.store.load(name: ctx.databaseName, password: exportPassword)) != nil else {
+            wrongPassword = true
+            exportPassword = ""
+            Log.warn("app", "export rejected: wrong vault password")
+            return
+        }
+        wrongPassword = false
         let cards = ctx.database.cards.filter { !$0.template }
         let text = ExportCardsTask.export(cards, labels: ctx.database.labels, format: format)
         let panel = NSSavePanel()
@@ -42,6 +60,7 @@ struct ExportAsSheet: View {
             try? text.data(using: .utf8)?.write(to: url)
             AppToast.shared.show(L10n.t("data_exported_message") + " " + url.path)
         }
+        exportPassword = ""
         dismiss()
     }
 }

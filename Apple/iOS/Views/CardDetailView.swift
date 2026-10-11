@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 import UPasswordsCore
 
@@ -224,6 +225,12 @@ struct CardDetailView: View {
                         qrPayload = QRCodeService.otpPayload(secret: field.value, title: title)
                     }
                 }
+                if field.type == .website && field.hasValue {
+                    // 同 macOS:网址字段提供网络图标,点击经系统默认浏览器打开
+                    iconButton("globe", L10n.t("open_website_help")) {
+                        openWebsite(field.value)
+                    }
+                }
                 iconButton("doc.on.doc", L10n.t("copy_command")) {
                     if field.type.isOneTimePassword,
                        let cfg = try? TOTP.parse(field.value),
@@ -241,6 +248,14 @@ struct CardDetailView: View {
                 historyDisclosure(field)
             }
         }
+    }
+
+    /// 用系统默认浏览器打开网址(缺协议时补 https,与 macOS 同规则)。
+    private func openWebsite(_ raw: String) {
+        let s = raw.hasPrefix("http") ? raw : "https://\(raw)"
+        guard let url = URL(string: s) else { return }
+        Log.info("ui", "ios detail open website url-length=\(s.count)")
+        UIApplication.shared.open(url)
     }
 
     /// TOTP 实时验证码 + 倒计时环。
@@ -376,9 +391,6 @@ struct CardDetailView: View {
                             .foregroundStyle(Brand.fg)
                             .lineLimit(1)
                         Spacer()
-                        Text(byteText(att.length))
-                            .font(.caption)
-                            .foregroundStyle(Brand.muted)
                         Image(systemName: "chevron.right")
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(Brand.fg.opacity(0.25))
@@ -410,11 +422,6 @@ struct CardDetailView: View {
         }
     }
 
-    private func byteText(_ n: Int) -> String {
-        if n < 1024 { return "\(n) B" }
-        return String(format: "%.1f KB", Double(n) / 1024)
-    }
-
     @ViewBuilder
     private func labelsSection(_ card: Card) -> some View {
         let labels = vault.labelsOf(card)
@@ -443,8 +450,6 @@ struct CardDetailView: View {
             metaRow(L10n.t("ios_meta_created"), card.created.date.formatted(date: .abbreviated, time: .shortened))
             InsetDivider()
             metaRow(L10n.t("ios_meta_modified"), card.modified.date.formatted(date: .abbreviated, time: .shortened))
-            InsetDivider()
-            metaRow(L10n.t("ios_meta_size"), byteText(card.size))
         }
     }
 

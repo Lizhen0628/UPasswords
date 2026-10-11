@@ -318,10 +318,73 @@ final class AppContext: ObservableObject {
         scheduleAutoBackupIfNeeded()
         startAutoSyncTickerIfNeeded()
         startBreachCheckTickerIfNeeded()
-        markSetupTaskDoneIf(.cloudSync, when: settings.cloud != .none)
+        // 云同步步骤按 relay 绑定判定(API 为默认通道;网盘入口已隐藏)
+        markSetupTaskDoneIf(.cloudSync, when: relayBound)
         markSetupTaskDoneIf(.autoBackup, when: settings.autoBackupEnabled)
         markSetupTaskDoneIf(.touchID, when: settings.fastUnlock && PasswordStore.biometricAvailable())
+        // 钥匙串密码副本自愈:他机改密后以新密码重新解锁时,回写新副本
+        // (旧副本已在强制锁定时清除;生物识别项随快速解锁配置恢复)
+        if let stored = PasswordStore.loadPassword(databaseName: name), stored != password {
+            PasswordStore.savePassword(password, databaseName: name)
+            if settings.fastUnlock && PasswordStore.biometricAvailable() {
+                PasswordStore.savePasswordForBiometric(password, databaseName: name)
+            }
+            Log.info("keychain", "password copy healed after unlock for \"\(name)\"")
+        }
+        // 引导登录在先的库在此自动补绑;信封先行:解锁后即拉取注册表,
+        // 密码被他机修改能立刻提示
+        Task {
+            await relayBindCurrentVaultIfNeeded()
+            await relayRenameCurrentSession()
+            await checkRelayPasswordVersion()
+        }
         announceStartupSheets()
+    }
+
+    /// 解锁(带远端兜底):本地解不开时拉远端信封+本体收敛后重试。
+    /// 场景:他机改密(始终轮换库密钥)后本机被强制锁定——本地信封已换新,
+    /// 但本体还是旧钥密文,新/旧密码都解不开本地副本;远端才是新全套。
+    /// 密码真错时远端信封同样解不开 → 仍是密码错误,不误导。
+    @discardableResult
+    func unlockWithRemoteFallback(name: String, password: String) async -> Bool {
+        do {
+            try unlock(name: name, password: password)
+            return true
+        } catch {
+            guard let binding = relay.binding(database: name),
+                  let token = relay.token(database: name) else { return false }
+            do {
+                let detail = try await relayClient.getVault(token: token, vaultId: binding.vaultId)
+                guard let envelopeBytes = detail.envelope,
+                      let vek = try? DatabaseCipher.unwrapVaultKey(envelopeBytes, password: password) else {
+                    Log.warn("lifecycle", "remote unlock fallback: password rejected by remote envelope")
+                    return false
+                }
+                let body: Data
+                do {
+                    body = try await relayClient.getBody(token: token, vaultId: binding.vaultId)
+                } catch {
+                    Log.warn("sync", "remote unlock fallback: rotated body not on relay yet")
+                    AppToast.shared.show(L10n.t("unlock_remote_body_missing"))
+                    return false
+                }
+                let plain = try DatabaseCipher.decryptBody(body, vaultKey: vek)
+                let db = try PasswordDatabase.parse(plain)
+                try store.save(db, name: name, vaultKey: vek)
+                try store.saveEnvelope(envelopeBytes, for: name)
+                Log.info("lifecycle", "remote unlock fallback converged local vault \"\(name)\"")
+                do {
+                    try unlock(name: name, password: password)
+                    return true
+                } catch {
+                    Log.error("lifecycle", "remote unlock fallback: retry after convergence failed: \(error)")
+                    return false
+                }
+            } catch {
+                Log.warn("sync", "remote unlock fallback failed: \(error)")
+                return false
+            }
+        }
     }
 
     /// 启动提示:What's New + 即将到期卡片提醒。
@@ -422,12 +485,12 @@ final class AppContext: ObservableObject {
     func save() {
         guard phase == .unlocked else { return }
         do {
-            if let vaultKey {
-                try store.save(database, name: databaseName, vaultKey: vaultKey)
-            } else {
-                // 兼容:解锁路径必持库密钥,此处理论不可达;从钥匙串兜底
-                try store.save(database, name: databaseName, password: password)
+            // 解锁路径必持库密钥;缺失说明会话状态异常,绝不能退化为其他写法
+            guard let vaultKey else {
+                Log.error("db", "save \"\(databaseName)\" aborted: no vault key in session")
+                return
             }
+            try store.save(database, name: databaseName, vaultKey: vaultKey)
             SafariSnapshotBridge.push(databaseName: databaseName, store: store)
         } catch {
             Log.error("db", "save \"\(databaseName)\" failed: \(error)")

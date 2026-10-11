@@ -60,8 +60,6 @@ final class Vault: ObservableObject {
     @Published var webdav: WebDavSettings { didSet { saveWebDav() } }
     @Published var autoSyncEnabled: Bool { didSet { d.set(autoSyncEnabled, forKey: "sync.autoEnabled") } }
     @Published var autoSyncSeconds: Int { didSet { d.set(autoSyncSeconds, forKey: "sync.autoSeconds") } }
-    /// upasswords.com 信封同步加速通道(零知识,默认开;见 CloudEnvelopeService)。
-    @Published var cloudAPIEnabled: Bool { didSet { d.set(cloudAPIEnabled, forKey: "sync.cloudAPI.enabled") } }
     /// 同步进行态与上次成功同步时间(持久化;Vault+Sync 扩展写入)。
     @Published var syncState: SyncPhase = .idle
     @Published var lastSync: Date? = nil
@@ -122,7 +120,6 @@ final class Vault: ObservableObject {
         }
         autoSyncEnabled = d.object(forKey: "sync.autoEnabled") as? Bool ?? false
         autoSyncSeconds = d.object(forKey: "sync.autoSeconds") as? Int ?? 60
-        cloudAPIEnabled = d.object(forKey: "sync.cloudAPI.enabled") as? Bool ?? true
         if let main = SharedVaultStore.mainDatabase() {
             databaseName = main.name
             if SharedVaultStore.currentDatabaseName == nil {
@@ -180,16 +177,69 @@ final class Vault: ObservableObject {
         database = db
         locked = false
         Log.info("app", "ios vault unlocked db=\(databaseName) cards=\(db.cards.count)")
-        healBiometricEntry(with: pw)
+        healKeychainEntries(with: pw)
         startAutoSyncTickerIfNeeded()
         maybeRunAutoBreachCheck()
         maybeRunAutoBackup()
+        // 引导登录在先的库在此自动补绑;信封先行:解锁后即拉取注册表,
+        // 密码被他机修改能立刻提示
+        Task {
+            await relayBindCurrentVaultIfNeeded()
+            await relayRenameCurrentSession()
+            await checkRelayPasswordVersion()
+        }
         return true
     }
 
-    /// 面容 ID 条目自愈:切换/新导入的库还没有 biometric 钥匙串条目,
-    /// 用主密码解锁成功后即补录,此后该库也能面容 ID 快速解锁。
-    private func healBiometricEntry(with pw: String) {
+    /// 解锁(带远端兜底):本地解不开时拉远端信封+本体收敛后重试。
+    /// 场景:他机改密(始终轮换库密钥)后本机被强制锁定——本地信封已换新,
+    /// 但本体还是旧钥密文,新/旧密码都解不开本地副本;远端才是新全套。
+    /// 密码真错时远端信封同样解不开 → 仍是密码错误,不误导。
+    @discardableResult
+    func unlockWithRemoteFallback(with pw: String) async -> Bool {
+        if unlock(with: pw) { return true }
+        guard let binding = relay.binding(database: databaseName),
+              let token = relay.token(database: databaseName) else { return false }
+        do {
+            let detail = try await relayClient.getVault(token: token, vaultId: binding.vaultId)
+            guard let envelopeBytes = detail.envelope,
+                  let vek = try? DatabaseCipher.unwrapVaultKey(envelopeBytes, password: pw) else {
+                Log.warn("app", "ios remote unlock fallback: password rejected by remote envelope")
+                return false
+            }
+            let body: Data
+            do {
+                body = try await relayClient.getBody(token: token, vaultId: binding.vaultId)
+            } catch {
+                Log.warn("sync", "ios remote unlock fallback: rotated body not on relay yet")
+                showToast(L10n.t("unlock_remote_body_missing"))
+                return false
+            }
+            let plain = try DatabaseCipher.decryptBody(body, vaultKey: vek)
+            let db = try PasswordDatabase.parse(plain)
+            try store.save(db, name: databaseName, vaultKey: vek)
+            try store.saveEnvelope(envelopeBytes, for: databaseName)
+            Log.info("app", "ios remote unlock fallback converged local vault db=\(databaseName)")
+            return unlock(with: pw)
+        } catch {
+            Log.warn("sync", "ios remote unlock fallback failed: \(error)")
+            return false
+        }
+    }
+
+    /// 钥匙串条目自愈:主密码解锁成功后回写密码副本——
+    /// ① 主密码条目与输入不符时更新(他机改密后以新密码重新解锁的场景,
+    ///    旧副本已在强制锁定时清除或已过期);
+    /// ② 开启面容 ID 且尚无 biometric 条目时补录(切换/新导入的库)。
+    private func healKeychainEntries(with pw: String) {
+        if let stored = PasswordStore.loadPassword(databaseName: databaseName), stored != pw {
+            PasswordStore.savePassword(pw, databaseName: databaseName)
+            if faceIDEnabled, biometricAvailable {
+                PasswordStore.savePasswordForBiometric(pw, databaseName: databaseName)
+            }
+            Log.info("keychain", "ios password copy healed for \(PasswordStore.service(forDatabaseName: databaseName))")
+            return
+        }
         guard faceIDEnabled, biometricAvailable,
               !PasswordStore.hasBiometricItem(databaseName: databaseName) else { return }
         PasswordStore.savePasswordForBiometric(pw, databaseName: databaseName)
@@ -239,7 +289,9 @@ final class Vault: ObservableObject {
         return .success
     }
 
-    /// 修改主密码:校验旧密码后只重写本地信封(v2),并更新钥匙串。
+    /// 修改主密码:始终轮换库密钥(全新 VEK + 本体重加密)——旧密文对旧密码
+    /// 永久作废,用户无需判断是否轮换。云端顺序:信封先行(他机强制锁定),
+    /// 库体随后原子换代。
     func changeMasterPassword(old: String, new: String) -> Bool {
         guard verifyMaster(old), new.count >= 4 else { return false }
         guard let vaultKey else {
@@ -247,16 +299,36 @@ final class Vault: ObservableObject {
             return false
         }
         do {
-            try store.rewrap(name: databaseName, vaultKey: vaultKey, newPassword: new)
+            let effectiveKey = DatabaseCipher.generateVaultKey()
+            try store.save(database, name: databaseName, vaultKey: effectiveKey)
+            try store.rewrap(name: databaseName, vaultKey: effectiveKey, newPassword: new)
             password = new
+            // guard let vaultKey 判空后不再使用;轮换密钥写回会话属性
+            self.vaultKey = effectiveKey
             PasswordStore.savePassword(new, databaseName: databaseName)
             if PasswordStore.hasBiometricItem(databaseName: databaseName) {
                 PasswordStore.savePasswordForBiometric(new, databaseName: databaseName)
             }
-            Log.info("app", "ios master password changed db=\(databaseName) (envelope rewrapped, body untouched)")
-            // 云端接力:只传信封——本体对端用同一库密钥照解,无重传竞态
-            if cloudConfigured {
-                Task { await uploadCloudEnvelope() }
+            Log.info("app", "ios master password changed db=\(databaseName) (vault key rotated, body re-encrypted)")
+            // 云端接力:信封先行(他机强锁定/直接认新密码),库体随后原子换代
+            if relayBound {
+                Task {
+                    await relayPushEnvelope()
+                    let rotated = try? DatabaseCipher.encryptBody(database.xmlData(), vaultKey: effectiveKey)
+                    if let rotated {
+                        await relayPushBody(cipher: rotated)
+                        await relayReportHashes(cipher: rotated)
+                    }
+                }
+            } else if cloudConfigured {
+                Task {
+                    await uploadCloudEnvelope()
+                    let rotated = try? DatabaseCipher.encryptBody(database.xmlData(), vaultKey: effectiveKey)
+                    if let rotated, let mounted = makeCloudDriver() {
+                        try? await mounted.driver.upload(rotated)
+                        mounted.releaseAccess?()
+                    }
+                }
             } else {
                 Log.info("sync", "ios password changed with cloud unconfigured — other devices adopt via next sync")
             }
@@ -288,6 +360,9 @@ final class Vault: ObservableObject {
         backgroundAt = nil
         // 回前台即检查一次自动同步到期(与常驻 ticker 双保险,覆盖后台期间错过的跳数)
         autoSyncTick()
+        // 回前台瞬间再做一次注册表版本检查(轻量单请求,已绑定时):
+        // 他机改密即刻感知并强制锁定,不受自动同步间隔约束
+        Task { await checkRelayPasswordVersion() }
     }
 
     private func lockIfNeeded() {
@@ -395,7 +470,7 @@ final class Vault: ObservableObject {
         vaultKey = vek
         locked = false
         reloadPerDatabaseState()
-        healBiometricEntry(with: pw)
+        healKeychainEntries(with: pw)
         startAutoSyncTickerIfNeeded()
         maybeRunAutoBreachCheck()
         maybeRunAutoBackup()
@@ -438,6 +513,8 @@ final class Vault: ObservableObject {
             let old = databaseName
             try store.rename(old, to: newName)
             clearSyncState(for: old)
+            // 云端身份随改名迁移:网盘三件套改名 + 注册表 PATCH + 绑定换键
+            Task { await relayMigrateAfterRename(from: old, to: newName) }
             databaseName = newName
             SharedVaultStore.currentDatabaseName = newName
             reloadPerDatabaseState()
@@ -536,12 +613,22 @@ final class Vault: ObservableObject {
         defer { if granted { url.stopAccessingSecurityScopedResource() } }
         do {
             let data = try Data(contentsOf: url)
-            guard DatabaseCipher.checkFileMagic(data) else {
-                Log.warn("db", "ios import file \"\(name)\": bad container magic")
+            guard DatabaseCipher.isV2Container(data) else {
+                Log.warn("db", "ios import file \"\(name)\": not a v2 container")
                 showToast(L10n.t("ios_db_import_invalid_message"))
                 return nil
             }
+            // v2 本体必须连同配套信封(.upwkey)一起导入,否则永远无法解锁。
+            // 文档选择器的作用域只覆盖被选文件,同目录信封读取失败即拒绝导入
+            let envelopeURL = url.deletingPathExtension().appendingPathExtension("upwkey")
+            guard let envelope = try? Data(contentsOf: envelopeURL),
+                  DatabaseCipher.envelopeChangedAt(envelope) != nil else {
+                Log.warn("db", "ios import file \"\(name)\": sibling envelope missing/unreadable")
+                showToast(L10n.t("envelope_missing_error"))
+                return nil
+            }
             try data.write(to: store.url(for: name), options: .atomic)
+            try store.saveEnvelope(envelope, for: name)
             SharedVaultStore.currentDatabaseName = name
             databaseName = name
             lock()
@@ -595,11 +682,18 @@ final class Vault: ObservableObject {
         defer { importingCloud = false }
         defer { mounted.releaseAccess?() }
         do {
-            guard let data = try await mounted.driver.download(), DatabaseCipher.checkFileMagic(data) else {
-                Log.warn("sync", "ios import \"\(name)\": cloud container missing or bad magic")
+            guard let data = try await mounted.driver.download(), DatabaseCipher.isV2Container(data) else {
+                Log.warn("sync", "ios import \"\(name)\": cloud container missing or not v2")
+                return false
+            }
+            // v2 本体必须连同信封一起取回,否则永远无法解锁
+            guard let envelope = try await mounted.driver.downloadKey() else {
+                Log.warn("sync", "ios import \"\(name)\": cloud envelope missing")
+                showToast(L10n.t("envelope_missing_error"))
                 return false
             }
             try data.write(to: store.url(for: name), options: .atomic)
+            try store.saveEnvelope(envelope, for: name)
             SharedVaultStore.currentDatabaseName = name
             databaseName = name
             lock()
@@ -607,6 +701,10 @@ final class Vault: ObservableObject {
             refreshDatabases()
             Log.info("sync", "ios imported \"\(name).upw\" (\(data.count)B) from iCloud — locked for unlock")
             return true
+        } catch let error as SyncError where error == SyncError.notDownloaded {
+            Log.warn("sync", "ios import \"\(name)\": cloud file not materialized in time")
+            showToast(L10n.t("icloud_download_pending_error"))
+            return false
         } catch {
             Log.warn("sync", "ios import \"\(name)\" failed: \(error)")
             return false
@@ -624,12 +722,12 @@ final class Vault: ObservableObject {
     func persist() {
         guard !locked else { return }
         do {
-            if let vaultKey {
-                try store.save(database, name: databaseName, vaultKey: vaultKey)
-            } else {
-                // 兼容:解锁路径必持库密钥,此处理论不可达;信封兼容写兜底
-                try store.save(database, name: databaseName, password: password)
+            // 解锁路径必持库密钥;缺失说明会话状态异常,绝不能退化为其他写法
+            guard let vaultKey else {
+                Log.error("db", "ios save db=\(databaseName) aborted: no vault key in session")
+                return
             }
+            try store.save(database, name: databaseName, vaultKey: vaultKey)
         } catch {
             Log.error("db", "ios save db=\(databaseName) failed: \(error)")
             showToast(L10n.t("ios_vault_save_error"))

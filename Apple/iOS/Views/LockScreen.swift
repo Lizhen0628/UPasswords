@@ -18,6 +18,10 @@ struct LockScreen: View {
     @State private var showFileImporter = false
     @State private var showFolderPicker = false
     @State private var showFolderGuide = false
+    @State private var accountStepDismissed = false
+    @State private var accountEmail = ""
+    @State private var accountCode = ""
+    @State private var accountBusy = false
 
     private var isSetup: Bool { !vault.hasVault }
     private var theme: (name: String, colors: [Color]) {
@@ -144,49 +148,114 @@ struct LockScreen: View {
     private var inputArea: some View {
         VStack(spacing: 12) {
             if isSetup {
-                // iCloud 云端已有加密库:先提供恢复入口,再提供新建
-                if !vault.cloudDatabases.isEmpty {
-                    cloudRestoreCard
-                    Text(L10n.t("ios_or_create_new_hint"))
-                        .font(.footnote)
-                        .foregroundStyle(Brand.muted)
-                        .padding(.vertical, 4)
-                } else if vault.cloudChecking {
-                    HStack(spacing: 8) {
-                        ProgressView().tint(Brand.muted)
-                        Text(L10n.t("ios_cloud_checking_text"))
+                if !accountStepDismissed && vault.relayOnboardingNeeded {
+                    // 必经第一步:整页仅账户登录,云端恢复/文件导入/新建
+                    // 一概后置到验证完成(库就绪后自动补绑云同步)
+                    onboardingAccountCard
+                } else {
+                    if !vault.cloudDatabases.isEmpty {
+                        cloudRestoreCard
+                        Text(L10n.t("ios_or_create_new_hint"))
                             .font(.footnote)
                             .foregroundStyle(Brand.muted)
+                            .padding(.vertical, 4)
+                    } else if vault.cloudChecking {
+                        HStack(spacing: 8) {
+                            ProgressView().tint(Brand.muted)
+                            Text(L10n.t("ios_cloud_checking_text"))
+                                .font(.footnote)
+                                .foregroundStyle(Brand.muted)
+                        }
+                        .frame(height: 36)
                     }
-                    .frame(height: 36)
+                    Button {
+                        showFileImporter = true
+                    } label: {
+                        Label(L10n.t("ios_import_file_button"), systemImage: "doc.badge.plus")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(Brand.accent)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 46)
+                            .background(Brand.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        showFolderGuide = true
+                    } label: {
+                        Label(L10n.t("ios_cloud_restore_folder_button"), systemImage: "icloud")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(Brand.accent)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 46)
+                            .background(Brand.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    createFields
                 }
-                Button {
-                    showFileImporter = true
-                } label: {
-                    Label(L10n.t("ios_import_file_button"), systemImage: "doc.badge.plus")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(Brand.accent)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 46)
-                        .background(Brand.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                Button {
-                    showFolderGuide = true
-                } label: {
-                    Label(L10n.t("ios_cloud_restore_folder_button"), systemImage: "icloud")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(Brand.accent)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 46)
-                        .background(Brand.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                createFields
             } else {
                 unlockFields
             }
         }
+    }
+
+    // MARK: 新装引导 · 账户登录
+
+    /// 新装引导第一步卡片:邮箱 + 验证码登录(先于创建/恢复库完成)。
+    private var onboardingAccountCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(L10n.t("relay_onboarding_title"), systemImage: "person.crop.circle.badge.checkmark")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Brand.fg)
+            Text(L10n.t("relay_onboarding_hint"))
+                .font(.footnote)
+                .foregroundStyle(Brand.muted)
+            TextField(L10n.t("relay_email_placeholder"), text: $accountEmail)
+                .keyboardType(.emailAddress)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+            HStack(spacing: 10) {
+                SecureField(L10n.t("relay_code_placeholder"), text: $accountCode)
+                    .keyboardType(.numberPad)
+                    .textFieldStyle(.roundedBorder)
+                Button(L10n.t("relay_send_code_button")) {
+                    Log.info("ui", "ios onboarding code request")
+                    accountBusy = true
+                    let address = accountEmail.trimmingCharacters(in: .whitespaces)
+                    Task {
+                        await vault.relaySendCode(email: address)
+                        accountBusy = false
+                    }
+                }
+                .disabled(!accountEmail.contains("@") || accountBusy)
+                .buttonStyle(.borderless)
+            }
+            Button {
+                Log.info("ui", "ios onboarding login")
+                accountBusy = true
+                let address = accountEmail.trimmingCharacters(in: .whitespaces)
+                let entered = accountCode
+                accountCode = ""
+                Task {
+                    if await vault.relayLoginOnly(email: address, code: entered) {
+                        accountStepDismissed = true
+                    }
+                    accountBusy = false
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    if accountBusy { ProgressView().tint(Brand.onAccent) }
+                    Text(L10n.t("relay_login_button"))
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 42)
+                .background(Brand.accent, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .disabled(accountEmail.isEmpty || accountCode.count < 6 || accountBusy)
+            .buttonStyle(.plain)
+        }
+        .padding(14)
+        .background(Brand.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     // MARK: iCloud 恢复
@@ -296,10 +365,13 @@ struct LockScreen: View {
     }
 
     private func unlock() {
-        if vault.unlock(with: password) {
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-        } else {
-            fail(L10n.t("ios_wrong_password_error"))
+        Task { @MainActor in
+            // 远端兜底:他机改密轮换后本地本体过期,需拉远端收敛(见 Vault 注释)
+            if await vault.unlockWithRemoteFallback(with: password) {
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } else {
+                fail(L10n.t("ios_wrong_password_error"))
+            }
         }
     }
 

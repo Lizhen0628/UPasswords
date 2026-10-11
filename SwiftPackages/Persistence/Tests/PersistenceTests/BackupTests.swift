@@ -22,7 +22,7 @@ final class BackupTests: XCTestCase {
     func testPruneKeepsTenMostRecent() throws {
         try store.create(name: "Alpha", password: "pw", now: Date(timeIntervalSince1970: 0))
         for i in 0..<13 {
-            try store.backup(name: "Alpha", password: "pw", now: Date(timeIntervalSince1970: Double(100 + i)))
+            try store.backup(name: "Alpha", now: Date(timeIntervalSince1970: Double(100 + i)))
         }
         let kept = store.backups(name: "Alpha")
         XCTAssertEqual(kept.count, 10, "keep limit is 10")
@@ -33,17 +33,30 @@ final class BackupTests: XCTestCase {
 
     func testRestoreIntoNewNameRoundTrip() throws {
         try store.create(name: "Alpha", password: "pw", now: Date(timeIntervalSince1970: 0))
-        var db = try store.load(name: "Alpha", password: "pw")
+        let (loaded, vek) = try store.loadUnlocked(name: "Alpha", password: "pw")
+        var db = loaded
         var card = Card(id: 777, title: "Restored")
         db.cards.append(card)
-        try store.save(db, name: "Alpha", password: "pw")
-        try store.backup(name: "Alpha", password: "pw", now: Date(timeIntervalSince1970: 50))
+        try store.save(db, name: "Alpha", vaultKey: vek)
+        try store.backup(name: "Alpha", now: Date(timeIntervalSince1970: 50))
 
         let backup = try XCTUnwrap(store.backups(name: "Alpha").first)
         try store.restore(backup: backup, to: "Beta")
         XCTAssertTrue(store.exists("Beta"))
         let restored = try store.load(name: "Beta", password: "pw")
         XCTAssertEqual(restored.card(id: 777)?.title, "Restored", "restored copy must contain pre-backup edits")
+    }
+
+    /// v2 本体恢复必须连同信封备份;缺信封的备份拒绝恢复(恢复了也解不开)。
+    func testRestoreRejectsMissingEnvelope() throws {
+        try store.create(name: "Alpha", password: "pw", now: Date(timeIntervalSince1970: 0))
+        try store.backup(name: "Alpha", now: Date(timeIntervalSince1970: 60))
+        let backup = try XCTUnwrap(store.backups(name: "Alpha").first)
+        // 删掉同时间戳的信封备份,模拟不完整备份集
+        let keyBackup = backup.deletingPathExtension().appendingPathExtension("upwkey")
+        try FileManager.default.removeItem(at: keyBackup)
+        XCTAssertThrowsError(try store.restore(backup: backup, to: "Gamma"))
+        XCTAssertFalse(store.exists("Gamma"), "rejected restore must not write the target")
     }
 
     func testRestoreRejectsMagicMismatch() throws {
@@ -56,7 +69,7 @@ final class BackupTests: XCTestCase {
 
     func testDeleteBackupConfinedToOwnDirectory() throws {
         try store.create(name: "Alpha", password: "pw", now: Date(timeIntervalSince1970: 0))
-        try store.backup(name: "Alpha", password: "pw", now: Date(timeIntervalSince1970: 1))
+        try store.backup(name: "Alpha", now: Date(timeIntervalSince1970: 1))
         let outside = tempDir.appendingPathComponent("outside.upw")
         try Data("x".utf8).write(to: outside)
         XCTAssertThrowsError(try store.deleteBackup(outside, name: "Alpha"),

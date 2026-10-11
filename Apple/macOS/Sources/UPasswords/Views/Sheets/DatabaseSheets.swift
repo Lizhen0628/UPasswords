@@ -248,6 +248,10 @@ struct ManageDatabasesSheet: View {
             do {
                 try ctx.store.rename(db.name, to: input.stringValue)
                 if ctx.databaseName == db.name { ctx.databaseName = input.stringValue }
+                // 云端身份随改名迁移:网盘三件套改名 + 注册表 PATCH + 绑定换键
+                let oldName = db.name
+                let newName = input.stringValue
+                Task { await ctx.relayMigrateAfterRename(from: oldName, to: newName) }
                 ctx.objectWillChange.send()
             } catch {
                 self.error = error.localizedDescription

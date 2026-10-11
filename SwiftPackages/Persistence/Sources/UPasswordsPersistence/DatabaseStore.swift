@@ -113,9 +113,10 @@ public final class DatabaseStore {
         return DatabaseFile(name: name, fileName: "\(name).upw", created: now, isMain: list().isEmpty)
     }
 
-    /// 解锁加载:v1 容器用主密码直解并就地迁移为 v2(本体+信封);
-    /// v2 用主密码解信封拿到库密钥再解本体。
+    /// 解锁加载:v2 容器用主密码解信封拿到库密钥再解本体。
     /// - Returns: 数据库与库密钥(会话期持有,保存时直接使用)
+    /// - Throws: 非 v2 容器抛 wrong_database_format_error;信封缺失抛
+    ///   envelope_missing_error;主密码错误由 unwrapVaultKey 抛 wrong_password_error
     public func loadUnlocked(name: String, password: String) throws -> (PasswordDatabase, SymmetricKey) {
         let t0 = Date()
         let data: Data
@@ -125,23 +126,21 @@ public final class DatabaseStore {
             Log.error("db", "load \"\(name).upw\" unreadable: \(error)")
             throw error
         }
-        if DatabaseCipher.isV2Container(data) {
-            let envelope = try Data(contentsOf: keyURL(for: name))
-            let vek = try DatabaseCipher.unwrapVaultKey(envelope, password: password)
-            let plain = try DatabaseCipher.decryptBody(data, vaultKey: vek)
-            let db = try PasswordDatabase.parse(plain)
-            Log.debug("db", "loaded \"\(name).upw\" v2 (\(data.count)B, \(Int(Date().timeIntervalSince(t0) * 1000))ms)")
-            return (db, vek)
+        guard DatabaseCipher.isV2Container(data) else {
+            Log.warn("db", "load \"\(name).upw\" rejected: not a v2 container")
+            throw DatabaseCipher.CipherError(message: L10n.t("wrong_database_format_error"))
         }
-        // v1:主密码直解,随后迁移 v2(生成库密钥,重写本体+信封)
-        let plain = try DatabaseCipher.decryptedData(data, password: password)
+        let envelope: Data
+        do {
+            envelope = try Data(contentsOf: keyURL(for: name))
+        } catch {
+            Log.error("db", "load \"\(name).upw\" failed: envelope missing (\(error))")
+            throw DatabaseCipher.CipherError(message: L10n.t("envelope_missing_error"))
+        }
+        let vek = try DatabaseCipher.unwrapVaultKey(envelope, password: password)
+        let plain = try DatabaseCipher.decryptBody(data, vaultKey: vek)
         let db = try PasswordDatabase.parse(plain)
-        let vek = DatabaseCipher.generateVaultKey()
-        let body = try DatabaseCipher.encryptBody(plain, vaultKey: vek)
-        let envelope = try DatabaseCipher.wrapVaultKey(vek, password: password)
-        try body.write(to: url(for: name), options: .atomic)
-        try envelope.write(to: keyURL(for: name), options: .atomic)
-        Log.info("db", "loaded \"\(name).upw\" v1 → migrated to v2 (\(body.count)B + envelope)")
+        Log.debug("db", "loaded \"\(name).upw\" v2 (\(data.count)B, \(Int(Date().timeIntervalSince(t0) * 1000))ms)")
         return (db, vek)
     }
 
@@ -157,17 +156,15 @@ public final class DatabaseStore {
         Log.debug("db", "saved \"\(name).upw\" v2 (\(enc.count)B, \(Int(Date().timeIntervalSince(t0) * 1000))ms)")
     }
 
-    /// v1 兼容保存(低频路径:导入/AutoFill):v2 库解信封拿库密钥后走 v2 写;
-    /// 无信封的纯 v1 库保持旧写(下次 loadUnlocked 会迁移)。
-    public func save(_ db: PasswordDatabase, name: String, password: String) throws {
-        if fm.fileExists(atPath: keyURL(for: name).path),
-           let envelope = try? Data(contentsOf: keyURL(for: name)),
-           let vek = try? DatabaseCipher.unwrapVaultKey(envelope, password: password) {
-            try save(db, name: name, vaultKey: vek)
-            return
+    /// 写入外来信封原始字节(云端恢复/文件导入随本体一并带回的信封)。
+    /// 保留原始 changedAt,避免误触发改密时间戳判定。
+    /// - Throws: 字节不是合法信封时抛 envelope_missing_error
+    public func saveEnvelope(_ data: Data, for name: String) throws {
+        guard DatabaseCipher.envelopeChangedAt(data) != nil else {
+            Log.error("db", "saveEnvelope \"\(name)\" rejected: not a valid envelope")
+            throw DatabaseCipher.CipherError(message: L10n.t("envelope_missing_error"))
         }
-        let enc = try DatabaseCipher.encryptedData(db.xmlData(), password: password)
-        try enc.write(to: url(for: name), options: .atomic)
+        try data.write(to: keyURL(for: name), options: .atomic)
     }
 
     /// v2 改密:只重写信封(本体不动);调用方负责更新钥匙串。
@@ -229,7 +226,7 @@ public final class DatabaseStore {
 
     public func backupDir(for name: String) -> URL { backupsDir.appendingPathComponent(name, isDirectory: true) }
 
-    public func backup(name: String, password: String, now: Date = Date()) throws {
+    public func backup(name: String, now: Date = Date()) throws {
         let dir = backupDir(for: name)
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let data = try Data(contentsOf: url(for: name))
@@ -281,18 +278,19 @@ public final class DatabaseStore {
     public func restore(backup: URL, to name: String) throws {
         Log.info("backup", "restore \(backup.lastPathComponent) → \"\(name).upw\"")
         let data = try Data(contentsOf: backup)
-        let isV1 = DatabaseCipher.checkFileMagic(data)
-        let isV2 = DatabaseCipher.isV2Container(data)
-        guard isV1 || isV2 else {
-            Log.error("backup", "restore rejected: wrong file magic in \(backup.lastPathComponent)")
+        guard DatabaseCipher.isV2Container(data) else {
+            Log.error("backup", "restore rejected: not a v2 container in \(backup.lastPathComponent)")
             throw StoreError(L10n.t("wrong_database_format_error"))
         }
-        try data.write(to: url(for: name), options: .atomic)
-        // v2 本体需配套信封:同名 .upwkey 备份存在则一并恢复
+        // v2 本体必须配套信封,否则永远无法解锁
         let keyBackup = backup.deletingPathExtension().appendingPathExtension("upwkey")
-        if isV2, fm.fileExists(atPath: keyBackup.path) {
-            try? fm.copyItem(at: keyBackup, to: keyURL(for: name))
+        guard let envelope = try? Data(contentsOf: keyBackup),
+              DatabaseCipher.envelopeChangedAt(envelope) != nil else {
+            Log.error("backup", "restore rejected: envelope missing for \(backup.lastPathComponent)")
+            throw StoreError(L10n.t("envelope_missing_error"))
         }
+        try data.write(to: url(for: name), options: .atomic)
+        try envelope.write(to: keyURL(for: name), options: .atomic)
     }
 
     public struct StoreError: LocalizedError {

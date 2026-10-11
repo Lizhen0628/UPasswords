@@ -43,8 +43,23 @@ public enum PasswordStore {
         Log.logKeychain("save \"biometric\" for \(service(forDatabaseName: databaseName)) (\(password.count) chars)", status: status)
     }
 
-    public static func hasBiometricItem(databaseName: String) -> Bool {
-        let query: [String: Any] = [
+    /// 移除库的钥匙串密码副本(数据库项与生物识别项)。
+    /// 他机改密后强制锁定时调用:清掉旧密码副本,避免锁屏预填/生物识别
+    /// 用旧密码误导用户;重新解锁成功后由解锁路径自愈回写新密码。
+    public static func removePassword(databaseName: String) {
+        let base: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service(forDatabaseName: databaseName),
+        ]
+        for account in ["database", "biometric"] {
+            var query = base
+            query[kSecAttrAccount as String] = account
+            SecItemDelete(query as CFDictionary)
+        }
+        Log.logKeychain("remove password copies for \(service(forDatabaseName: databaseName))", status: errSecSuccess)
+    }
+
+    public static func hasBiometricItem(databaseName: String) -> Bool {        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service(forDatabaseName: databaseName),
             kSecAttrAccount as String: "biometric",

@@ -56,7 +56,13 @@ struct CardListView: View {
         Button(L10n.t("add_template_command")) { ctx.activeSheet = .addCard }
         Divider()
         Button(L10n.t("edit_command")) { ctx.editDraft = EditCardModel(card: card) }
-        Button(L10n.t("delete_command")) { ctx.trashCard(card.id) }
+        // 回收站内的「删除」必须是彻底删除——对已入回收站的项再执行 trashCard
+        // 是无效操作(表现为"删不掉");列表与详情页语义保持一致
+        if card.trashed {
+            Button(L10n.t("ios_purge_button"), role: .destructive) { ctx.deleteCardPermanently(card.id) }
+        } else {
+            Button(L10n.t("delete_command")) { ctx.trashCard(card.id) }
+        }
         Button(L10n.t("move_command")) { ctx.activeSheet = .labels(cardId: card.id) }
         Button(L10n.t("duplicate_command")) { ctx.duplicateCard(card.id) }
         Button(L10n.t("merge_command")) {}

@@ -208,14 +208,16 @@ struct LockWindowView: View {
     }
 
     private func unlock() {
-        do {
-            try ctx.unlock(name: ctx.databaseName, password: password)
-            password = ""
-            error = ""
-        } catch let err {
-            error = err.localizedDescription
-            ctx.registerFailedAttempt()
-            password = ""
+        Task { @MainActor in
+            // 远端兜底:他机改密轮换后本地本体过期,需拉远端收敛(见 AppContext 注释)
+            if await ctx.unlockWithRemoteFallback(name: ctx.databaseName, password: password) {
+                password = ""
+                error = ""
+            } else {
+                error = L10n.t("wrong_password_error")
+                ctx.registerFailedAttempt()
+                password = ""
+            }
         }
     }
 }
@@ -225,7 +227,7 @@ struct LockWindowView: View {
 struct SetupWindowView: View {
     @EnvironmentObject var ctx: AppContext
 
-    private enum SetupMode { case create, restoreCloud }
+    private enum SetupMode { case account, create, restoreCloud }
 
     @State private var mode: SetupMode = .create
     @State private var name = ""
@@ -244,7 +246,12 @@ struct SetupWindowView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
-            if mode == .create {
+            if mode == .account {
+                // 新装引导第一步:注册/登录先于建库(库就绪后自动补绑云同步)
+                AccountStepView(onDone: {
+                    mode = .create
+                })
+            } else if mode == .create {
                 Spacer()
                 createForm
                 Spacer()
@@ -274,6 +281,12 @@ struct SetupWindowView: View {
         .frame(minWidth: 680, minHeight: 560)
         .background(.regularMaterial)
         .background(WindowChromeConfigurator(mode: .plain))
+        .onAppear {
+            if ctx.relayOnboardingNeeded {
+                Log.info("ui", "setup: account step shown first (fresh install, never signed in)")
+                mode = .account
+            }
+        }
     }
 
     private var createForm: some View {
@@ -339,6 +352,77 @@ struct SetupWindowView: View {
             try ctx.createDatabase(name: name, password: password, touchID: touchID)
         } catch let err {
             self.error = err.localizedDescription
+        }
+    }
+}
+
+/// 新装引导第一步:邮箱验证码注册/登录(先于创建/恢复库完成,必经无跳过)。
+/// 库就绪后由 AppContext.relayBindCurrentVaultIfNeeded 自动补绑云同步。
+private struct AccountStepView: View {
+    @EnvironmentObject var ctx: AppContext
+    var onDone: () -> Void
+
+    @State private var email = ""
+    @State private var code = ""
+    @State private var busy = false
+    @State private var error = ""
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Spacer()
+            Text(L10n.t("relay_onboarding_title"))
+                .font(.title2.bold())
+            Text(L10n.t("relay_onboarding_hint"))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+            GroupBox {
+                VStack(alignment: .leading, spacing: 10) {
+                    LabeledRow(label: L10n.t("relay_email_placeholder")) {
+                        TextField("", text: $email)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    LabeledRow(label: L10n.t("relay_code_placeholder")) {
+                        SecureField("", text: $code)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+                .frame(maxWidth: 380)
+            }
+            if !error.isEmpty {
+                Text(error).foregroundStyle(.red).font(.callout)
+            }
+            HStack {
+                Button(L10n.t("relay_send_code_button")) {
+                    Log.info("ui", "setup: onboarding code request")
+                    busy = true
+                    let address = email.trimmingCharacters(in: .whitespaces)
+                    Task {
+                        await ctx.relaySendCode(email: address)
+                        busy = false
+                    }
+                }
+                .disabled(!email.contains("@" ) || busy)
+                Button(L10n.t("relay_login_button")) {
+                    Log.info("ui", "setup: onboarding login")
+                    busy = true
+                    let address = email.trimmingCharacters(in: .whitespaces)
+                    let entered = code
+                    code = ""
+                    Task {
+                        if await ctx.relayLoginOnly(email: address, code: entered) {
+                            onDone()
+                        }
+                        busy = false
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(email.isEmpty || code.count < 6 || busy)
+            }
+            .padding(.bottom, 28)
+            Spacer()
         }
     }
 }

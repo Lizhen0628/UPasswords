@@ -12,13 +12,23 @@ struct ExportAsSheet: View {
 
     @State private var shareItems: [Any] = []
     @State private var showShare = false
+    // 导出前验密:数据文件一旦落盘即为明文,必须确认持库者本人
+    @State private var pendingFormat: ExportFormat? = nil
+    @State private var gatePassword = ""
+    @State private var showGate = false
+    @State private var gateFailed = false
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
                     ForEach(ExportFormat.allCases) { format in
-                        Button { export(format) } label: {
+                        Button {
+                            pendingFormat = format
+                            gatePassword = ""
+                            gateFailed = false
+                            showGate = true
+                        } label: {
                             Label(format.name, systemImage: icon(format))
                                 .foregroundStyle(.primary)
                         }
@@ -35,7 +45,53 @@ struct ExportAsSheet: View {
                 }
             }
             .sheet(isPresented: $showShare) { ActivityView(items: shareItems) }
+            .sheet(isPresented: $showGate) { passwordGate }
         }
+    }
+
+    /// 导出验密弹层:输入库主密码验证通过后才生成数据文件。
+    private var passwordGate: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    SecureField(L10n.t("export_password_prompt"), text: $gatePassword)
+                } footer: {
+                    Text(L10n.t("export_password_hint"))
+                }
+                if gateFailed {
+                    Text(L10n.t("wrong_password_error"))
+                        .foregroundStyle(.red)
+                }
+            }
+            .navigationTitle(L10n.t("export_as_title"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L10n.t("cancel_button")) {
+                        showGate = false
+                        pendingFormat = nil
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L10n.t("continue_button")) {
+                        guard vault.verifyMaster(gatePassword) else {
+                            gateFailed = true
+                            gatePassword = ""
+                            Log.warn("app", "ios export rejected: wrong vault password")
+                            return
+                        }
+                        showGate = false
+                        if let format = pendingFormat {
+                            export(format)
+                        }
+                        pendingFormat = nil
+                        gatePassword = ""
+                    }
+                    .disabled(gatePassword.isEmpty)
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 
     private func icon(_ format: ExportFormat) -> String {

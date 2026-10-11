@@ -2,13 +2,12 @@ import Foundation
 import CryptoKit
 
 import UPasswordsCore
-import UPasswordsNetworking
 import UPasswordsPersistence
 
 // MARK: - iOS 云同步:驱动构造/手动与自动同步/冲突裁决(与 macOS 同一套判定语义)
 //
 // 复用 Persistence 的 CloudDriver(WebDAV / iCloud Drive)、SyncConflict 基线判定与
-// PasswordDatabase.merge 收敛合并;密文经主密码加解密,基线哈希存共享 defaults。
+// PasswordDatabase.merge 收敛合并;本体经库密钥加解密(v2 信封),基线哈希存共享 defaults。
 
 extension Vault {
     // MARK: 同步进行态
@@ -146,17 +145,8 @@ extension Vault {
         }
     }
 
-    /// 主密码变更后的云端接力:远端容器仍是旧密码加密,用旧密码解密合并后
-    /// 以新密码重传并重设基线;失败仅记日志,下次同步走「远端不可解密」修复路径。
-    /// 推送本地信封到 upasswords.com 零知识通道(改密/覆盖后调用)。
-    private func pushEnvelopeToCloudAPI() async {
-        guard cloudAPIEnabled, let vaultKey,
-              let envelope = store.envelopeData(for: databaseName) else { return }
-        let changedAt = DatabaseCipher.envelopeChangedAt(envelope) ?? Date()
-        await CloudEnvelopeService.push(vaultKey: vaultKey, envelope: envelope, changedAt: changedAt)
-    }
-
-    /// 改主密码后的云端接力:v2 只需上传本地信封(~100B),本体不重传。
+    /// 改主密码后的云端接力:v2 只需上传本地信封(~100B),本体不重传;
+    /// 信封同时推送到网盘副本与 API 注册表(强一致通道)。
     func uploadCloudEnvelope() async {
         guard let mounted = makeCloudDriver(),
               let envelope = store.envelopeData(for: databaseName) else { return }
@@ -164,20 +154,19 @@ extension Vault {
         do {
             try await mounted.driver.testConnection()
             try await mounted.driver.uploadKey(envelope)
-            await pushEnvelopeToCloudAPI()
+            await relayPushEnvelope()
             Log.info("sync", "ios cloud handoff: envelope uploaded (\(envelope.count)B) after password change")
         } catch {
             Log.warn("sync", "ios cloud envelope handoff failed: \(error)")
         }
     }
 
-    /// 接管远端的结果:成功 / 密码不对 / 远端是「锁屏同步空库覆盖」残骸
-    /// (空密码加密,任何真实密码都解不开,只能用本地覆盖恢复)。
+    /// 接管远端的结果:成功 / 密码不对。
     enum AdoptResult {
-        case success, wrongPassword, emptyClobber
+        case success, wrongPassword
     }
 
-    /// 双端各自从 v1 迁移会产生不同库密钥;以云端信封为准收敛库身份
+    /// 双端各自独立建库会产生不同库密钥;以云端信封为准收敛库身份
     /// (本地本体换密钥重写 + 信封重裹,此后双端同身份,不再分歧)。
     private func joinRemoteVaultIdentity(_ remoteVEK: SymmetricKey) {
         let differs = vaultKey.map {
@@ -196,20 +185,32 @@ extension Vault {
 
     /// 远端用「其他设备改后的新主密码」加密时的接管流程:
     /// 输入新密码 → 解密远端并合并进本地 → 本地以新密码重加密落盘并更新钥匙串
-    /// → 上传合并结果。
+    /// → 上传合并结果。库体通道:relay 绑定时走 API 副本,否则走网盘。
     @discardableResult
     func adoptRemotePassword(_ newPassword: String) async -> AdoptResult {
-        guard let mounted = makeCloudDriver() else { return .wrongPassword }
-        defer { mounted.releaseAccess?() }
+        let apiBinding = relay.binding(database: databaseName)
+        let apiToken = relay.token(database: databaseName)
+        let apiReady = apiBinding != nil && apiToken != nil
+        let mounted = makeCloudDriver()
+        defer { mounted?.releaseAccess?() }
         do {
-            try await mounted.driver.testConnection()
-            // 信封取最新来源:upasswords.com 通道通常比云端驱动更快
-            var keyData = try await mounted.driver.downloadKey()
-            if let vaultKey, cloudAPIEnabled,
-               let apiEnvelope = await CloudEnvelopeService.fetch(vaultKey: vaultKey)?.envelope {
+            if !apiReady {
+                guard let mounted else { return .wrongPassword }
+                try await mounted.driver.testConnection()
+            }
+            // 信封取最新来源:API 注册表(强一致)通常比云端驱动更快
+            var keyData: Data?
+            if let mounted, !apiReady {
+                keyData = try await mounted.driver.downloadKey()
+            }
+            if let record = await relayRegistryRecord(), let apiEnvelope = record.envelope {
                 let apiChanged = DatabaseCipher.envelopeChangedAt(apiEnvelope) ?? .distantPast
                 let driverChanged = keyData.flatMap { DatabaseCipher.envelopeChangedAt($0) } ?? .distantPast
                 if apiChanged > driverChanged { keyData = apiEnvelope }
+            }
+            if apiReady, keyData == nil {
+                // API 通道无网盘信封可读:直接以注册表信封为源
+                if let record = await relayRegistryRecord() { keyData = record.envelope }
             }
             // v2 路径:只需解开远端信封——收敛库身份(云端为准),顺带合并本体
             if let keyData {
@@ -224,7 +225,13 @@ extension Vault {
                 if PasswordStore.hasBiometricItem(databaseName: databaseName) {
                     PasswordStore.savePasswordForBiometric(newPassword, databaseName: databaseName)
                 }
-                if let remoteData = try await mounted.driver.download(),
+                let remoteBody: Data?
+                if let apiBinding, let apiToken {
+                    remoteBody = try? await relayClient.getBody(token: apiToken, vaultId: apiBinding.vaultId)
+                } else {
+                    remoteBody = try await mounted?.driver.download()
+                }
+                if let remoteData = remoteBody,
                    DatabaseCipher.isV2Container(remoteData),
                    let plain = try? DatabaseCipher.decryptBody(remoteData, vaultKey: remoteVEK),
                    let remote = try? PasswordDatabase.parse(plain) {
@@ -233,47 +240,21 @@ extension Vault {
                     database = merged
                     try store.save(merged, name: databaseName, vaultKey: remoteVEK)
                     let out = try DatabaseCipher.encryptBody(merged.xmlData(), vaultKey: remoteVEK)
-                    try await mounted.driver.upload(out)
-                    recordSyncBaseline(uploaded: out)
+                    if let apiBinding, let apiToken {
+                        try await relayClient.putBody(token: apiToken, vaultId: apiBinding.vaultId, cipher: out)
+                        await relayReportHashes(cipher: out)
+                    } else {
+                        try await mounted?.driver.upload(out)
+                    }
+                    recordSyncBaseline()
                 }
                 syncRemoteUnreadable = false
                 Log.info("sync", "ios adopted new password via envelope (identity converged, body merged)")
                 return .success
             }
-            // v1 兼容路径(或库重建):新密码解密远端本体 → 合并 → 本地重加密 → 重传
-            guard let remoteData = try await mounted.driver.download() else {
-                return .wrongPassword
-            }
-            guard let plain = try? DatabaseCipher.decryptedData(remoteData, password: newPassword),
-                  let remote = try? PasswordDatabase.parse(plain) else {
-                // 已知事故形态自检:锁屏态同步曾以空密码上传空库覆盖云端
-                if let emptyPlain = try? DatabaseCipher.decryptedData(remoteData, password: ""),
-                   let empty = try? PasswordDatabase.parse(emptyPlain), empty.cards.isEmpty {
-                    Log.error("sync", "ios remote is the empty-vault clobber (locked-sync artifact) — user must overwrite with local")
-                    return .emptyClobber
-                }
-                Log.warn("sync", "ios adopt remote password failed: cannot decrypt with given password")
-                return .wrongPassword
-            }
-            var merged = database
-            merged.merge(with: remote)
-            database = merged
-            guard let vaultKey else { return .wrongPassword }
-            try store.save(merged, name: databaseName, vaultKey: vaultKey)
-            try store.rewrap(name: databaseName, vaultKey: vaultKey, newPassword: newPassword)
-            password = newPassword
-            PasswordStore.savePassword(newPassword, databaseName: databaseName)
-            if PasswordStore.hasBiometricItem(databaseName: databaseName) {
-                PasswordStore.savePasswordForBiometric(newPassword, databaseName: databaseName)
-            }
-            try await mounted.driver.upload(try DatabaseCipher.encryptBody(merged.xmlData(), vaultKey: vaultKey))
-            if let envelope = store.envelopeData(for: databaseName) {
-                try await mounted.driver.uploadKey(envelope)
-            }
-            recordSyncBaseline(uploaded: try DatabaseCipher.encryptBody(merged.xmlData(), vaultKey: vaultKey))
-            syncRemoteUnreadable = false
-            Log.info("sync", "ios adopted remote password: merged \(remote.cards.count) remote cards (v1 path)")
-            return .success
+            // 远端无信封:库已损坏或不完整,无法接管——只能用本地覆盖
+            Log.warn("sync", "ios adopt failed: remote has no envelope")
+            return .wrongPassword
         } catch {
             Log.warn("sync", "ios adopt remote password failed: \(error)")
             return .wrongPassword
@@ -283,18 +264,28 @@ extension Vault {
     /// 远端不可解密(旧主密码加密/数据损坏)时的修复:以当前密码重传本地库并重设基线。
     /// 会丢弃云端现有内容,UI 层须先经用户确认。
     func overwriteUnreadableRemote() async {
-        guard let mounted = makeCloudDriver(), let vaultKey else { return }
-        defer { mounted.releaseAccess?() }
+        let apiBinding = relay.binding(database: databaseName)
+        let apiToken = relay.token(database: databaseName)
+        let apiReady = apiBinding != nil && apiToken != nil
+        let mounted = makeCloudDriver()
+        defer { mounted?.releaseAccess?() }
+        guard apiReady || mounted != nil, let vaultKey else { return }
         syncState = .syncing
         do {
-            try await mounted.driver.testConnection()
             let out = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
-            try await mounted.driver.upload(out)
-            if let envelope = store.envelopeData(for: databaseName) {
-                try await mounted.driver.uploadKey(envelope)
+            if let apiBinding, let apiToken {
+                try await relayClient.putBody(token: apiToken, vaultId: apiBinding.vaultId, cipher: out)
+                await relayReportHashes(cipher: out)
+            } else {
+                guard let mounted else { return }
+                try await mounted.driver.testConnection()
+                try await mounted.driver.upload(out)
+                if let envelope = store.envelopeData(for: databaseName) {
+                    try await mounted.driver.uploadKey(envelope)
+                }
             }
-            await pushEnvelopeToCloudAPI()
-            recordSyncBaseline(uploaded: out)
+            await relayPushEnvelope()
+            recordSyncBaseline()
             syncRemoteUnreadable = false
             syncState = .idle
             Log.info("sync", "ios sync \"\(databaseName)\": overwrote unreadable remote (\(out.count)B)")
@@ -307,14 +298,18 @@ extension Vault {
         }
     }
 
-    /// 上次成功同步的基线哈希键(按数据库分开):本地明文 XML 与远端容器字节。
+    /// 上次成功同步的基线哈希键(按数据库分开):本地键与远端键均存
+    /// 明文 XML **内容**哈希(远端不比密文字节:密文每次上传换随机 nonce,
+    /// 同内容重传会被误判为远端有修改)。
     private var baselineLocalXMLKey: String { "sync.baseline.local.\(databaseName)" }
     private var baselineRemoteDataKey: String { "sync.baseline.remote.\(databaseName)" }
 
     /// 记录本次成功同步的基线哈希与完成时间,供下次同步做冲突判定。
-    private func recordSyncBaseline(uploaded: Data) {
-        d.set(SyncConflict.sha256Hex(database.xmlData()), forKey: baselineLocalXMLKey)
-        d.set(SyncConflict.sha256Hex(uploaded), forKey: baselineRemoteDataKey)
+    /// 调用前提:此刻 `database` 即为刚上传(或确认与远端一致)的内容。
+    private func recordSyncBaseline() {
+        let contentHash = SyncConflict.sha256Hex(database.xmlData())
+        d.set(contentHash, forKey: baselineLocalXMLKey)
+        d.set(contentHash, forKey: baselineRemoteDataKey)
         d.set(Date().timeIntervalSince1970, forKey: "sync.last.\(databaseName)")
         lastSync = Date()
         Log.debug("sync", "ios baseline recorded for \"\(databaseName)\"")
@@ -348,17 +343,20 @@ extension Vault {
         Log.debug("sync", "ios auto-sync ticker installed")
     }
 
-    /// 到期检查:启用自动同步、云端可用、非同步中才发起;有未决冲突时不再发起新同步
-    /// (冲突弹窗由 RootView 常驻呈现,裁决后恢复)。
+    /// 到期检查:启用自动同步、同步通道可用(relay API 或网盘)、非同步中才发起;
+    /// 有未决冲突时不再发起新同步(冲突弹窗由 RootView 常驻呈现,裁决后恢复)。
     func autoSyncTick() {
-        guard !locked, autoSyncEnabled, cloud.functional, cloud != .none,
+        let relayReady = relay.binding(database: databaseName) != nil && relay.token(database: databaseName) != nil
+        guard !locked, autoSyncEnabled, relayReady || (cloud.functional && cloud != .none),
               syncState != .syncing else { return }
-        // 云端未就绪(iCloud 未选文件夹 / WebDAV 未填主机)时保持安静:
-        // 不刷"到期"日志,也不进同步流程,配置齐了下一跳自然恢复
-        switch cloud {
-        case .icloud: guard hasICloudFolder else { return }
-        case .webdav: guard !webdav.host.isEmpty else { return }
-        default: return
+        // 网盘通道就绪性检查(API 通道无网盘前置);未就绪保持安静,
+        // 不刷"到期"日志,配置齐了下一跳自然恢复
+        if !relayReady {
+            switch cloud {
+            case .icloud: guard hasICloudFolder else { return }
+            case .webdav: guard !webdav.host.isEmpty else { return }
+            default: return
+            }
         }
         if pendingSyncConflict != nil { return }
         let interval = TimeInterval(max(autoSyncSeconds, Self.minAutoSyncSeconds))
@@ -381,19 +379,20 @@ extension Vault {
             Log.warn("sync", "ios sync skipped: vault locked")
             return
         }
-        guard cloud != .none else {
+        // API 数据面(relay 绑定的默认通道):库体直连 relay(R2 副本),
+        // 网盘仅在"API 尚无副本"时作迁移兜底;未绑定 relay 才走纯网盘路径。
+        let apiBinding = relay.binding(database: databaseName)
+        let apiToken = relay.token(database: databaseName)
+        let apiMode = apiBinding != nil && apiToken != nil
+        guard apiMode || cloud != .none else {
             syncState = .idle
-            Log.debug("sync", "ios sync skipped: cloud disabled")
+            Log.debug("sync", "ios sync skipped: cloud disabled and relay not bound")
             if !auto { showToast(L10n.t("sync_disabled_state")) }
             return
         }
-        guard let mounted = makeCloudDriver() else {
-            Log.debug("sync", "ios sync skipped: cloud=\(cloud.rawValue) not configured")
-            if !auto { showToast(L10n.t("not_configured_state")) }
-            return
-        }
-        let driver = mounted.driver
-        defer { mounted.releaseAccess?() }
+        let mounted = makeCloudDriver()
+        let driver = mounted?.driver
+        defer { mounted?.releaseAccess?() }
         guard !syncInFlight else {
             Log.debug("sync", "ios sync skipped: already in flight")
             return
@@ -402,48 +401,65 @@ extension Vault {
         syncState = .syncing
         lastSyncAttempt = Date()
         defer { syncInFlight = false }
-        Log.info("sync", "ios sync \"\(databaseName)\" started (\(cloud.rawValue)\(auto ? ", auto" : ""))")
+        Log.info("sync", "ios sync \"\(databaseName)\" started (\(apiMode ? "relay-api" : cloud.rawValue)\(auto ? ", auto" : ""))")
         persist()
         do {
-            try await driver.testConnection()
-            // upasswords.com 信封通道(强一致零知识):优先于云端驱动发现改密
+            if !apiMode {
+                guard let driver else {
+                    throw SyncError.notConfigured
+                }
+                try await driver.testConnection()
+            }
+            // API 注册表(强一致):信封决胜 + 密码版本高水位 + 内容短路
             var sessionKey = vaultKey
             var driverEnvelopeNeeded = true
-            if let vaultKey, cloudAPIEnabled,
-               let remote = await CloudEnvelopeService.fetch(vaultKey: vaultKey) {
+            let knownVersionBeforeFetch = relay.knownPasswordVersion(database: databaseName) ?? 0
+            if let record = await relayRegistryRecord() {
                 let localChangedAt = store.envelopeData(for: databaseName)
                     .flatMap { DatabaseCipher.envelopeChangedAt($0) } ?? .distantPast
-                if remote.changedAt.timeIntervalSince(localChangedAt) > 1 {
-                    if let remoteVEK = try? DatabaseCipher.unwrapVaultKey(remote.envelope, password: password) {
+                let remoteChangedAt = record.envelopeChangedAt ?? .distantPast
+                if let remoteEnvelope = record.envelope,
+                   remoteChangedAt.timeIntervalSince(localChangedAt) > 1 {
+                    if let remoteVEK = try? DatabaseCipher.unwrapVaultKey(remoteEnvelope, password: password) {
                         joinRemoteVaultIdentity(remoteVEK)
                         sessionKey = remoteVEK
-                        // 云端驱动的信封追平(iCloud/WebDAV 上还是改密前的旧信封)
-                        if let envelope = store.envelopeData(for: databaseName) {
-                            try? await driver.uploadKey(envelope)
+                        // 云端驱动的信封追平(iCloud/WebDAV 上还是改密前的旧信封;
+                        // 仅网盘通道需要——API 通道以注册表为强一致源)
+                        if !apiMode, let envelope = store.envelopeData(for: databaseName) {
+                            try? await driver?.uploadKey(envelope)
                         }
                         driverEnvelopeNeeded = false
-                        Log.info("sync", "ios cloud api envelope adopted (remote changedAt newer)")
+                        Log.info("sync", "ios relay envelope adopted (remote changedAt newer)")
+                    } else if record.passwordVersion > knownVersionBeforeFetch {
+                        // 版本前进 + 会话密码解不开新信封 = 他机改密 → 强制锁定换新密码
+                        Log.warn("sync", "ios sync detected remote password change (version → \(record.passwordVersion))")
+                        forceLockForRemotePasswordChange(remoteEnvelope)
+                        return
                     } else {
                         syncRemoteUnreadable = true
                         syncState = .failed(L10n.t("sync_remote_unreadable_error"))
-                        Log.error("sync", "ios cloud api envelope unwrap failed — peer changed password")
+                        Log.error("sync", "ios relay envelope unwrap failed")
                         if !auto { showToast(L10n.t("sync_remote_unreadable_error")) }
                         return
                     }
-                } else if localChangedAt.timeIntervalSince(remote.changedAt) > 1,
-                          let envelope = store.envelopeData(for: databaseName) {
-                    // 本地信封更新:自愈推送到 API 通道
-                    Task { await CloudEnvelopeService.push(vaultKey: vaultKey, envelope: envelope, changedAt: localChangedAt) }
+                } else if localChangedAt.timeIntervalSince(remoteChangedAt) > 1,
+                          store.envelopeData(for: databaseName) != nil {
+                    // 本地信封更新(含注册表尚无信封的首次接入):自愈推送
+                    Task { await relayPushEnvelope() }
                 }
-            } else if let vaultKey, cloudAPIEnabled,
-                      let envelope = store.envelopeData(for: databaseName) {
-                // API 侧尚无记录(首次接入):登记本地信封
-                let changedAt = DatabaseCipher.envelopeChangedAt(envelope) ?? Date()
-                Task { await CloudEnvelopeService.push(vaultKey: vaultKey, envelope: envelope, changedAt: changedAt) }
+                // 内容短路:本地明文 XML == 注册表内容 → 本轮零网盘操作
+                if let remoteXml = record.xmlSha256,
+                   remoteXml == SyncConflict.sha256Hex(database.xmlData()) {
+                    lastSync = Date()
+                    syncState = .idle
+                    Log.info("sync", "ios relay short-circuit: content unchanged — skipping drive round-trip")
+                    if !auto { showToast(L10n.t("last_sync_completed_prompt")) }
+                    return
+                }
             }
-            // v2 信封先行(与 macOS 同语义):远端有信封 → 本体用库密钥解密;
-            // 信封解不开 = 对端刚改密 → 弹窗接管;无信封 = v1 远端(兼容期)
-            if driverEnvelopeNeeded, let keyData = try await driver.downloadKey() {
+            // v2 信封先行(网盘通道;API 通道已在注册表决胜采用,无需网盘信封):
+            // 远端有信封 → 本体用库密钥解密;信封解不开 = 对端刚改密 → 弹窗接管
+            if driverEnvelopeNeeded, !apiMode, let keyData = try await driver?.downloadKey() {
                 if let remoteVEK = try? DatabaseCipher.unwrapVaultKey(keyData, password: password) {
                     sessionKey = remoteVEK
                     joinRemoteVaultIdentity(remoteVEK)
@@ -455,17 +471,26 @@ extension Vault {
                     return
                 }
             }
-            let remoteData = try await driver.download()
+            // 库体拉取:API 通道默认 relay 副本;API 尚无副本(老库首次迁移)
+            // 时回退网盘;未绑定 relay 的存量用户直接走网盘。
+            let remoteData: Data?
+            if apiMode, let apiBinding, let apiToken {
+                do {
+                    remoteData = try await relayClient.getBody(token: apiToken, vaultId: apiBinding.vaultId)
+                } catch RelayClient.RelayError.notFound {
+                    remoteData = try await driver?.download()
+                    Log.info("sync", "ios relay body absent — migration fallback to drive (\(remoteData != nil ? "found" : "empty"))")
+                }
+            } else {
+                remoteData = try await driver?.download()
+            }
             var local = database
             if let remoteData {
                 let plain: Data
                 do {
-                    if DatabaseCipher.isV2Container(remoteData) {
-                        guard let sessionKey else { throw SyncError.wrongPassword }
-                        plain = try DatabaseCipher.decryptBody(remoteData, vaultKey: sessionKey)
-                    } else {
-                        plain = try DatabaseCipher.decryptedData(remoteData, password: password)
-                    }
+                    // iCloud 驱动已保证 v2 魔数;无库密钥说明信封环节已失败
+                    guard let sessionKey else { throw SyncError.wrongPassword }
+                    plain = try DatabaseCipher.decryptBody(remoteData, vaultKey: sessionKey)
                 } catch {
                     // 远端仍是旧主密码加密(或已损坏):不进入合并,挂起修复入口由用户裁决
                     syncRemoteUnreadable = true
@@ -477,13 +502,15 @@ extension Vault {
                 let remote = try PasswordDatabase.parse(plain)
                 Log.info("sync", "ios remote: \(remote.cards.count) cards, \(remote.labels.count) labels; local: \(local.cards.count) cards")
                 let localHash = SyncConflict.sha256Hex(local.xmlData())
-                let remoteHash = SyncConflict.sha256Hex(remoteData)
+                // 远端比较用「明文内容哈希」而非密文字节:密文每次上传都换随机
+                // nonce,同样内容重传后哈希必变,会被误判为远端有修改(双端乒乓)
+                let remoteHash = SyncConflict.sha256Hex(remote.xmlData())
                 let verdict = SyncConflict.evaluate(
                     localXMLHash: localHash,
-                    remoteDataHash: remoteHash,
+                    remoteXMLHash: remoteHash,
                     baselines: SyncConflict.Baselines(
                         localXMLHash: d.string(forKey: baselineLocalXMLKey),
-                        remoteDataHash: d.string(forKey: baselineRemoteDataKey)))
+                        remoteXMLHash: d.string(forKey: baselineRemoteDataKey)))
                 guard verdict != .conflict else {
                     // 本地与云端自上次同步后都有修改:交给用户决定覆盖方向
                     Log.warn("sync", "ios conflict \"\(databaseName)\": local and remote both changed — asking user")
@@ -510,17 +537,59 @@ extension Vault {
                 local.merge(with: remote)
                 database = local
                 persist()
+                // 合并后内容与远端一致(本地原本落后,纯拉取场景):本地无可贡献,
+                // 不回传——回传只会刷新密文 nonce,徒增对端"远端变更"误判
+                if SyncConflict.sha256Hex(database.xmlData()) == remoteHash {
+                    recordSyncBaseline()
+                    syncState = .idle
+                    Log.info("sync", "ios merged content equals remote — skipping upload")
+                    if !auto { showToast(L10n.t("last_sync_completed_prompt")) }
+                    return
+                }
             } else {
                 Log.info("sync", "ios no remote database yet — uploading local")
+            }
+            guard let vaultKey else {
+                Log.error("sync", "ios sync aborted: no vault key in session")
+                syncState = .failed(L10n.t("sync_error"))
+                return
+            }
+            let out = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
+            if apiMode, let apiBinding, let apiToken {
+                // 读-改-写护栏(API):提交前再取一次,窗口内有他机提交先并入
+                if let seen = remoteData,
+                   let fresh = try? await relayClient.getBody(token: apiToken, vaultId: apiBinding.vaultId),
+                   fresh != seen,
+                   let freshPlain = try? DatabaseCipher.decryptBody(fresh, vaultKey: vaultKey),
+                   let freshRemote = try? PasswordDatabase.parse(freshPlain) {
+                    var merged = database
+                    merged.merge(with: freshRemote)
+                    database = merged
+                    persist()
+                    Log.warn("sync", "ios relay body changed mid-sync — merged fresh remote (\(freshRemote.cards.count) cards) before commit")
+                }
+                try await relayClient.putBody(token: apiToken, vaultId: apiBinding.vaultId, cipher: out)
+                await relayReportHashes(cipher: out)
+                recordSyncBaseline()
+                syncRemoteUnreadable = false
+                syncState = .idle
+                Log.info("sync", "ios sync \"\(databaseName)\" finished via relay api (uploaded \(out.count)B)")
+                if !auto { showToast(L10n.t("last_sync_completed_prompt")) }
+                return
+            }
+            // —— 网盘通道(未绑定 relay 的存量路径)——
+            guard let driver else {
+                syncState = .failed(L10n.t("not_configured_state"))
+                Log.error("sync", "ios sync aborted: no cloud driver for drive path")
+                return
             }
             // 读-改-写竞态护栏(与 macOS 同款):上传前再取一次远端,版本变了
             // 先合并再传;新远端解不开(对端刚改密)则中止上传走接管流程
             if let fresh = try await driver.download() {
                 let seenHash = remoteData.map { SyncConflict.sha256Hex($0) }
                 if SyncConflict.sha256Hex(fresh) != seenHash {
-                    let freshPlain = DatabaseCipher.isV2Container(fresh)
-                        ? sessionKey.flatMap { try? DatabaseCipher.decryptBody(fresh, vaultKey: $0) }
-                        : try? DatabaseCipher.decryptedData(fresh, password: password)
+                    // 远端在同步窗口内被对端改写:v2 容器用信封阶段确认的库密钥解密
+                    let freshPlain = sessionKey.flatMap { try? DatabaseCipher.decryptBody(fresh, vaultKey: $0) }
                     if let freshPlain,
                        let freshRemote = try? PasswordDatabase.parse(freshPlain) {
                         var merged = database
@@ -536,22 +605,22 @@ extension Vault {
                     }
                 }
             }
-            guard let vaultKey else {
-                Log.error("sync", "ios sync aborted: no vault key in session")
-                syncState = .failed(L10n.t("sync_error"))
-                return
-            }
-            let out = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
-            try await driver.upload(out)
-            // 远端缺信封则补传(v1→v2 迁移后的首次同步;之后仅改密时传)
+            let driveOut = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
+            // 上传前把远端当前件留档为 .upw.old(上传失败的恢复点;失败不阻塞上传)
+            try? await driver.backupRemoteForUpload()
+            try await driver.upload(driveOut)
+            // 远端缺信封则补传(首次同步;之后仅改密时传)
             if try await driver.downloadKey() == nil, let envelope = store.envelopeData(for: databaseName) {
                 try await driver.uploadKey(envelope)
                 Log.info("sync", "ios cloud envelope uploaded (first v2 sync)")
             }
-            recordSyncBaseline(uploaded: out)
+            // 网盘上传成功 → 上报双哈希 + 推库体副本(扩展数据通路;失败下轮自愈)
+            await relayReportHashes(cipher: driveOut)
+            await relayPushBody(cipher: driveOut)
+            recordSyncBaseline()
             syncRemoteUnreadable = false
             syncState = .idle
-            Log.info("sync", "ios sync \"\(databaseName)\" finished (uploaded \(out.count)B)")
+            Log.info("sync", "ios sync \"\(databaseName)\" finished (uploaded \(driveOut.count)B)")
             if !auto {
                 showToast(L10n.t("last_sync_completed_prompt") + " "
                     + (lastSync?.formatted(date: .abbreviated, time: .shortened) ?? ""))
@@ -573,27 +642,43 @@ extension Vault {
     func resolveSyncConflict(useLocal: Bool) async {
         guard let conflict = pendingSyncConflict else { return }
         pendingSyncConflict = nil
-        guard let mounted = makeCloudDriver() else {
-            syncState = .idle
-            Log.warn("sync", "ios conflict resolution \"\(databaseName)\" aborted: cloud not configured")
-            return
-        }
-        let driver = mounted.driver
-        defer { mounted.releaseAccess?() }
         Log.info("sync", "ios conflict resolution \"\(databaseName)\": overwrite \(useLocal ? "remote with local" : "local with remote")")
         syncState = .syncing
         do {
             if !useLocal {
                 // 用云端覆盖本地:整库替换为远端版本并落盘
-                let plain = try DatabaseCipher.decryptedData(conflict.remoteData, password: password)
+                guard let vaultKey else {
+                    syncState = .idle
+                    Log.error("sync", "ios conflict resolution aborted: no vault key in session")
+                    return
+                }
+                let plain = try DatabaseCipher.decryptBody(conflict.remoteData, vaultKey: vaultKey)
                 let remote = try PasswordDatabase.parse(plain)
                 database = remote
                 persist()
                 Log.info("sync", "ios local replaced by remote (\(remote.cards.count) cards, \(remote.labels.count) labels)")
             }
-            let out = try DatabaseCipher.encryptedData(database.xmlData(), password: password)
-            try await driver.upload(out)
-            recordSyncBaseline(uploaded: out)
+            guard let vaultKey else {
+                syncState = .idle
+                Log.error("sync", "ios conflict resolution aborted: no vault key in session")
+                return
+            }
+            let out = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
+            // API 通道:裁决结果提交到 relay;存量网盘用户走网盘
+            if let binding = relay.binding(database: databaseName),
+               let token = relay.token(database: databaseName) {
+                try await relayClient.putBody(token: token, vaultId: binding.vaultId, cipher: out)
+                await relayReportHashes(cipher: out)
+            } else {
+                guard let mounted = makeCloudDriver() else {
+                    syncState = .idle
+                    Log.warn("sync", "ios conflict resolution \"\(databaseName)\" aborted: no sync channel")
+                    return
+                }
+                defer { mounted.releaseAccess?() }
+                try await mounted.driver.upload(out)
+            }
+            recordSyncBaseline()
             syncState = .idle
             Log.info("sync", "ios conflict resolution \"\(databaseName)\" finished (uploaded \(out.count)B)")
             showToast(L10n.t("last_sync_completed_prompt") + " "

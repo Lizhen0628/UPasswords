@@ -11,6 +11,25 @@ APP_PKG="Apple/macOS"
 echo "==> swift build -c $CONFIG ($APP_PKG)"
 (cd "$APP_PKG" && swift build -c "$CONFIG")
 
+# Safari 扩展独立容器 App(不依赖桌面完整版):扩展数据通路在 JS 内直连
+# relay API,容器仅承载 appex。失败仅告警(主 App 打包不受影响)。
+echo "==> xcodebuild Release (standalone Safari container)"
+if ! xcodebuild -quiet -workspace UPasswords.xcworkspace -scheme UPasswordsSafari \
+      -configuration Release build 2>/dev/null; then
+  echo "    WARNING: standalone Safari app build failed — skipping it"
+fi
+SAFARI_APP="$(ls -dt "$HOME/Library/Developer/Xcode/DerivedData/UPasswords-"*/Build/Products/Release/UPasswordsSafari.app 2>/dev/null | head -1)"
+if [ -n "$SAFARI_APP" ]; then
+  DEST="$OUT_DIR/UPasswords for Safari.app"
+  rm -rf "$DEST"
+  cp -R "$SAFARI_APP" "$DEST"
+  # xcodebuild 已整包签名(含 appex 的 sandbox/app-group entitlements),不再重签
+  xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
+  echo "==> packaged standalone Safari app ($(du -sh "$DEST" | cut -f1))"
+else
+  echo "    WARNING: standalone Safari app not found in build products"
+fi
+
 BIN="$APP_PKG/.build/$CONFIG/UPasswords"
 APP="$OUT_DIR/UPasswords.app"
 CONTENTS="$APP/Contents"
@@ -40,7 +59,7 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
     <key>CFBundleIdentifier</key>
     <string>com.upasswords.UPasswords</string>
     <key>CFBundleVersion</key>
-    <string>1000</string>
+    <string>$(date +%y%m%d%H%M)</string>
     <key>CFBundleShortVersionString</key>
     <string>1.0</string>
     <key>CFBundlePackageType</key>
@@ -70,5 +89,59 @@ fi
 # 菜单栏三钥匙 template 图随 SPM 资源打入 UPasswords_UPasswords.bundle(见上),
 # 由 StatusItemController 经 AppResources.bundle 加载。
 
+# 稳定签名:优先用开发证书,找不到才回退 ad-hoc。
+# ad-hoc 签名按代码哈希生效——每次重打包哈希都变,钥匙串把新包当陌生程序,
+# 周期性钥匙串访问(如云同步令牌)会被 macOS 逐次弹指纹/密码授权;
+# 开发证书身份跨构建稳定,授权一次永久生效。
+# entitlements 只带应用组:应用组容器(Group Containers)在 TCC 里属
+# 「其他 App 的数据」,不带该授权时 SafariSnapshotBridge 每次推送快照都会弹窗。
+# 注意:不加 --deep——appex 的 sandbox/app-group entitlements 必须保持
+# xcodebuild 给它的独立签名,父包的 entitlements 覆盖上去会毁掉沙盒配置。
+echo "==> codesign"
+IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep -m1 'Apple Development' | sed -E 's/.*"([^"]+)".*/\1/')"
+SIGN_ID="${IDENTITY:--}"
+# 签名顺序自内向外:SPM 资源 bundle 无签名须先逐个签掉;appex 保留 xcodebuild
+# 的独立签名不动;最后签父包。全程不用 --deep——它会用父包 entitlements
+# 覆盖 appex 的 sandbox/app-group,导致 Safari 拒绝托管扩展。
+for bundle in "$CONTENTS/MacOS/"*.bundle; do
+  [ -d "$bundle" ] || continue
+  codesign --force --sign "$SIGN_ID" "$bundle"
+done
+ENTITLEMENTS="Apple/macOS/UPasswords-dist.entitlements"
+codesign --force --entitlements "$ENTITLEMENTS" --sign "$SIGN_ID" "$APP"
+if [ -n "$IDENTITY" ]; then
+  echo "    signed with development identity: $IDENTITY"
+else
+  echo "    signed ad-hoc (no development identity found on this machine)"
+fi
+
 echo "==> $APP"
 du -sh "$APP"
+
+# /Applications 已有安装拷贝时同步替换(同 bundle id,Dock/LaunchServices 会优先
+# 打开 /Applications 那份——不同步的话用户点开的永远是旧版本)。
+if [ -d "/Applications/UPasswords.app" ] && [ "$OUT_DIR" != "/Applications" ]; then
+  rm -rf "/Applications/UPasswords.app"
+  cp -R "$APP" "/Applications/UPasswords.app"
+  xattr -dr com.apple.quarantine "/Applications/UPasswords.app" 2>/dev/null || true
+  echo "==> synced to /Applications/UPasswords.app"
+fi
+
+# 独立 Safari 容器 App 同步安装(Safari 扩展的稳定宿主,替代 DerivedData)
+if [ -n "$SAFARI_APP" ] && [ -d "$OUT_DIR/UPasswords for Safari.app" ] && [ "$OUT_DIR" != "/Applications" ]; then
+  rm -rf "/Applications/UPasswords for Safari.app"
+  cp -R "$OUT_DIR/UPasswords for Safari.app" "/Applications/UPasswords for Safari.app"
+  xattr -dr com.apple.quarantine "/Applications/UPasswords for Safari.app" 2>/dev/null || true
+  echo "==> synced to /Applications/UPasswords for Safari.app"
+fi
+
+# 扩展注册锚定到成品包位置(独立容器 App);DerivedData 注册易被 clean 清掉。
+if [ -n "$SAFARI_APP" ] && [ -d "$OUT_DIR/UPasswords for Safari.app" ]; then
+  pluginkit -r "$SAFARI_APP" 2>/dev/null || true
+  if [ -d "/Applications/UPasswords for Safari.app" ]; then
+    pluginkit -a "/Applications/UPasswords for Safari.app" 2>/dev/null || true
+  else
+    pluginkit -a "$OUT_DIR/UPasswords for Safari.app" 2>/dev/null || true
+  fi
+  echo "==> extension registration anchored to standalone app"
+fi

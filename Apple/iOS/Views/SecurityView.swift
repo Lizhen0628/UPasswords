@@ -7,10 +7,13 @@ import UPasswordsCore
 struct SecurityView: View {
     @EnvironmentObject var vault: Vault
 
+    @State private var showChangePassword = false
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 summaryGrid
+                changeMasterSection
                 breachSection
                 issueLists
             }
@@ -22,6 +25,42 @@ struct SecurityView: View {
         .navigationDestination(for: Card.self) { card in
             CardDetailView(cardID: card.id)
         }
+        .sheet(isPresented: $showChangePassword) {
+            ChangePasswordSheet()
+        }
+    }
+
+    // MARK: 修改主密码
+
+    /// 改密入口(原仅藏于 设置→安全;安全 Tab 首屏直接提供)。
+    /// 改密后信封即时上推注册表,其他设备在解锁/同步/回前台时强制锁定换新密码。
+    private var changeMasterSection: some View {
+        Button {
+            Log.info("ui", "ios change master password from security tab")
+            showChangePassword = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "lock.rotation")
+                    .font(.title3)
+                    .foregroundStyle(Brand.accent)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(L10n.t("ios_change_master_button"))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Brand.fg)
+                    Text(L10n.t("ios_change_master_hint"))
+                        .font(.footnote)
+                        .foregroundStyle(Brand.muted)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.footnote)
+                    .foregroundStyle(Brand.muted)
+            }
+            .padding(14)
+            .background(Brand.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: 总览

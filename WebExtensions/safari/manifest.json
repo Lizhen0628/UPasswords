@@ -1,9 +1,10 @@
 {
     "manifest_version": 3,
     "name": "UPasswords for Safari",
-    "version": "1.0",
+    "version": "1.1",
     "description": "UPasswords password manager companion for Safari.",
     "permissions": ["activeTab", "scripting", "storage"],
+    "host_permissions": ["https://api.upasswords.com/*"],
     "background": {
         "scripts": ["src/background.js"],
         "persistent": false

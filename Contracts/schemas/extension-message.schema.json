@@ -104,9 +104,16 @@
                     "properties": {
                         "type": { "const": "unlocked" },
                         "ok": { "type": "boolean" },
-                        "count": { "type": "integer" }
+                        "count": { "type": "integer" },
+                        "reason": { "enum": ["notV2", "noEnvelope", "badPassword"] }
                     },
-                    "required": ["ok", "count"],
+                    "required": ["ok"],
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": { "const": "noVault" }
+                    },
                     "additionalProperties": false
                 },
                 {

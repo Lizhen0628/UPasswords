@@ -19,19 +19,20 @@ final class StoreTests: XCTestCase {
         try store.create(name: "Alpha", password: "pw1", now: Date(timeIntervalSince1970: 0))
         XCTAssertTrue(store.exists("Alpha"))
 
-        var db = try store.load(name: "Alpha", password: "pw1")
+        let (loaded, vek) = try store.loadUnlocked(name: "Alpha", password: "pw1")
+        var db = loaded
         XCTAssertEqual(db.templateCards.count, 16)
         var card = Card(id: 900)
         card.title = "Added"
         db.cards.append(card)
-        try store.save(db, name: "Alpha", password: "pw1")
+        try store.save(db, name: "Alpha", vaultKey: vek)
 
         let reloaded = try store.load(name: "Alpha", password: "pw1")
         XCTAssertEqual(reloaded.card(id: 900)?.title, "Added")
 
         XCTAssertThrowsError(try store.load(name: "Alpha", password: "bad"))
 
-        try store.backup(name: "Alpha", password: "pw1", now: Date(timeIntervalSince1970: 100))
+        try store.backup(name: "Alpha", now: Date(timeIntervalSince1970: 100))
         XCTAssertEqual(store.backups(name: "Alpha").count, 1)
 
         try store.rename("Alpha", to: "Beta")
@@ -75,20 +76,32 @@ final class StoreV2Tests: XCTestCase {
         try? FileManager.default.removeItem(at: tempDir)
     }
 
-    /// v1 旧库加载后自动迁移 v2:本体换魔数、生成信封、数据不变。
-    func testV1MigrationOnLoad() throws {
+    /// 非 v2 容器拒绝加载;v2 缺信封报专用错误。
+    func testLoadRejectsNonV2AndMissingEnvelope() throws {
         let store = DatabaseStore(root: tempDir)
-        // 手写 v1 库(模拟旧版遗留)
-        let db = PasswordDatabase.createDefault()
-        let v1 = try DatabaseCipher.encryptedData(db.xmlData(), password: "pw")
-        try v1.write(to: store.url(for: "Legacy"))
-        let (loaded, vek) = try store.loadUnlocked(name: "Legacy", password: "pw")
-        XCTAssertEqual(loaded.cards.count, db.cards.count)
-        let onDisk = try Data(contentsOf: store.url(for: "Legacy"))
-        XCTAssertTrue(DatabaseCipher.isV2Container(onDisk))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: store.keyURL(for: "Legacy").path))
-        // 迁移后可用库密钥直接读
-        XCTAssertEqual(try DatabaseCipher.decryptBody(onDisk, vaultKey: vek), db.xmlData())
+        // 垃圾文件:报格式错误
+        try Data("garbage".utf8).write(to: store.url(for: "Junk"))
+        XCTAssertThrowsError(try store.loadUnlocked(name: "Junk", password: "pw")) { error in
+            XCTAssertTrue("\(error)".contains("格式") || "\(error)".contains("format"))
+        }
+        // 合法 v2 本体但无信封:报信封缺失
+        let vek = DatabaseCipher.generateVaultKey()
+        let body = try DatabaseCipher.encryptBody(PasswordDatabase.createDefault().xmlData(), vaultKey: vek)
+        try body.write(to: store.url(for: "NoKey"))
+        XCTAssertThrowsError(try store.loadUnlocked(name: "NoKey", password: "pw")) { error in
+            XCTAssertTrue("\(error)".contains("信封") || "\(error)".contains("envelope"))
+        }
+    }
+
+    /// saveEnvelope 保留原始字节(含 changedAt),非法信封拒绝写入。
+    func testSaveEnvelope() throws {
+        let store = DatabaseStore(root: tempDir)
+        let vek = DatabaseCipher.generateVaultKey()
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        let envelope = try DatabaseCipher.wrapVaultKey(vek, password: "pw", changedAt: t0)
+        try store.saveEnvelope(envelope, for: "Env")
+        XCTAssertEqual(store.envelopeData(for: "Env"), envelope)
+        XCTAssertThrowsError(try store.saveEnvelope(Data("junk-junk-junk".utf8), for: "Env"))
     }
 
     /// 改密只动信封:本体字节不变,旧密码失效、新密码可用。
@@ -102,6 +115,30 @@ final class StoreV2Tests: XCTestCase {
         XCTAssertThrowsError(try store.loadUnlocked(name: "Delta", password: "old"))
         let (db2, _) = try store.loadUnlocked(name: "Delta", password: "new")
         XCTAssertEqual(db2.cards.count, db.cards.count)
+    }
+
+    /// 密钥轮换:本体以全新 VEK 重加密,新密码可用、旧密码失效,
+    /// 且旧 VEK 解不开轮换后的新本体(旧材料对新数据失效)。
+    func testKeyRotationInvalidatesOldMaterial() throws {
+        let store = DatabaseStore(root: tempDir)
+        try store.create(name: "Rotate", password: "old")
+        var (db, oldVek) = try store.loadUnlocked(name: "Rotate", password: "old")
+        db.cards.append(Card(id: 901, title: "AfterRotation"))
+        let bodyBefore = try Data(contentsOf: store.url(for: "Rotate"))
+        // 旧密文用旧 VEK 可解(轮换前副本即泄露风险的等价物)
+        _ = try DatabaseCipher.decryptBody(bodyBefore, vaultKey: oldVek)
+
+        let newVek = DatabaseCipher.generateVaultKey()
+        try store.save(db, name: "Rotate", vaultKey: newVek)
+        try store.rewrap(name: "Rotate", vaultKey: newVek, newPassword: "new")
+
+        let bodyAfter = try Data(contentsOf: store.url(for: "Rotate"))
+        XCTAssertNotEqual(bodyBefore, bodyAfter, "body re-encrypted")
+        XCTAssertThrowsError(try store.loadUnlocked(name: "Rotate", password: "old"))
+        // 旧 VEK 解不开新本体:持有旧密文+旧密钥者无法读取轮换后内容
+        XCTAssertThrowsError(try DatabaseCipher.decryptBody(bodyAfter, vaultKey: oldVek))
+        let (db2, _) = try store.loadUnlocked(name: "Rotate", password: "new")
+        XCTAssertEqual(db2.cards.last?.title, "AfterRotation", "content survives rotation")
     }
 
     /// 保存只需库密钥(改密后无需主密码即可保存)。

@@ -154,7 +154,8 @@ struct CardDetailView: View {
     }
 
     private func localizedDate(_ millis: TimeInterval) -> String {
-        millis.date.formatted(date: .long, time: .omitted)
+        // 与 iOS CardDetailView 一致:简短日期 + 时:分(精确到分钟)
+        millis.date.formatted(date: .abbreviated, time: .shortened)
     }
 
     @MainActor private func addMissingFields(from spec: Templates.Spec, to card: Card) {

@@ -16,6 +16,25 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
     /// 与 iOS 同名的共享容器组(macOS 主 App 推送快照的目标)。
     private static let appGroup = "group.com.upasswords.shared"
 
+    /// 诊断日志:直接落 App Group(bridge.log),不经 AppLog——appex 沙盒里
+    /// Application Support 可能不可写/不可见,App Group 是双方共用的确定路径。
+    /// 只记操作与结果分支,不含密码与字段值。
+    private static func diag(_ line: String) {
+        guard let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup) else {
+            return
+        }
+        let url = group.appendingPathComponent("Safari/bridge.log")
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let data = Data("\(stamp) \(line)\n".utf8)
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: data)
+        } else if let handle = try? FileHandle(forWritingTo: url) {
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+            try? handle.close()
+        }
+    }
+
     /// 解锁后缓存的活动条目(剔除回收站/归档/模板)。
     private static var cachedCards: [Card]? = nil
     private static var cachedVaultName: String? = nil
@@ -25,6 +44,7 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         let message = items.first?.userInfo?[SFExtensionMessageKey] as? [String: Any]
         let type = (message?["type"] as? String) ?? ""
         Log.info("chrome", "safari native message: \(type)")
+        Self.diag("msg \(type)")
         let response: [String: Any]
         switch type {
         case "ping": response = Self.handlePing()
@@ -32,6 +52,7 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         case "query": response = Self.handleQuery(message)
         default: response = ["type": "error", "message": "unknown message type"]
         }
+        Self.diag("resp \(type) -> \(response["type"] as? String ?? "?") ok=\(response["ok"] as? Bool ?? false) reason=\(response["reason"] as? String ?? "-")")
         let item = NSExtensionItem()
         item.userInfo = [SFExtensionMessageKey: response]
         context.completeRequest(returningItems: [item], completionHandler: nil)
@@ -42,6 +63,7 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
     /// 握手 + 状态:库是否存在、是否已在扩展侧解锁。
     private static func handlePing() -> [String: Any] {
         let vault = vaultFile()
+        diag("ping vault=\(vault?.name ?? "nil") unlocked=\(cachedCards != nil)")
         return [
             "type": "pong",
             "vault": vault != nil,
@@ -51,40 +73,57 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
     }
 
     /// 解锁:主密码解密库容器,活动条目缓存进内存。
+    /// 失败原因显式区分(noVault / noEnvelope / badPassword),前端据此给出
+    /// 准确提示——一律报"密码错误"会把快照缺失/信封缺失误导成密码问题。
     private static func handleUnlock(_ message: [String: Any]?) -> [String: Any] {
         guard let password = message?["password"] as? String, !password.isEmpty else {
             return ["type": "error", "message": "missing password"]
         }
         guard let vault = vaultFile() else {
-            Log.warn("chrome", "safari unlock: no vault file found")
-            return ["type": "error", "message": "no vault"]
+            Log.warn("chrome", "safari unlock: no vault file accessible (snapshot and local db missing)")
+            diag("unlock no vault accessible")
+            return ["type": "noVault"]
         }
+        diag("unlock vault=\(vault.name) path=\(vault.url.lastPathComponent)")
         do {
             let data = try Data(contentsOf: vault.url)
-            let db: PasswordDatabase
-            if DatabaseCipher.isV2Container(data) {
-                // v2:主密码解信封(同名 .upwkey)拿库密钥再解本体
-                let keyURL = vault.url.deletingPathExtension().appendingPathExtension("upwkey")
+            // v2:主密码解信封(同名 .upwkey)拿库密钥再解本体
+            guard DatabaseCipher.isV2Container(data) else {
+                Log.warn("chrome", "safari unlock \"\(vault.name)\" rejected: not a v2 container")
+                return ["type": "unlocked", "ok": false, "reason": "notV2"]
+            }
+            let keyURL = vault.url.deletingPathExtension().appendingPathExtension("upwkey")
+            guard FileManager.default.fileExists(atPath: keyURL.path) else {
+                Log.warn("chrome", "safari unlock \"\(vault.name)\": envelope file missing (snapshot incomplete)")
+                return ["type": "unlocked", "ok": false, "reason": "noEnvelope"]
+            }
+            do {
                 let envelope = try Data(contentsOf: keyURL)
                 let vek = try DatabaseCipher.unwrapVaultKey(envelope, password: password)
-                db = try PasswordDatabase.parse(DatabaseCipher.decryptBody(data, vaultKey: vek))
-            } else {
-                // v1 兼容:主密码直解
-                db = try PasswordDatabase.parse(DatabaseCipher.decryptedData(data, password: password))
+                let db = try PasswordDatabase.parse(DatabaseCipher.decryptBody(data, vaultKey: vek))
+                cachedCards = db.cards.filter { !$0.trashed && !$0.archived && !$0.template }
+                cachedVaultName = vault.name
+                Log.info("chrome", "safari vault \"\(vault.name)\" unlocked: \(cachedCards?.count ?? 0) cards")
+                return ["type": "unlocked", "ok": true, "count": cachedCards?.count ?? 0]
+            } catch {
+                Log.warn("chrome", "safari unlock \"\(vault.name)\" rejected (wrong password or corrupt container)")
+                return ["type": "unlocked", "ok": false, "reason": "badPassword"]
             }
-            cachedCards = db.cards.filter { !$0.trashed && !$0.archived && !$0.template }
-            cachedVaultName = vault.name
-            Log.info("chrome", "safari vault \"\(vault.name)\" unlocked: \(cachedCards?.count ?? 0) cards")
-            return ["type": "unlocked", "ok": true, "count": cachedCards?.count ?? 0]
         } catch {
-            Log.warn("chrome", "safari unlock \"\(vault.name)\" rejected (wrong password or corrupt container)")
-            return ["type": "unlocked", "ok": false]
+            Log.warn("chrome", "safari unlock \"\(vault.name)\" failed reading container: \(error)")
+            return ["type": "unlocked", "ok": false, "reason": "badPassword"]
         }
     }
 
     /// 查询:返回与页面 host 匹配的填充候选(含凭据,契约允许)。
     private static func handleQuery(_ message: [String: Any]?) -> [String: Any] {
         guard let cards = cachedCards, !cards.isEmpty else {
+            // 库文件读不到时显式声明 noVault:前端据此提示推快照,而不是
+            // 误报"locked"诱导用户输密码(输了也必败,且被误读为密码错误)
+            if vaultFile() == nil {
+                Log.warn("chrome", "safari query: no vault file accessible (group snapshot and local db missing)")
+                return ["type": "noVault"]
+            }
             Log.debug("chrome", "safari query while locked")
             return ["type": "locked"]
         }

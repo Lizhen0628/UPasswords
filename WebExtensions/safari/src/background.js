@@ -1,24 +1,9 @@
-// Safari background script: native-bridge first (live vault in the host app),
-// falling back to the browser.storage.local snapshot. Never logs secrets.
+// Safari background script (standalone): data comes from the relay API via the
+// popup (login/unlock/decrypt happen there); background answers "query" from
+// the decrypted snapshot in browser.storage.local. Never logs secrets.
 import { canonicalizeHost, credentialsOf, hostMatches, loadItems, hostnameOf } from "./shared/index.js";
 
-const NATIVE_APP_ID = "com.upasswords.UPasswords";
-
-// 原生桥调用;Safari 要求携带宿主 App 的 bundle id。
-async function nativeCall(message) {
-    return await browser.runtime.sendNativeMessage(NATIVE_APP_ID, message);
-}
-
 async function queryItems(host) {
-    try {
-        const response = await nativeCall({ type: "query", host });
-        if (response && (response.type === "items" || response.type === "locked")) {
-            return response;
-        }
-    } catch {
-        // 原生桥不可用(主 App 未装/未签名):回落本地快照
-        console.log("[upw] native bridge unavailable, falling back to snapshot");
-    }
     const items = await loadItems();
     const candidates = items
         .filter((item) => hostMatches(host, item.host))
@@ -36,16 +21,10 @@ browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             .catch(() => sendResponse({ type: "error", message: "query failed" }));
         return true;
     }
-    if (message.type === "unlock" || message.type === "ping") {
-        nativeCall(message)
-            .then(sendResponse)
-            .catch(() => sendResponse({ type: "error", message: "native bridge unavailable" }));
-        return true;
-    }
     return false;
 });
 
-// Log canonical host of the active tab on install-ish startup for debugging.
+// Log canonical host of the active tab on startup for debugging.
 browser.tabs
     .query({ active: true, currentWindow: true })
     .then((tabs) => {

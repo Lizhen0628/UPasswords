@@ -66,6 +66,13 @@ UPasswords/
 │                                   (NSExtensionRequestHandling 消息桥) + Info.plist；
 │                                   扩展 JS/manifest 资源注入 ../WebExtensions/safari（见 project.yml，
 │                                   manifest 平铺到 appex Resources 根、src/ 以 folder reference 保结构）
+├─ Cloud/                          云端协调服务（api.upasswords.com，密码库文件只存网盘，
+│  │                               服务器零知识：账户/信封中继/哈希注册表/只读统计）
+│  ├─ DESIGN.md                    设计文档（威胁模型/离线降级/拖库防御/同步协议）
+│  └─ worker/                      Cloudflare Worker + D1（TypeScript 零依赖）：
+│                                  src/{index,auth,vaults,stats,smtp,db,util}.ts
+│                                  + migrations/ + vitest（@cloudflare/vitest-plugin，
+│                                  npm install && npm test；部署见 Cloud/README.md）
 ├─ WebExtensions/                   pnpm workspace（构建：pnpm build；测试：pnpm test）
 │  ├─ shared/                       Safari+Chrome 共享 TS（严格模式，tsc 编译到 dist/）
 │  │  ├─ src/core/                  types(字段/autofill 词表，镜像 Contracts)、
@@ -108,6 +115,9 @@ UPasswords/
 │                                   extension-message.schema.json(扩展消息契约)
 ├─ scripts/make-app.sh              release 编译 Apple/macOS 并打包 dist/UPasswords.app
 │                                   （拷贝 .build 下全部资源 bundle，含 Core 字符串表 bundle）
+│                                   + xcodebuild Release 构建独立容器 App
+│                                   dist/UPasswords for Safari.app 并同步 /Applications、
+│                                   pluginkit 注册锚定到成品包（Safari 扩展宿主）
 ├─ .github/workflows/ci.yml         Swift 四包测试 → xcodegen+xcodebuild 双平台 → pnpm build/test
 │                                   → make-app.sh 打包并上传产物
 ├─ package.json / pnpm-workspace.yaml    Web 扩展 monorepo 根（build/test/clean 脚本）
