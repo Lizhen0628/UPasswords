@@ -13,12 +13,17 @@ echo "==> swift build -c $CONFIG ($APP_PKG)"
 
 # Safari 扩展独立容器 App(不依赖桌面完整版):扩展数据通路在 JS 内直连
 # relay API,容器仅承载 appex。失败仅告警(主 App 打包不受影响)。
+# -allowProvisioningUpdates:让已登录 Apple ID 的机器自动补描述文件;
+# CI 无账号时照样失败走告警路径。
 echo "==> xcodebuild Release (standalone Safari container)"
-if ! xcodebuild -quiet -workspace UPasswords.xcworkspace -scheme UPasswordsSafari \
+if ! xcodebuild -quiet -allowProvisioningUpdates \
+      -workspace UPasswords.xcworkspace -scheme UPasswordsSafari \
       -configuration Release build 2>/dev/null; then
   echo "    WARNING: standalone Safari app build failed — skipping it"
 fi
-SAFARI_APP="$(ls -dt "$HOME/Library/Developer/Xcode/DerivedData/UPasswords-"*/Build/Products/Release/UPasswordsSafari.app 2>/dev/null | head -1)"
+# ls 在无匹配时非零退出,pipefail 会把它升级成整脚本失败(set -e),
+# 吞掉 ls 的退出码——找不到就当没有,继续打主 App。
+SAFARI_APP="$(ls -dt "$HOME/Library/Developer/Xcode/DerivedData/UPasswords-"*/Build/Products/Release/UPasswordsSafari.app 2>/dev/null | head -1 || true)"
 if [ -n "$SAFARI_APP" ]; then
   DEST="$OUT_DIR/UPasswords for Safari.app"
   rm -rf "$DEST"
@@ -98,7 +103,8 @@ fi
 # 注意:不加 --deep——appex 的 sandbox/app-group entitlements 必须保持
 # xcodebuild 给它的独立签名,父包的 entitlements 覆盖上去会毁掉沙盒配置。
 echo "==> codesign"
-IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep -m1 'Apple Development' | sed -E 's/.*"([^"]+)".*/\1/')"
+# grep 无匹配时非零退出,pipefail 会升级成整脚本失败;吞掉让空串走 ad-hoc 回退。
+IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep -m1 'Apple Development' | sed -E 's/.*"([^"]+)".*/\1/' || true)"
 SIGN_ID="${IDENTITY:--}"
 # 签名顺序自内向外:SPM 资源 bundle 无签名须先逐个签掉;appex 保留 xcodebuild
 # 的独立签名不动;最后签父包。全程不用 --deep——它会用父包 entitlements
