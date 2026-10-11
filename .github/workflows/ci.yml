@@ -12,7 +12,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # node 24 自带 npm 11:`npm install-scripts approve`(生命周期脚本
+          # 白名单)是 npm 11.5+ 的命令,node 22 的 npm 10 会报 Unknown command
+          node-version: 24
           cache: npm
           cache-dependency-path: Cloud/worker/package-lock.json
       - name: Install deps

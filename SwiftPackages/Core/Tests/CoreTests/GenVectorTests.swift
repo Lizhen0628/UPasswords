@@ -36,7 +36,17 @@ final class GenVectorTests: XCTestCase {
             "cardCount": 2,
         ]
         let out = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
-        try out.write(to: URL(fileURLWithPath: "/Users/lizhen/Projects/UPasswords/WebExtensions/shared/test/fixtures/vault-vector.json"))
+        // 向量供 WebExtensions/shared/test/vault-crypto.test.mjs 跨端解密对齐;
+        // 路径从 #filePath 推导仓库根,任何 checkout(含 CI)都能重新生成。
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // Tests/CoreTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // Core
+            .deletingLastPathComponent()  // SwiftPackages
+            .deletingLastPathComponent()  // 仓库根
+        let fixture = repoRoot
+            .appendingPathComponent("WebExtensions/shared/test/fixtures/vault-vector.json")
+        try out.write(to: fixture)
         XCTAssertTrue(out.count > 200)
     }
 }
