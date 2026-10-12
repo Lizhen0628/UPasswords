@@ -13,5 +13,5 @@ node_modules/
 
 # WebExtensions 构建产物(shared TS 编译输出由 pnpm build 生成)
 WebExtensions/shared/dist/
-WebExtensions/safari/src/shared/
+WebExtensions/*/src/shared/
 WebExtensions/chrome/src/shared/
