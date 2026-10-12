@@ -319,6 +319,8 @@ struct RelayTransferSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var masterPassword = ""
+    @State private var currentCode = ""
+    @State private var currentSending = false
     @State private var newEmail = ""
     @State private var code = ""
     @State private var busy = false
@@ -334,6 +336,21 @@ struct RelayTransferSheet: View {
                 }
                 Section {
                     SecureField(L10n.t("relay_transfer_master_password"), text: $masterPassword)
+                    // 服务端门槛一:当前账户的 sensitive 码(令牌被盗不足以过户库)
+                    HStack {
+                        SecureField(L10n.t("relay_transfer_current_code"), text: $currentCode)
+                            .keyboardType(.numberPad)
+                        Button(L10n.t("relay_send_code_button")) {
+                            Log.info("ui", "ios relay transfer current-email code request")
+                            currentSending = true
+                            Task {
+                                await vault.relaySendSensitiveCode(to: vault.relayAccountEmail ?? "")
+                                currentSending = false
+                            }
+                        }
+                        .disabled(currentSending)
+                        if currentSending { ProgressView().controlSize(.small) }
+                    }
                     TextField(L10n.t("relay_transfer_new_email"), text: $newEmail)
                         .keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never)
@@ -371,14 +388,18 @@ struct RelayTransferSheet: View {
                         let email = newEmail.trimmingCharacters(in: .whitespaces)
                         let entered = code
                         code = ""
+                        let currentEntered = currentCode
+                        currentCode = ""
                         Task {
-                            if await vault.relayTransferVault(masterPassword: pw, newEmail: email, code: entered) {
+                            if await vault.relayTransferVault(masterPassword: pw, newEmail: email, code: entered,
+                                                              currentCode: currentEntered) {
                                 dismiss()
                             }
                             busy = false
                         }
                     }
-                    .disabled(masterPassword.isEmpty || !newEmail.contains("@") || code.count < RelayClient.verificationCodeLength || busy)
+                    .disabled(masterPassword.isEmpty || !newEmail.contains("@") || code.count < RelayClient.verificationCodeLength
+                              || currentCode.count < RelayClient.verificationCodeLength || busy)
                 }
             }
         }

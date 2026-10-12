@@ -295,7 +295,8 @@ extension Vault {
     /// 换绑邮箱:本地先验当前主密码(唯一信任根) → 服务端把注册表记录迁移到
     /// 新邮箱名下(云端同步结构随之换主,vaultId/信封/哈希不变) →
     /// 保存新账户会话并更新绑定邮箱。
-    func relayTransferVault(masterPassword: String, newEmail: String, code: String) async -> Bool {
+    func relayTransferVault(masterPassword: String, newEmail: String, code: String,
+                              currentCode: String) async -> Bool {
         guard let binding = relay.binding(database: databaseName),
               let token = relay.token(database: databaseName) else { return false }
         guard (try? store.load(name: databaseName, password: masterPassword)) != nil else {
@@ -306,7 +307,7 @@ extension Vault {
         do {
             let session = try await relayClient.transferVault(
                 token: token, vaultId: binding.vaultId, email: newEmail, code: code,
-                deviceName: DeviceIdentity.displayName())
+                currentCode: currentCode, deviceName: DeviceIdentity.displayName())
             relay.storeSession(token: session.token, email: newEmail)
             relay.setBinding(
                 RelayBinding(email: newEmail, vaultId: binding.vaultId, vaultName: binding.vaultName),

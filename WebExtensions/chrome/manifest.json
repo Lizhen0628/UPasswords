@@ -5,7 +5,6 @@
     "description": "UPasswords password manager companion for Chrome.",
     "permissions": [
         "activeTab",
-        "scripting",
         "storage"
     ],
     "background": {

@@ -15,6 +15,7 @@ export type Env = {
   SMTP_MOCK?: string;
   VAULT_LIMIT_PER_USER: string;
   VAULT_BODY_MAX_BYTES: string;
+  VAULT_STAGING_MAX_OBJECTS?: string;
   CODE_TTL_SECONDS: string;
   CODE_RESEND_COOLDOWN_SECONDS: string;
   CODE_HOURLY_PER_EMAIL: string;

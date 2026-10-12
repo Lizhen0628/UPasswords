@@ -273,6 +273,15 @@ export async function handleDeregister(env: Env, request: Request, auth: AuthCon
   const body = await readJson(request);
   await requireSensitiveCode(env, auth.user, body.code);
   const now = nowSec();
+  // R2 库体与 staging 先于注册表行清除:行删了就再也找不回 vaultId,
+  // 曾造成注销用户的密文副本在桶里无限期残留
+  const owned = await env.DB.prepare("SELECT vault_id FROM vaults WHERE user_id = ?")
+    .bind(auth.user.id)
+    .all<{ vault_id: string }>();
+  for (const row of owned.results ?? []) {
+    await env.VAULTS.delete(`vaults/${row.vault_id}`);
+    await deleteR2Prefix(env.VAULTS, `vaults/staging/${row.vault_id}/`);
+  }
   // 立即清空敏感数据(信封/邮箱)并吊销全部会话;状态行仅留统计用途
   await env.DB.prepare(
     "UPDATE users SET state = 'deregistered', email_enc = NULL, deregistered_at = ? WHERE id = ?",

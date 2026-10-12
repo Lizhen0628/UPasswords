@@ -272,6 +272,11 @@ export async function handleBodyPut(
   const declared = Number(request.headers.get("content-length") ?? "");
   if (!Number.isFinite(declared) || declared < 1) throw new ApiError(411, "length_required");
   if (declared > bodyQuotaBytes(env)) throw new ApiError(413, "quota_exceeded");
+  // 单库未提交 staging 数量配额:staging 24h 才被 cron 清扫,
+  // 无配额时登录用户可无限堆 R2 存储(账单 DoS)
+  const stagingMax = numVar(env, "VAULT_STAGING_MAX_OBJECTS", 4);
+  const existing = await env.VAULTS.list({ prefix: stagingPrefix(vaultId) });
+  if (existing.objects.length >= stagingMax) throw new ApiError(413, "quota_exceeded");
   await env.VAULTS.put(stagingKey(vaultId, uploadId), request.body, {
     httpMetadata: { contentType: "application/octet-stream" },
   });
@@ -367,7 +372,10 @@ export async function handleTransferVault(
   const email = normalizeEmail(body.email);
   if (!email) throw new ApiError(400, "invalid_email");
   await loadVault(env, auth.user.id, vaultId);
-  // 新邮箱的敏感验证码(客户端先向新邮箱发码)
+  // 门槛一:当前账户的 sensitive 码——令牌被盗不足以过户库,
+  // 攻击者自发新邮箱的码无效(与删库/注销同级敏感操作)
+  await requireSensitiveCode(env, auth.user, body.currentCode);
+  // 门槛二:新邮箱的 sensitive 码(证明新邮箱归属)
   const codeOk = await consumeCodeForEmail(env, email, "sensitive", body.code);
   if (!codeOk) throw new ApiError(403, "invalid_code");
 

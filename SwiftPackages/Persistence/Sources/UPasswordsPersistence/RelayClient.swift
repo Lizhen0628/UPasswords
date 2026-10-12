@@ -330,8 +330,10 @@ public struct RelayClient {
     /// 换绑邮箱:注册表记录迁移到新邮箱名下(vaultId/信封/哈希不变),
     /// 并直接返回新账户的本机会话——前置:客户端已验当前主密码,
     /// 新邮箱须先收 sensitive 验证码。
+    /// - Parameter currentCode: 当前账户邮箱的 sensitive 验证码(服务端门槛一,
+    ///   令牌被盗不足以过户库;与删库/注销同级)。
     public func transferVault(token: String, vaultId: String, email: String,
-                              code: String, deviceName: String) async throws -> Session {
+                              code: String, currentCode: String, deviceName: String) async throws -> Session {
         struct Response: Decodable {
             let token: String
             let expiresAt: Double
@@ -339,7 +341,7 @@ public struct RelayClient {
         }
         let response: Response = try await send(
             "POST", "/v1/vaults/\(vaultId)/transfer",
-            body: ["email": email, "code": code, "deviceName": deviceName],
+            body: ["email": email, "code": code, "currentCode": currentCode, "deviceName": deviceName],
             token: token)
         Log.info("sync", "relay vault transferred to new email (vault=\(vaultId.prefix(8))…)")
         return Session(

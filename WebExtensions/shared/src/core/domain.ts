@@ -34,7 +34,21 @@ export function hostMatches(pageHost: string, itemHost: string): boolean {
     if (!page || !item) {
         return false;
     }
-    return page === item || page.endsWith("." + item) || item.endsWith("." + page);
+    if (page === item) {
+        return true;
+    }
+    // 单标签 host(com / io / 2.3 这类)禁止后缀泛匹配:库内存了裸公共后缀
+    // 或 IP 尾段的条目时,任意外部域名不能命中拿到候选
+    const hasParent = (host: string) => host.split(".").filter(Boolean).length >= 2;
+    if (!hasParent(item) || !hasParent(page)) {
+        return false;
+    }
+    // 纯数字标签(IP 字面量或其尾段)只允许全等:后缀匹配会把 1.2.3.4 误配给 2.3.4
+    const isNumericHost = (host: string) => host.split(".").every((part) => /^\d+$/.test(part));
+    if (isNumericHost(page) || isNumericHost(item)) {
+        return false;
+    }
+    return page.endsWith("." + item) || item.endsWith("." + page);
 }
 
 /** Username/password pair for a fill request (empty strings when absent). */

@@ -5,9 +5,7 @@
     "description": "UPasswords password manager companion for Firefox.",
     "permissions": [
         "activeTab",
-        "scripting",
-        "storage",
-        "permissions"
+        "storage"
     ],
     "host_permissions": [
         "https://api.upasswords.com/*"

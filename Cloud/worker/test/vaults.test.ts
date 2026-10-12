@@ -163,9 +163,21 @@ describe("跨用户隔离", () => {
 });
 
 describe("换绑邮箱(注册表转移)", () => {
-    it("新邮箱敏感码通过 → 记录换主并签发新会话;旧会话失去该库", async () => {
+    it("双敏感码(当前账户+新邮箱)通过 → 记录换主并签发新会话;旧会话失去该库", async () => {
         const tokenA = await registerUser("old@example.com");
         const vaultId = await createVault(tokenA, "Main");
+        const { mockCode } = await import("./helpers");
+
+        // 门槛一:当前账户的敏感码(令牌被盗不足以过户)
+        await call("POST", "/v1/auth/code", { email: "old@example.com", purpose: "sensitive" });
+        const currentCode = await mockCode("old@example.com", "sensitive");
+        // 只带新邮箱码、缺当前账户码 → 403
+        const noCurrent = await call("POST", `/v1/vaults/${vaultId}/transfer`, {
+            email: "fresh@example.com",
+            code: "000000",
+            deviceName: "x",
+        }, tokenA);
+        expect(noCurrent.status).toBe(403);
 
         // 新邮箱(从未注册过)先收敏感码
         const codeReq = await call("POST", "/v1/auth/code", {
@@ -173,12 +185,12 @@ describe("换绑邮箱(注册表转移)", () => {
             purpose: "sensitive",
         });
         expect(codeReq.status).toBe(202);
-        const { mockCode } = await import("./helpers");
         const code = await mockCode("fresh@example.com", "sensitive");
 
         const res = await call("POST", `/v1/vaults/${vaultId}/transfer`, {
             email: "fresh@example.com",
             code,
+            currentCode,
             deviceName: "transfer-test",
         }, tokenA);
         expect(res.status).toBe(200);
@@ -195,20 +207,29 @@ describe("换绑邮箱(注册表转移)", () => {
     it("错码 403;目标为已注销账户可重建换主", async () => {
         const tokenA = await registerUser("keep@example.com");
         const vaultId = await createVault(tokenA, "V");
-        await call("POST", "/v1/auth/code", { email: "gone@example.com", purpose: "sensitive" });
         const { mockCode } = await import("./helpers");
+        await call("POST", "/v1/auth/code", { email: "keep@example.com", purpose: "sensitive" });
+        const currentCode = await mockCode("keep@example.com", "sensitive");
+        await call("POST", "/v1/auth/code", { email: "gone@example.com", purpose: "sensitive" });
         const good = await mockCode("gone@example.com", "sensitive");
 
         // 错码拒绝
         const wrong = await call("POST", `/v1/vaults/${vaultId}/transfer`, {
             email: "gone@example.com",
             code: String((Number(good) + 1) % 1_000_000).padStart(6, "0"),
+            currentCode,
         }, tokenA);
         expect(wrong.status).toBe(403);
+        // sensitive 码单次性:错码尝试已消费 currentCode,重新签发(绕 60s 冷却)
+        const { ageCodes } = await import("./helpers");
+        await ageCodes(120);
+        await call("POST", "/v1/auth/code", { email: "keep@example.com", purpose: "sensitive" });
+        const currentCode2 = await mockCode("keep@example.com", "sensitive");
         // 正码成功(目标账户不存在→自动创建)
         const ok = await call("POST", `/v1/vaults/${vaultId}/transfer`, {
             email: "gone@example.com",
             code: good,
+            currentCode: currentCode2,
         }, tokenA);
         expect(ok.status).toBe(200);
     });

@@ -1029,6 +1029,7 @@
 "relay_transfer_title" = "换绑到新邮箱";
 "relay_transfer_hint" = "将此库的云端同步记录迁移到新邮箱名下。需输入当前主密码，新邮箱须经验证码验证。";
 "relay_transfer_master_password" = "当前主密码";
+"relay_transfer_current_code" = "当前邮箱验证码";
 "relay_transfer_new_email" = "新邮箱";
 "relay_transfer_ok_toast" = "云同步已换绑到新邮箱";
 "relay_force_lock_message" = "密码库密码已在其他设备修改，本设备已锁定，请使用新密码解锁。";

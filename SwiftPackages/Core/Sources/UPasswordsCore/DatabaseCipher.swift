@@ -12,7 +12,10 @@ public enum DatabaseCipher {
     /// 信封格式版本号
     public static let version: UInt32 = 1
     public static let saltLength = 16
-    public static let iterations: UInt32 = 310_000
+    /// 新信封迭代数(OWASP 2023+ 档位;存量 310k 信封仍按文件头值读取)
+    public static let iterations: UInt32 = 600_000
+    /// 信封迭代下限:低于此值视为恶意/损坏文件,拒绝解(格式错误,非密码错误)
+    public static let minimumEnvelopeIterations: UInt32 = 100_000
 
     public struct CipherError: LocalizedError {
         public let message: String
@@ -139,6 +142,10 @@ extension DatabaseCipher {
         }
         let iters = data.subdata(in: envelopeIterationsOffset..<(envelopeIterationsOffset + 4))
             .withUnsafeBytes { UInt32(littleEndian: $0.load(as: UInt32.self)) }
+        guard iters >= Self.minimumEnvelopeIterations else {
+            Log.warn("cipher", "envelope rejected: iterations below floor")
+            throw CipherError(message: "not a key envelope")
+        }
         let salt = data.subdata(in: envelopeSaltOffset..<(envelopeSaltOffset + saltLength))
         let key = deriveKey(password: password, salt: salt, iterations: iters)
         do {

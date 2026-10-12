@@ -132,3 +132,14 @@ test('Contracts: all four browser manifests agree on shared entry points', () =>
     assert.equal(firefox.background.type, 'module')
     assert.ok(firefox.browser_specific_settings.gecko.id)
 })
+
+test('hostMatches: single-label and suffix-fragment item hosts never wildcard', () => {
+    assert.equal(hostMatches('phish.com', 'com'), false)
+    assert.equal(hostMatches('sub.phish.com', 'com'), false)
+    assert.equal(hostMatches('1.2.3.4', '2.3.4'), false)
+    assert.equal(hostMatches('anything.org', 'org'), false)
+    // 全等仍允许(localhost 这类无点 host 的正常用法);正常子域匹配不变
+    assert.equal(hostMatches('localhost', 'localhost'), true)
+    assert.equal(hostMatches('a.b.com', 'b.com'), true)
+    assert.equal(hostMatches('github.com.evil.io', 'github.com'), false)
+})

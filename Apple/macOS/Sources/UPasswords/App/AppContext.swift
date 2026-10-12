@@ -4,6 +4,7 @@ import Combine
 import CryptoKit
 import UPasswordsCore
 import UPasswordsPersistence
+import UPasswordsNetworking
 
 /// Central session controller — owns the session state, database persistence
 /// and the card-list strategies per sidebar selection.
@@ -491,11 +492,18 @@ final class AppContext: ObservableObject {
     }
 
     /// erase_data_command — removes local data (cloud copies untouched).
+    /// 自毁/手动擦除必须连 Safari 快照、泄露哈希清单与 relay 登录态一并清:
+    /// 残留的密文+信封可被离线爆破,残留令牌可枚举账户。
     func eraseAllData() {
         Log.warn("lifecycle", "ERASE ALL DATA (self-destruct or manual)")
         for db in store.list() {
             try? store.delete(name: db.name)
         }
+        if let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.upasswords.shared") {
+            try? FileManager.default.removeItem(at: group.appendingPathComponent("Safari", isDirectory: true))
+        }
+        CompromisedService.clearDynamicList()
+        relay.logout(database: databaseName)
         database = PasswordDatabase()
         databaseName = ""
         password = ""

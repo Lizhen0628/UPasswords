@@ -11,7 +11,9 @@ const browser = globalThis.browser ?? globalThis.chrome;
 
     function fillIntoPage(detail) {
         const forms = Array.from(document.querySelectorAll("form"));
-        const inputs = Array.from(document.querySelectorAll("input"));
+        // 跳过隐藏/零尺寸字段:防止恶意页面用不可见输入截获填充值
+        const isVisible = (el) => el.getClientRects().length > 0 && el.type !== "hidden";
+        const inputs = Array.from(document.querySelectorAll("input")).filter(isVisible);
         const userField =
             inputs.find((i) => i.autocomplete === "username") ||
             inputs.find((i) => /email|text|tel/i.test(i.type || ""));

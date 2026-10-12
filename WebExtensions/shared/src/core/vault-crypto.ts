@@ -56,7 +56,9 @@ export async function unwrapEnvelope(envelope: Uint8Array, password: string): Pr
         throw new VaultCryptoError("not_a_key_envelope");
     }
     const iterations = u32LE(envelope, 12);
-    if (iterations < 1 || iterations > 10_000_000) {
+    // 下限与 Swift DatabaseCipher.minimumEnvelopeIterations 对齐:伪造低迭代
+    // 信封按坏文件拒绝,不给降级/误导面
+    if (iterations < 100_000 || iterations > 10_000_000) {
         throw new VaultCryptoError("bad_iterations");
     }
     const salt = envelope.slice(16, 32);

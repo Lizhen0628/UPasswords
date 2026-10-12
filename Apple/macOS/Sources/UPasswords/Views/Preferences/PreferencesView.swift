@@ -1032,6 +1032,8 @@ private struct RelayTransferSheet: View {
     @Environment(\.dismiss) var dismiss
 
     @State private var masterPassword = ""
+    @State private var currentCode = ""
+    @State private var currentSending = false
     @State private var newEmail = ""
     @State private var code = ""
     @State private var busy = false
@@ -1041,7 +1043,8 @@ private struct RelayTransferSheet: View {
         SheetShell(
             title: L10n.t("relay_transfer_title"),
             okTitle: L10n.t("relay_transfer_button"),
-            okDisabled: masterPassword.isEmpty || !newEmail.contains("@") || code.count < RelayClient.verificationCodeLength || busy,
+            okDisabled: masterPassword.isEmpty || !newEmail.contains("@") || code.count < RelayClient.verificationCodeLength
+                || currentCode.count < RelayClient.verificationCodeLength || busy,
             onCancel: { dismiss() },
             onOk: {
                 busy = true
@@ -1050,8 +1053,11 @@ private struct RelayTransferSheet: View {
                 let email = newEmail.trimmingCharacters(in: .whitespaces)
                 let entered = code
                 code = ""
+                let currentEntered = currentCode
+                currentCode = ""
                 Task {
-                    if await ctx.relayTransferVault(masterPassword: pw, newEmail: email, code: entered) {
+                    if await ctx.relayTransferVault(masterPassword: pw, newEmail: email, code: entered,
+                                                    currentCode: currentEntered) {
                         dismiss()
                     }
                     busy = false
@@ -1065,6 +1071,23 @@ private struct RelayTransferSheet: View {
                     LabeledRow(label: L10n.t("relay_transfer_master_password")) {
                         SecureField("", text: $masterPassword)
                             .textFieldStyle(.roundedBorder)
+                    }
+                    // 服务端门槛一:当前账户的 sensitive 码(令牌被盗不足以过户库)
+                    LabeledRow(label: L10n.t("relay_transfer_current_code")) {
+                        HStack(spacing: 8) {
+                            SecureField("", text: $currentCode)
+                                .textFieldStyle(.roundedBorder)
+                            Button(L10n.t("relay_send_code_button")) {
+                                Log.info("ui", "relay transfer current-email code request")
+                                currentSending = true
+                                Task {
+                                    await ctx.relaySendSensitiveCode(to: ctx.relayAccountEmail ?? "")
+                                    currentSending = false
+                                }
+                            }
+                            .disabled(ctx.relayAccountEmail == nil || currentSending)
+                            if currentSending { ProgressView().controlSize(.small) }
+                        }
                     }
                     LabeledRow(label: L10n.t("relay_transfer_new_email")) {
                         TextField("", text: $newEmail)

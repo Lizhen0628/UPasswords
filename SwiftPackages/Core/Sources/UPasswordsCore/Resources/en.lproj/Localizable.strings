@@ -1029,6 +1029,7 @@
 "relay_transfer_title" = "Relink to Another Email";
 "relay_transfer_hint" = "Moves this vault's cloud sync record to a new email. Requires the current master password; the new email must be verified with a code.";
 "relay_transfer_master_password" = "Current Master Password";
+"relay_transfer_current_code" = "Current-email verification code";
 "relay_transfer_new_email" = "New Email";
 "relay_transfer_ok_toast" = "Cloud sync relinked to the new email";
 "relay_force_lock_message" = "The vault password was changed on another device. This device is locked — unlock with the new password.";
