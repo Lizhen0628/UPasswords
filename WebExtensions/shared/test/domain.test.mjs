@@ -118,4 +118,12 @@ test('Contracts: safari and chrome manifests agree on shared entry points', () =
     }
     assert.equal(safari.background.scripts[0], 'src/background.js')
     assert.equal(chrome.background.service_worker, 'src/background.js')
+    // 双端都要能直连 relay API;Chrome 的 module SW 是 ES import 生效前提
+    for (const m of [safari, chrome]) {
+        assert.ok(
+            (m.host_permissions ?? []).some((h) => h.startsWith('https://api.upasswords.com/')),
+            'host_permissions must cover the relay API origin'
+        )
+    }
+    assert.equal(chrome.background.type, 'module')
 })
