@@ -129,7 +129,8 @@ UPasswords/
 ├─ .github/workflows/ci.yml         Swift 四包测试 → xcodegen+xcodebuild 双平台 → pnpm build/test
 │                                   → make-app.sh 打包并上传产物
 ├─ package.json / pnpm-workspace.yaml    Web 扩展 monorepo 根（build/test/clean 脚本）
-└─ README.md / AGENTS.md / LICENSE
+└─ README.md / AGENTS.md / FEATURES.md / LICENSE
+                                   （FEATURES.md 为功能清单文档：改功能时同步更新）
 ```
 
 生成物（勿手动编辑、不入库）：`Apple/UPasswords.xcodeproj`、各包 `.build/`、`dist/`、
