@@ -42,7 +42,11 @@ public final class RelayTokenKeychain: RelayTokenStoring {
         if updateStatus == errSecItemNotFound {
             var addQuery = query
             addQuery.merge(attributes) { _, new in new }
-            SecItemAdd(addQuery as CFDictionary, nil)
+            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            // 新增失败(如缺 entitlement)会让登录态重启后静默丢失,必须留痕
+            Log.logKeychain("relay token add (email-length=\(email.count))", status: addStatus)
+        } else if updateStatus != errSecSuccess {
+            Log.logKeychain("relay token update (email-length=\(email.count))", status: updateStatus)
         }
         Log.debug("sync", "relay token saved for email-length=\(email.count)")
     }

@@ -143,7 +143,9 @@
 "database_location_text" = "For cloud sync to work correctly, select the same database location on all devices and computers. The location can be changed later.";
 "database_name_error" = "Database name can only contain letters and digits.";
 "database_name_prompt" = "Database name:";
-"database_not_fond_error" = "Database not found";
+"database_not_found_error" = "Database not found";
+"ios_device_name_simulator" = "Simulator";
+"touch_id_unavailable_hint" = "Touch ID unavailable";
 "database_restored_message" = "Database restored";
 "database_saved_message" = "Database saved to:";
 "database_setup_item_1" = "Create a new database and set a password for it";

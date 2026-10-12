@@ -268,10 +268,8 @@ public final class WebDavDriver {
             put.httpBody = current
             put.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
             let (_, putResp) = try await URLSession.shared.data(for: put)
-            guard let putHttp = putResp as? HTTPURLResponse,
-                  (200..<300).contains(putHttp.statusCode) else {
-                throw SyncError.http((putResp as? HTTPURLResponse)?.statusCode ?? 0)
-            }
+            guard let putHttp = putResp as? HTTPURLResponse else { throw SyncError.http(Self.noResponseStatus) }
+            guard (200..<300).contains(putHttp.statusCode) else { throw SyncError.http(putHttp.statusCode) }
             Log.debug("sync", "webdav backup via copy fallback (MOVE unsupported)")
             return
         }
@@ -298,15 +296,17 @@ public final class WebDavDriver {
         Log.info("sync", "webdav remote files renamed \"\(databaseName)\" → \"\(newName)\"")
     }
 
+    /// 无 HTTP 响应可读时的状态码哨兵(与「连上了但状态异常」区分开)。
+    private static let noResponseStatus = 0
+
     public func upload(_ data: Data) async throws {
         guard let url = remoteURL else { throw SyncError.badUrl }
         var req = request(method: "PUT", url: url)
         req.httpBody = data
         req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         let (_, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw SyncError.http((resp as? HTTPURLResponse)?.statusCode ?? 0)
-        }
+        guard let http = resp as? HTTPURLResponse else { throw SyncError.http(Self.noResponseStatus) }
+        guard (200..<300).contains(http.statusCode) else { throw SyncError.http(http.statusCode) }
     }
 
     public func downloadKey() async throws -> Data? {
@@ -324,9 +324,8 @@ public final class WebDavDriver {
         var req = request(method: "PUT", url: url)
         req.httpBody = data
         let (_, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw SyncError.http((resp as? HTTPURLResponse)?.statusCode ?? 0)
-        }
+        guard let http = resp as? HTTPURLResponse else { throw SyncError.http(Self.noResponseStatus) }
+        guard (200..<300).contains(http.statusCode) else { throw SyncError.http(http.statusCode) }
         Log.debug("sync", "webdav wrote envelope \(data.count)B for \"\(databaseName)\"")
     }
 
@@ -529,12 +528,11 @@ public final class ICloudDriver: CloudDriver {
         if let coordError { throw coordError }
     }
 
-    /// 等待 iCloud 文件物化完成(占位符 → 实体)。轮询 ubiquitous 下载状态,
-    /// 超时抛错让上层走失败路径(而不是读到占位符残体误判密码)。
     /// 等待 iCloud 文件物化完成(占位符 → 实体)。关键点:dataless 项的**真实路径
     /// 在下载完成前并不存在**,资源值查询必须落在占位符 URL 上;物化完成的标志
     /// 是真实路径出现。本地路径(测试的假云端)与已下载文件直接放行——
-    /// 陈旧性由上层复检护栏负责。
+    /// 陈旧性由上层复检护栏负责;超时抛错让上层走失败路径(而不是读到
+    /// 占位符残体误判密码)。
     private func ensureMaterialized(_ url: URL, placeholder: URL?, timeout: TimeInterval = 120) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         var logged = false

@@ -143,7 +143,9 @@
 "database_location_text" = "为确保云同步正常工作，请在所有设备和计算机上选择相同的密码库位置。 可以在稍后更改位置。";
 "database_name_error" = "密码库名称只能包含字母和数字(建议以字母开头)";
 "database_name_prompt" = "密码库名称:";
-"database_not_fond_error" = "无法找到密码库";
+"database_not_found_error" = "无法找到密码库";
+"ios_device_name_simulator" = "模拟器";
+"touch_id_unavailable_hint" = "Touch ID 不可用";
 "database_restored_message" = "密码库已还原";
 "database_saved_message" = "密码库保存到：";
 "database_setup_item_1" = "创建新密码库并设置密码";

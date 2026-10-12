@@ -7,6 +7,8 @@ public enum L10n {
     /// 语言覆盖(设置页「语言」选项):为空时跟随系统,否则使用对应 lproj。
     /// 每次调用时解析,使切换语言后界面即时刷新。
     private static var bundleCache: [String: Bundle] = [:]
+    /// L10n 会在主线程之外被调用(评分缓存、扩展进程),缓存读写须有锁保护
+    private static let cacheLock = NSLock()
 
     public static var activeBundle: Bundle {
         let lang = UserDefaults.standard.string(forKey: "app.language") ?? ""
@@ -16,11 +18,18 @@ public enum L10n {
 
     /// 显式覆盖:按 lproj 名解析(SwiftPM 会把目录名小写化,zh-Hans → zh-hans,需两次尝试)。
     private static func overrideBundle(for lang: String) -> Bundle {
-        if let cached = bundleCache[lang] { return cached }
+        cacheLock.lock()
+        if let cached = bundleCache[lang] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
         let path = Bundle.module.path(forResource: lang, ofType: "lproj")
             ?? Bundle.module.path(forResource: lang.lowercased(), ofType: "lproj")
         let resolved = path.flatMap { Bundle(path: $0) } ?? .module
+        cacheLock.lock()
         bundleCache[lang] = resolved
+        cacheLock.unlock()
         return resolved
     }
 

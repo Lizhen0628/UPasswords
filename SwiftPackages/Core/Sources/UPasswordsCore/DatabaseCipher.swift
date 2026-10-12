@@ -15,8 +15,8 @@ public enum DatabaseCipher {
     public static let iterations: UInt32 = 310_000
 
     public struct CipherError: LocalizedError {
-    public init(message: String) { self.message = message }
         public let message: String
+        public init(message: String) { self.message = message }
         public var errorDescription: String? { message }
     }
 
@@ -25,11 +25,11 @@ public enum DatabaseCipher {
     public static func deriveKey(password: String, salt: Data, iterations: UInt32) -> SymmetricKey {
         var derived = Data(repeating: 0, count: 32)
         let pw = Data(password.utf8)
+        var derivationStatus = OSStatus(kCCSuccess)
         derived.withUnsafeMutableBytes { derivedPtr in
             salt.withUnsafeBytes { saltPtr in
                 pw.withUnsafeBytes { pwPtr in
-                    _ = CCKeyDerivationPBKDF(
-                        CCPBKDFAlgorithm(kCCPBKDF2),
+                    derivationStatus = CCKeyDerivationPBKDF(                        CCPBKDFAlgorithm(kCCPBKDF2),
                         pwPtr.bindMemory(to: Int8.self).baseAddress, pw.count,
                         saltPtr.bindMemory(to: UInt8.self).baseAddress, salt.count,
                         CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
@@ -38,6 +38,11 @@ public enum DatabaseCipher {
                     )
                 }
             }
+        }
+        // 派生失败时零值密钥会在解封处被误报成「密码错误」,此处留排查线索
+        // (不改变控制流:与历史行为一致继续返回 derived)
+        if derivationStatus != kCCSuccess {
+            Log.error("cipher", "pbkdf2 failed (OSStatus \(derivationStatus)) iterations=\(iterations)")
         }
         return SymmetricKey(data: derived)
     }
@@ -67,6 +72,13 @@ extension DatabaseCipher {
     public static let versionV2: UInt32 = 2
     /// v2 头固定 16 字节(magic+version+flags),其后即密封盒
     private static let v2HeaderLength = 16
+
+    // 信封字节布局常量(与上方布局图、Contracts 镜像、TS 端 vault-crypto 对齐)
+    private static let envelopeIterationsOffset = 12
+    private static let envelopeSaltOffset = 16
+    private static let envelopeWrappedKeyOffset = 32
+    private static let envelopeChangedAtOffset = 92
+    private static let envelopeMinLength = 100
 
     /// 生成随机 256 位库密钥(每库一个,创建时生成,永不变)。
     public static func generateVaultKey() -> SymmetricKey { SymmetricKey(size: .bits256) }
@@ -122,14 +134,15 @@ extension DatabaseCipher {
 
     /// 信封解封:主密码解出库密钥;密码错抛 wrong_password_error。
     public static func unwrapVaultKey(_ data: Data, password: String) throws -> SymmetricKey {
-        guard data.count >= 92, data.prefix(keyMagic.count) == keyMagic else {
+        guard data.count >= envelopeChangedAtOffset, data.prefix(keyMagic.count) == keyMagic else {
             throw CipherError(message: "not a key envelope")
         }
-        let iters = data.subdata(in: 12..<16).withUnsafeBytes { $0.load(as: UInt32.self) }
-        let salt = data.subdata(in: 16..<(16 + saltLength))
+        let iters = data.subdata(in: envelopeIterationsOffset..<(envelopeIterationsOffset + 4))
+            .withUnsafeBytes { UInt32(littleEndian: $0.load(as: UInt32.self)) }
+        let salt = data.subdata(in: envelopeSaltOffset..<(envelopeSaltOffset + saltLength))
         let key = deriveKey(password: password, salt: salt, iterations: iters)
         do {
-            let box = try AES.GCM.SealedBox(combined: data.subdata(in: 32..<92))
+            let box = try AES.GCM.SealedBox(combined: data.subdata(in: envelopeWrappedKeyOffset..<envelopeChangedAtOffset))
             let rawKey = try AES.GCM.open(box, using: key)
             return SymmetricKey(data: rawKey)
         } catch {
@@ -139,8 +152,9 @@ extension DatabaseCipher {
 
     /// 信封里的改密时间戳(展示用;读取失败返回 nil)。
     public static func envelopeChangedAt(_ data: Data) -> Date? {
-        guard data.count >= 100, data.prefix(keyMagic.count) == keyMagic else { return nil }
-        let bits = data.subdata(in: 92..<100).withUnsafeBytes { $0.load(as: UInt64.self) }
+        guard data.count >= envelopeMinLength, data.prefix(keyMagic.count) == keyMagic else { return nil }
+        let bits = data.subdata(in: envelopeChangedAtOffset..<envelopeMinLength)
+            .withUnsafeBytes { $0.load(as: UInt64.self) }
         return Date(timeIntervalSince1970: TimeInterval(bitPattern: UInt64(littleEndian: bits)))
     }
 }

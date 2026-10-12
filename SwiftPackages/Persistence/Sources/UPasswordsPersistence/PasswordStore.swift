@@ -9,17 +9,7 @@ public enum PasswordStore {
     public static func service(forDatabaseName name: String) -> String { "UPasswords-\(name)" }
 
     public static func savePassword(_ password: String, databaseName: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service(forDatabaseName: databaseName),
-            kSecAttrAccount as String: "database",
-        ]
-        SecItemDelete(query as CFDictionary)
-        var attrs = query
-        attrs[kSecValueData as String] = Data(password.utf8)
-        attrs[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        let status = SecItemAdd(attrs as CFDictionary, nil)
-        Log.logKeychain("save \"database\" for \(service(forDatabaseName: databaseName)) (\(password.count) chars)", status: status)
+        save(password: password, account: "database", databaseName: databaseName)
     }
 
     /// Biometry-gated copy of the database password.
@@ -30,17 +20,22 @@ public enum PasswordStore {
     /// 普通项(与 "database" 项同等保护级别,其他进程读取仍会弹系统授权框),
     /// Touch ID 门禁改由 biometricPassword 的 LAContext.evaluatePolicy 完成。
     public static func savePasswordForBiometric(_ password: String, databaseName: String) {
+        save(password: password, account: "biometric", databaseName: databaseName)
+    }
+
+    /// 写入钥匙串密码副本的共用实现(普通项与生物识别项仅 account 不同)。
+    private static func save(password: String, account: String, databaseName: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service(forDatabaseName: databaseName),
-            kSecAttrAccount as String: "biometric",
+            kSecAttrAccount as String: account,
         ]
         SecItemDelete(query as CFDictionary)
         var attrs = query
         attrs[kSecValueData as String] = Data(password.utf8)
         attrs[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         let status = SecItemAdd(attrs as CFDictionary, nil)
-        Log.logKeychain("save \"biometric\" for \(service(forDatabaseName: databaseName)) (\(password.count) chars)", status: status)
+        Log.logKeychain("save \"\(account)\" for \(service(forDatabaseName: databaseName)) (\(password.count) chars)", status: status)
     }
 
     /// 移除库的钥匙串密码副本(数据库项与生物识别项)。

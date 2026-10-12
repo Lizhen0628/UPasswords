@@ -14,6 +14,12 @@ public enum TOTP {
         public var account: String? = nil
     }
 
+    /// RFC 6238 位数与周期的合法区间:URI 里的越界值(会令取模/除零 trap)
+    /// 一律回退默认,杜绝畸形 otpauth:// 崩溃进程。
+    private static let allowedDigits = 6...8
+    private static let defaultDigits = 6
+    private static let defaultPeriod = 30
+
     public enum TOTPError: LocalizedError {
         case invalidSecret
         case unsupportedAlgorithm
@@ -52,8 +58,10 @@ public enum TOTP {
                     if let v = item.value, let dec = try? base32Decode(v), !dec.isEmpty {
                         cfg.secret = dec
                     }
-                case "digits": cfg.digits = Int(item.value ?? "6") ?? 6
-                case "period": cfg.period = Int(item.value ?? "30") ?? 30
+                case "digits": cfg.digits = clampedDigits(Int(item.value ?? "") ?? defaultDigits)
+                case "period":
+                    let parsed = Int(item.value ?? "") ?? defaultPeriod
+                    cfg.period = max(parsed, 1)
                 case "algorithm": cfg.algorithm = (item.value ?? "SHA1").uppercased()
                 case "issuer": cfg.issuer = item.value
                 default: break
@@ -63,6 +71,11 @@ public enum TOTP {
             return cfg
         }
         return Config(secret: try base32Decode(trimmed))
+    }
+
+    /// 越界位数回退默认(digits ≥ 19 会令 10^digits 溢出,≤ 0 无意义)。
+    private static func clampedDigits(_ value: Int) -> Int {
+        allowedDigits.contains(value) ? value : defaultDigits
     }
 
     /// RFC 6238 test vectors use 8 digits; UI uses the field's configured digits.

@@ -89,28 +89,38 @@ public final class DatabaseStore {
 
     public func exists(_ name: String) -> Bool { fm.fileExists(atPath: url(for: name).path) }
 
-    @discardableResult
-    public func create(name: String, password: String, now: Date = Date()) throws -> DatabaseFile {
+    /// 库名只允许字母数字(create 与 rename 共用,防两处规则漂移)。
+    private static let databaseNamePattern = "^[A-Za-z0-9]+$"
+
+    private func validateName(_ name: String) throws {
         guard !name.isEmpty else { throw StoreError(L10n.t("database_name_error")) }
-        guard name.range(of: "^[A-Za-z0-9]+$", options: .regularExpression) != nil else {
+        guard name.range(of: Self.databaseNamePattern, options: .regularExpression) != nil else {
             throw StoreError(L10n.t("database_name_error"))
         }
+    }
+
+    @discardableResult
+    public func create(name: String, password: String, now: Date = Date()) throws -> DatabaseFile {
+        try validateName(name)
         guard !exists(name) else { throw StoreError(L10n.t("database_already_exists_error")) }
+        // 首库判定须在写入前取:写完后 list() 必然已含本库
+        let isFirstDatabase = list().isEmpty
         let t0 = Date()
         let db = PasswordDatabase.createDefault(now: now)
         let vek = DatabaseCipher.generateVaultKey()
         let enc = try DatabaseCipher.encryptBody(db.xmlData(), vaultKey: vek)
         let envelope = try DatabaseCipher.wrapVaultKey(vek, password: password)
         do {
-            try enc.write(to: url(for: name))
-            try envelope.write(to: keyURL(for: name))
+            // .atomic 与全文件其余写入对齐:崩溃/断电不留半写文件
+            try enc.write(to: url(for: name), options: .atomic)
+            try envelope.write(to: keyURL(for: name), options: .atomic)
         } catch {
             Log.error("db", "create \"\(name).upw\" write failed: \(error)")
             throw error
         }
         PasswordStore.savePassword(password, databaseName: name)
         Log.info("db", "created \"\(name).upw\" v2 (\(enc.count)B + envelope, \(Int(Date().timeIntervalSince(t0) * 1000))ms)")
-        return DatabaseFile(name: name, fileName: "\(name).upw", created: now, isMain: list().isEmpty)
+        return DatabaseFile(name: name, fileName: "\(name).upw", created: now, isMain: isFirstDatabase)
     }
 
     /// 解锁加载:v2 容器用主密码解信封拿到库密钥再解本体。
@@ -180,15 +190,18 @@ public final class DatabaseStore {
     }
 
     public func rename(_ old: String, to new: String) throws {
-        guard exists(old) else { throw StoreError(L10n.t("database_not_fond_error")) }
+        guard exists(old) else { throw StoreError(L10n.t("database_not_found_error")) }
         guard !exists(new) else { throw StoreError(L10n.t("database_already_exists_error")) }
-        guard new.range(of: "^[A-Za-z0-9]+$", options: .regularExpression) != nil else {
-            throw StoreError(L10n.t("database_name_error"))
-        }
+        try validateName(new)
         Log.info("db", "rename \"\(old)\" → \"\(new)\"")
         try fm.moveItem(at: url(for: old), to: url(for: new))
         if fm.fileExists(atPath: keyURL(for: old).path) {
-            try? fm.moveItem(at: keyURL(for: old), to: keyURL(for: new))
+            do {
+                try fm.moveItem(at: keyURL(for: old), to: keyURL(for: new))
+            } catch {
+                // 本体已改名、信封遗留旧名:下次解锁会报 envelope_missing,留痕供排查
+                Log.error("db", "rename envelope \"\(old).upwkey\" → \"\(new).upwkey\" failed: \(error)")
+            }
         }
         if let pw = PasswordStore.loadPassword(databaseName: old) {
             PasswordStore.savePassword(pw, databaseName: new)

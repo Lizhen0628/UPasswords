@@ -43,4 +43,20 @@ final class TOTPTests: XCTestCase {
         let t = Date(timeIntervalSince1970: 100) // 100 % 30 == 10
         XCTAssertEqual(TOTP.remainingSeconds(period: 30, at: t), 20)
     }
+
+    /// 畸形 otpauth URI 的位数/周期越界值回退默认:生成不崩溃、结果合法。
+    func testHostileURIClampsDigitsAndPeriod() throws {
+        let secret = "JBSWY3DPEHPK3PXP"
+        for hostile in [
+            "otpauth://totp/x?secret=\(secret)&digits=25",   // 10^25 溢出区间
+            "otpauth://totp/x?secret=\(secret)&digits=0",
+            "otpauth://totp/x?secret=\(secret)&digits=-3",
+            "otpauth://totp/x?secret=\(secret)&period=0",    // 除零/取模零
+        ] {
+            let cfg = try TOTP.parse(hostile)
+            let code = try TOTP.code(config: cfg, at: Date(timeIntervalSince1970: 59))
+            XCTAssertEqual(code.count, 6, hostile)
+            XCTAssertGreaterThan(TOTP.remainingSeconds(period: cfg.period), 0, hostile)
+        }
+    }
 }

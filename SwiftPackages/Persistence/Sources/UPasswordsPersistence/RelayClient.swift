@@ -5,6 +5,9 @@ import UPasswordsCore
 /// 账户(邮箱验证码)与库注册表(版本元数据/信封/哈希)。
 /// 零知识红线:所有请求只携带密文/哈希/元数据,绝不携带主密码或库密钥。
 public struct RelayClient {
+    /// 验证码位数(与服务端 randomCode6 同源约定;UI 输入门槛与校验共用)。
+    public static let verificationCodeLength = 6
+
     /// 验证码用途:登录 / 敏感操作(删库、注销)。
     public enum Purpose: String {
         case login, sensitive
