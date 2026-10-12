@@ -1036,3 +1036,4 @@
 "export_password_hint" = "导出数据文件前，请输入库主密码验证。";
 "relay_onboarding_hint" = "在创建密码库之前，先用邮箱验证码完成注册/登录。密码库始终端到端加密，邮箱仅用于授权在你自己的设备间同步。";
 "unlock_remote_body_missing" = "密码正确，但新密码库还在同步中，请稍后重试";
+"unlock_environment_error" = "密码库暂不可读或处于离线——检查连接后重试（不计入失败次数）";

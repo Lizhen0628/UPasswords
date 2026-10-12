@@ -122,7 +122,10 @@ export async function handleCodeRequest(
 }
 
 /// 校验并消费一条验证码;返回是否匹配。
-async function consumeCode(env: Env, eh: string, purpose: string, code: unknown): Promise<boolean> {  if (typeof code !== "string" || !/^\d{6}$/.test(code)) return false;
+/// 尝试配额采用「原子领取」:并发爆破请求中每次 UPDATE 只有一个能推进
+/// 计数(check-then-act 竞态曾把 5 次/码的上限放大到整批并发全有效)。
+async function consumeCode(env: Env, eh: string, purpose: string, code: unknown): Promise<boolean> {
+  if (typeof code !== "string" || !/^\d{6}$/.test(code)) return false;
   const now = nowSec();
   const row = await env.DB.prepare(
     "SELECT id, code_hash, attempts FROM email_codes WHERE email_hmac = ? AND purpose = ? AND used_at IS NULL AND expires_at > ? ORDER BY created_at DESC LIMIT 1",
@@ -131,17 +134,18 @@ async function consumeCode(env: Env, eh: string, purpose: string, code: unknown)
     .first<{ id: number; code_hash: string; attempts: number }>();
   if (!row) return false;
   const maxAttempts = numVar(env, "CODE_MAX_ATTEMPTS", 5);
-  if (row.attempts >= maxAttempts) {
+  // 先原子领取一次尝试名额:领不到(已达上限/已被并发领完)直接作废该码
+  const claim = await env.DB.prepare(
+    "UPDATE email_codes SET attempts = attempts + 1 WHERE id = ? AND used_at IS NULL AND attempts < ?",
+  )
+    .bind(row.id, maxAttempts)
+    .run();
+  if (!claim.meta.changes) {
     await env.DB.prepare("UPDATE email_codes SET used_at = ? WHERE id = ?").bind(now, row.id).run();
     return false;
   }
   const expected = await codeHash(env, eh, code, purpose);
-  if (!timingSafeEqual(expected, row.code_hash)) {
-    await env.DB.prepare("UPDATE email_codes SET attempts = attempts + 1 WHERE id = ?")
-      .bind(row.id)
-      .run();
-    return false;
-  }
+  if (!timingSafeEqual(expected, row.code_hash)) return false;
   await env.DB.prepare("UPDATE email_codes SET used_at = ? WHERE id = ?").bind(now, row.id).run();
   return true;
 }

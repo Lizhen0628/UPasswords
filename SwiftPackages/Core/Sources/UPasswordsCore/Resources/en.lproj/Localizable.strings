@@ -1036,3 +1036,4 @@
 "export_password_hint" = "Enter the vault master password before exporting data files.";
 "relay_onboarding_hint" = "Create your account with an email verification code before setting up your vault. The vault stays end-to-end encrypted; the email only authorizes syncing across your own devices.";
 "unlock_remote_body_missing" = "Password accepted, but the rotated vault is still syncing — try again shortly";
+"unlock_environment_error" = "Vault unreadable or offline — check connection and retry (not counted as a failed attempt)";

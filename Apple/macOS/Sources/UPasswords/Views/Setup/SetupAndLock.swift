@@ -210,12 +210,17 @@ struct LockWindowView: View {
     private func unlock() {
         Task { @MainActor in
             // 远端兜底:他机改密轮换后本地本体过期,需拉远端收敛(见 AppContext 注释)
-            if await ctx.unlockWithRemoteFallback(name: ctx.databaseName, password: password) {
+            switch await ctx.unlockWithRemoteFallback(name: ctx.databaseName, password: password) {
+            case .success:
                 password = ""
                 error = ""
-            } else {
+            case .wrongPassword:
                 error = L10n.t("wrong_password_error")
                 ctx.registerFailedAttempt()
+                password = ""
+            case .unavailable:
+                // 数据损坏/信封缺失/断网:不是密码错,绝不计入自毁
+                error = L10n.t("unlock_environment_error")
                 password = ""
             }
         }

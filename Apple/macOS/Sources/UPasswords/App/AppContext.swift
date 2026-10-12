@@ -310,6 +310,7 @@ final class AppContext: ObservableObject {
         pendingSyncConflict = nil // 切换/解锁数据库:旧库的冲突现场作废
         lastActivity = Date() // otherwise the idle timer re-locks right after unlocking
         failedUnlockAttempts = 0
+        lastFailedUnlockAt = nil
         selection = .special(.allCards)
         selectedCardId = database.activeCards.first?.id
         Log.info("lifecycle", "unlocked \"\(name)\": \(database.cards.count) cards, \(database.labels.count) labels")
@@ -341,24 +342,38 @@ final class AppContext: ObservableObject {
         announceStartupSheets()
     }
 
+    /// 解锁结果:只有「密码被拒」计入自毁;本地数据损坏/信封缺失/断网是
+    /// 环境故障,输对密码也不该累计销毁计数。
+    enum UnlockOutcome {
+        case success, wrongPassword, unavailable
+    }
+
+    /// 密码被拒的判定:unwrapVaultKey 唯一以 wrong_password_error 文案抛出,
+    /// 信封缺失/格式错误是其他 CipherError/IO 错误——绝不计入自毁。
+    private static func isPasswordRejection(_ error: Error) -> Bool {
+        (error as? DatabaseCipher.CipherError)?.message == L10n.t("wrong_password_error")
+    }
+
     /// 解锁(带远端兜底):本地解不开时拉远端信封+本体收敛后重试。
     /// 场景:他机改密(始终轮换库密钥)后本机被强制锁定——本地信封已换新,
     /// 但本体还是旧钥密文,新/旧密码都解不开本地副本;远端才是新全套。
     /// 密码真错时远端信封同样解不开 → 仍是密码错误,不误导。
     @discardableResult
-    func unlockWithRemoteFallback(name: String, password: String) async -> Bool {
+    func unlockWithRemoteFallback(name: String, password: String) async -> UnlockOutcome {
         do {
             try unlock(name: name, password: password)
-            return true
+            return .success
         } catch {
             guard let binding = relay.binding(database: name),
-                  let token = relay.token(database: name) else { return false }
+                  let token = relay.token(database: name) else {
+                return Self.isPasswordRejection(error) ? .wrongPassword : .unavailable
+            }
             do {
                 let detail = try await relayClient.getVault(token: token, vaultId: binding.vaultId)
                 guard let envelopeBytes = detail.envelope,
                       let vek = try? DatabaseCipher.unwrapVaultKey(envelopeBytes, password: password) else {
                     Log.warn("lifecycle", "remote unlock fallback: password rejected by remote envelope")
-                    return false
+                    return .wrongPassword
                 }
                 let body: Data
                 do {
@@ -366,7 +381,7 @@ final class AppContext: ObservableObject {
                 } catch {
                     Log.warn("sync", "remote unlock fallback: rotated body not on relay yet")
                     AppToast.shared.show(L10n.t("unlock_remote_body_missing"))
-                    return false
+                    return .unavailable
                 }
                 let plain = try DatabaseCipher.decryptBody(body, vaultKey: vek)
                 let db = try PasswordDatabase.parse(plain)
@@ -375,14 +390,14 @@ final class AppContext: ObservableObject {
                 Log.info("lifecycle", "remote unlock fallback converged local vault \"\(name)\"")
                 do {
                     try unlock(name: name, password: password)
-                    return true
+                    return .success
                 } catch {
                     Log.error("lifecycle", "remote unlock fallback: retry after convergence failed: \(error)")
-                    return false
+                    return Self.isPasswordRejection(error) ? .wrongPassword : .unavailable
                 }
             } catch {
                 Log.warn("sync", "remote unlock fallback failed: \(error)")
-                return false
+                return .unavailable
             }
         }
     }
@@ -458,7 +473,15 @@ final class AppContext: ObservableObject {
         }
     }
 
+    /// 自毁计数滑窗:间隔超过它的两次失败不累计(防跨天/隔周误攒)。
+    private static let failedAttemptWindow: TimeInterval = 15 * 60
+    private var lastFailedUnlockAt: Date?
+
     func registerFailedAttempt() {
+        if let last = lastFailedUnlockAt, Date().timeIntervalSince(last) > Self.failedAttemptWindow {
+            failedUnlockAttempts = 0
+        }
+        lastFailedUnlockAt = Date()
         failedUnlockAttempts += 1
         let limit = settings.selfDestructAttempts
         Log.warn("lifecycle", "failed unlock attempt #\(failedUnlockAttempts)" + (limit > 0 ? " (self-destruct at \(limit))" : ""))
