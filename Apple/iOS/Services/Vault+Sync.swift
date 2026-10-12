@@ -31,7 +31,7 @@ extension Vault {
     // MARK: iCloud 云端文件夹(iOS 沙盒经安全作用域书签访问云盘)
 
     /// 已保存 iCloud 云盘文件夹书签(设置页据此显示入口状态)。
-    var hasICloudFolder: Bool { d.data(forKey: "sync.icloud.bookmark") != nil }
+    var hasICloudFolder: Bool { d.data(forKey: DefaultsKey.icloudBookmark) != nil }
 
     /// 记录用户在文件 App 里选定的云端目录(安全作用域书签持久化)。
     /// 选中的若是已有 .upw 的 UPasswords 文件夹则作为容器本体;
@@ -46,15 +46,15 @@ extension Vault {
             showToast(L10n.t("ios_icloud_folder_error"))
             return false
         }
-        d.set(bookmark, forKey: "sync.icloud.bookmark")
-        d.set(picked.lastPathComponent, forKey: "sync.icloud.name")
+        d.set(bookmark, forKey: DefaultsKey.icloudBookmark)
+        d.set(picked.lastPathComponent, forKey: DefaultsKey.icloudFolderName)
         icloudFolderName = picked.lastPathComponent
 
         // 探测所选目录内容:决定容器模式(云盘根 → 容器取其下 UPasswords/)
         let driver = ICloudDriver(databaseName: databaseName, iCloudFolder: picked)
         let names = (try? await driver.listDatabases()) ?? []
         let isContainer = picked.lastPathComponent == "UPasswords" || !names.isEmpty
-        d.set(isContainer ? "explicit" : "root", forKey: "sync.icloud.mode")
+        d.set(isContainer ? "explicit" : "root", forKey: DefaultsKey.icloudMode)
         Log.info("sync", "ios icloud folder picked: \"\(picked.lastPathComponent)\", mode=\(isContainer ? "explicit" : "root"), cloud dbs=\(names.count)")
         return true
     }
@@ -80,10 +80,10 @@ extension Vault {
             Log.warn("sync", "ios import: icloud folder bookmark failed for \"\(folder.lastPathComponent)\" — pick manually in settings")
             return
         }
-        d.set(bookmark, forKey: "sync.icloud.bookmark")
-        d.set(folder.lastPathComponent, forKey: "sync.icloud.name")
+        d.set(bookmark, forKey: DefaultsKey.icloudBookmark)
+        d.set(folder.lastPathComponent, forKey: DefaultsKey.icloudFolderName)
         // 导入的 .upw 直接躺在该文件夹里 → 该文件夹即同步容器
-        d.set("explicit", forKey: "sync.icloud.mode")
+        d.set("explicit", forKey: DefaultsKey.icloudMode)
         icloudFolderName = folder.lastPathComponent
         cloudTypeRaw = CloudType.icloud.rawValue
         Log.info("sync", "ios import: adopted icloud folder \"\(folder.lastPathComponent)\", sync enabled")
@@ -92,7 +92,7 @@ extension Vault {
     /// 解析书签并取得安全作用域访问权;调用方必须在用完后调用返回的
     /// release 闭包(stopAccessingSecurityScopedResource)。
     private func resolveICloudFolder() -> (folder: URL, release: () -> Void)? {
-        guard let data = d.data(forKey: "sync.icloud.bookmark") else {
+        guard let data = d.data(forKey: DefaultsKey.icloudBookmark) else {
             Log.info("sync", "ios icloud folder not picked yet — pick it in settings first")
             return nil
         }
@@ -100,8 +100,8 @@ extension Vault {
         guard let folder = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) else {
             Log.warn("sync", "ios icloud bookmark resolve failed — cleared, re-pick folder in settings")
             // 无效书签(如无作用域造出的半成品)会造成永久“未配置”,清掉回到未选定状态
-            d.removeObject(forKey: "sync.icloud.bookmark")
-            d.removeObject(forKey: "sync.icloud.name")
+            d.removeObject(forKey: DefaultsKey.icloudBookmark)
+            d.removeObject(forKey: DefaultsKey.icloudFolderName)
             icloudFolderName = ""
             return nil
         }
@@ -111,7 +111,7 @@ extension Vault {
         }
         if stale, let refreshed = try? folder.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
             // 书签过期(系统刷新路径):尽力续期,失败不影响本次同步
-            d.set(refreshed, forKey: "sync.icloud.bookmark")
+            d.set(refreshed, forKey: DefaultsKey.icloudBookmark)
             Log.debug("sync", "ios icloud bookmark refreshed")
         }
         return (folder, { folder.stopAccessingSecurityScopedResource() })
@@ -129,7 +129,7 @@ extension Vault {
         case .icloud:
             guard let mounted = resolveICloudFolder() else { return nil }
             let driver: ICloudDriver
-            if d.string(forKey: "sync.icloud.mode") == "root" {
+            if d.string(forKey: DefaultsKey.icloudMode) == "root" {
                 driver = ICloudDriver(databaseName: dbName, cloudRoot: mounted.folder)
             } else {
                 driver = ICloudDriver(databaseName: dbName, iCloudFolder: mounted.folder)
@@ -302,19 +302,13 @@ extension Vault {
         }
     }
 
-    /// 上次成功同步的基线哈希键(按数据库分开):本地键与远端键均存
-    /// 明文 XML **内容**哈希(远端不比密文字节:密文每次上传换随机 nonce,
-    /// 同内容重传会被误判为远端有修改)。
-    private var baselineLocalXMLKey: String { "sync.baseline.local.\(databaseName)" }
-    private var baselineRemoteDataKey: String { "sync.baseline.remote.\(databaseName)" }
-
     /// 记录本次成功同步的基线哈希与完成时间,供下次同步做冲突判定。
     /// 调用前提:此刻 `database` 即为刚上传(或确认与远端一致)的内容。
     private func recordSyncBaseline() {
         let contentHash = SyncConflict.sha256Hex(database.xmlData())
-        d.set(contentHash, forKey: baselineLocalXMLKey)
-        d.set(contentHash, forKey: baselineRemoteDataKey)
-        d.set(Date().timeIntervalSince1970, forKey: "sync.last.\(databaseName)")
+        d.set(contentHash, forKey: DefaultsKey.baselineLocalXML(database: databaseName))
+        d.set(contentHash, forKey: DefaultsKey.baselineRemoteXML(database: databaseName))
+        d.set(Date().timeIntervalSince1970, forKey: DefaultsKey.lastSync(database: databaseName))
         lastSync = Date()
         Log.debug("sync", "ios baseline recorded for \"\(databaseName)\"")
     }
@@ -518,8 +512,8 @@ extension Vault {
                     localXMLHash: localHash,
                     remoteXMLHash: remoteHash,
                     baselines: SyncConflict.Baselines(
-                        localXMLHash: d.string(forKey: baselineLocalXMLKey),
-                        remoteXMLHash: d.string(forKey: baselineRemoteDataKey)))
+                        localXMLHash: d.string(forKey: DefaultsKey.baselineLocalXML(database: databaseName)),
+                        remoteXMLHash: d.string(forKey: DefaultsKey.baselineRemoteXML(database: databaseName))))
                 guard verdict != .conflict else {
                     // 本地与云端自上次同步后都有修改:交给用户决定覆盖方向
                     Log.warn("sync", "ios conflict \"\(databaseName)\": local and remote both changed — asking user")
@@ -535,8 +529,8 @@ extension Vault {
                 // 双方自基线起均无变化:纯轮询命中,跳过上传。
                 // (iCloud 分歧期本端会不断读回自己的旧版本;盲传会把「最后写入者」
                 //  反复拉回旧版本,阻碍云端收敛)
-                if localHash == d.string(forKey: baselineLocalXMLKey),
-                   remoteHash == d.string(forKey: baselineRemoteDataKey) {
+                if localHash == d.string(forKey: DefaultsKey.baselineLocalXML(database: databaseName)),
+                   remoteHash == d.string(forKey: DefaultsKey.baselineRemoteXML(database: databaseName)) {
                     lastSync = Date()
                     syncState = .idle
                     Log.info("sync", "ios no changes since baseline — skipping upload")

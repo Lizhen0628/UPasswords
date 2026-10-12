@@ -55,11 +55,29 @@ final class Vault: ObservableObject {
     @Published var autoBackupEnabled: Bool { didSet { d.set(autoBackupEnabled, forKey: "set.autoBackup") } }
     @Published var autoBackupIntervalDays: Int { didSet { d.set(autoBackupIntervalDays, forKey: "set.autoBackupDays") } }
 
+    /// UserDefaults 键集中定义:裸字符串散落多文件,任一侧改键即静默失配
+    /// (书签/冲突判定/时间戳全面失效)。键名与 macOS 一致,便于对照排查。
+    enum DefaultsKey {
+        static let cloudType = "sync.cloud"
+        static let webdavSettings = "sync.webdav"
+        static let autoSyncEnabled = "sync.autoEnabled"
+        static let autoSyncSeconds = "sync.autoSeconds"
+        static let icloudBookmark = "sync.icloud.bookmark"
+        static let icloudFolderName = "sync.icloud.name"
+        static let icloudMode = "sync.icloud.mode"
+        /// 基线哈希按库分开:本地与远端均存明文 XML **内容**哈希
+        /// (远端不比密文字节——密文每次上传换随机 nonce,同内容重传会被
+        /// 误判为远端有修改)。
+        static func baselineLocalXML(database: String) -> String { "sync.baseline.local.\(database)" }
+        static func baselineRemoteXML(database: String) -> String { "sync.baseline.remote.\(database)" }
+        static func lastSync(database: String) -> String { "sync.last.\(database)" }
+    }
+
     // 云同步设置(共享 defaults;键名与 macOS 一致,便于对照排查)
-    @Published var cloudTypeRaw: String { didSet { d.set(cloudTypeRaw, forKey: "sync.cloud") } }
+    @Published var cloudTypeRaw: String { didSet { d.set(cloudTypeRaw, forKey: DefaultsKey.cloudType) } }
     @Published var webdav: WebDavSettings { didSet { saveWebDav() } }
-    @Published var autoSyncEnabled: Bool { didSet { d.set(autoSyncEnabled, forKey: "sync.autoEnabled") } }
-    @Published var autoSyncSeconds: Int { didSet { d.set(autoSyncSeconds, forKey: "sync.autoSeconds") } }
+    @Published var autoSyncEnabled: Bool { didSet { d.set(autoSyncEnabled, forKey: DefaultsKey.autoSyncEnabled) } }
+    @Published var autoSyncSeconds: Int { didSet { d.set(autoSyncSeconds, forKey: DefaultsKey.autoSyncSeconds) } }
     /// 同步进行态与上次成功同步时间(持久化;Vault+Sync 扩展写入)。
     @Published var syncState: SyncPhase = .idle
     @Published var lastSync: Date? = nil
@@ -112,23 +130,23 @@ final class Vault: ObservableObject {
         autoBreachCheckDays = d.object(forKey: "sec.autoBreachCheckDays") as? Int ?? 7
         autoBackupEnabled = d.object(forKey: "set.autoBackup") as? Bool ?? false
         autoBackupIntervalDays = d.object(forKey: "set.autoBackupDays") as? Int ?? 7
-        cloudTypeRaw = d.string(forKey: "sync.cloud") ?? CloudType.none.rawValue
-        if let data = d.data(forKey: "sync.webdav") {
+        cloudTypeRaw = d.string(forKey: DefaultsKey.cloudType) ?? CloudType.none.rawValue
+        if let data = d.data(forKey: DefaultsKey.webdavSettings) {
             webdav = (try? JSONDecoder().decode(WebDavSettings.self, from: data)) ?? WebDavSettings()
         } else {
             webdav = WebDavSettings()
         }
-        autoSyncEnabled = d.object(forKey: "sync.autoEnabled") as? Bool ?? false
-        autoSyncSeconds = d.object(forKey: "sync.autoSeconds") as? Int ?? 60
+        autoSyncEnabled = d.object(forKey: DefaultsKey.autoSyncEnabled) as? Bool ?? false
+        autoSyncSeconds = d.object(forKey: DefaultsKey.autoSyncSeconds) as? Int ?? 60
         if let main = SharedVaultStore.mainDatabase() {
             databaseName = main.name
             if SharedVaultStore.currentDatabaseName == nil {
                 SharedVaultStore.currentDatabaseName = main.name
             }
         }
-        lastSync = Self.storedDate("sync.last.\(databaseName)")
+        lastSync = Self.storedDate(DefaultsKey.lastSync(database: databaseName))
         lastBreachCheck = Self.storedDate("breach.last.\(databaseName)")
-        icloudFolderName = d.string(forKey: "sync.icloud.name") ?? ""
+        icloudFolderName = d.string(forKey: DefaultsKey.icloudFolderName) ?? ""
         refreshDatabases()
         Log.info("app", "ios vault init, db=\(databaseName), exists=\(store.exists(databaseName)), cloud=\(cloudTypeRaw)")
     }
@@ -142,7 +160,7 @@ final class Vault: ObservableObject {
     /// WebDAV 设置经 JSON 编码落共享 defaults。
     private func saveWebDav() {
         if let data = try? JSONEncoder().encode(webdav) {
-            d.set(data, forKey: "sync.webdav")
+            d.set(data, forKey: DefaultsKey.webdavSettings)
         }
     }
 
@@ -294,7 +312,8 @@ final class Vault: ObservableObject {
     /// 库体随后原子换代。
     func changeMasterPassword(old: String, new: String) -> Bool {
         guard verifyMaster(old), new.count >= PasswordPolicy.minimumMasterPasswordLength else { return false }
-        guard let vaultKey else {
+        // 只需确认会话持有库密钥;改密轮换用的是下方新生成的 effectiveKey
+        guard vaultKey != nil else {
             Log.error("app", "ios master password change failed: no vault key in session")
             return false
         }
@@ -402,7 +421,7 @@ final class Vault: ObservableObject {
 
     /// 切库/改名/导入后重载随库变化的状态(上次同步/上次泄露检查/冲突现场)。
     func reloadPerDatabaseState() {
-        lastSync = Self.storedDate("sync.last.\(databaseName)")
+        lastSync = Self.storedDate(DefaultsKey.lastSync(database: databaseName))
         lastBreachCheck = Self.storedDate("breach.last.\(databaseName)")
         pendingSyncConflict = nil
         syncState = .idle
@@ -453,9 +472,9 @@ final class Vault: ObservableObject {
 
     /// 清除某库的同步基线与时间戳(改名/删除时调用,防串库)。
     private func clearSyncState(for name: String) {
-        d.removeObject(forKey: "sync.baseline.local.\(name)")
-        d.removeObject(forKey: "sync.baseline.remote.\(name)")
-        d.removeObject(forKey: "sync.last.\(name)")
+        d.removeObject(forKey: DefaultsKey.baselineLocalXML(database: name))
+        d.removeObject(forKey: DefaultsKey.baselineRemoteXML(database: name))
+        d.removeObject(forKey: DefaultsKey.lastSync(database: name))
     }
 
     /// 切换数据库:先验证目标库主密码,成功才切换并直接解锁(与 macOS 一致)。
