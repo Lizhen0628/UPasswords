@@ -306,6 +306,47 @@ public final class DatabaseStore {
         try envelope.write(to: keyURL(for: name), options: .atomic)
     }
 
+    /// 本地文件对还原(新设备向导):从任意位置的一对 `<名>.upw`/`<名>.upwkey`
+    /// 校验容器格式与主密码,解密解析后落为新的本地库。
+    /// 密码与完整性先验通过才写盘,不会留下解不开的半成品。
+    /// - Parameters:
+    ///   - body: 密码库本体文件(.upw,任意可读位置)
+    ///   - envelope: 配套信封文件(.upwkey)
+    ///   - name: 落地为本地库的名字(字母数字,不得与现有库重名)
+    ///   - password: 该库主密码
+    /// - Returns: 新建的本地库文件描述
+    /// - Throws: 名字非法或重名同 create;文件不可读 local_files_unreadable_error;
+    ///   格式/信封/主密码错误同 loadUnlocked
+    @discardableResult
+    public func restore(body: URL, envelope: URL, name: String, password: String) throws -> DatabaseFile {
+        try validateName(name)
+        guard !exists(name) else { throw StoreError(L10n.t("database_already_exists_error")) }
+        let data: Data
+        let keyData: Data
+        do {
+            data = try Data(contentsOf: body)
+            keyData = try Data(contentsOf: envelope)
+        } catch {
+            Log.error("db", "restore from local files unreadable (\(body.lastPathComponent)): \(error)")
+            throw StoreError(L10n.t("local_files_unreadable_error"))
+        }
+        guard DatabaseCipher.isV2Container(data) else {
+            Log.warn("db", "restore from local files rejected: not a v2 container (\(body.lastPathComponent))")
+            throw DatabaseCipher.CipherError(message: L10n.t("wrong_database_format_error"))
+        }
+        guard DatabaseCipher.envelopeChangedAt(keyData) != nil else {
+            Log.warn("db", "restore from local files rejected: invalid envelope (\(envelope.lastPathComponent))")
+            throw DatabaseCipher.CipherError(message: L10n.t("envelope_missing_error"))
+        }
+        let vek = try DatabaseCipher.unwrapVaultKey(keyData, password: password)
+        let plain = try DatabaseCipher.decryptBody(data, vaultKey: vek)
+        let db = try PasswordDatabase.parse(plain)
+        try save(db, name: name, vaultKey: vek)
+        try saveEnvelope(keyData, for: name)
+        Log.info("db", "restored \"\(name).upw\" from local files (\(data.count)B body, \(db.cards.count) cards)")
+        return DatabaseFile(name: name, fileName: "\(name).upw", created: Date(), isMain: list().count == 1)
+    }
+
     public struct StoreError: LocalizedError {
         public let message: String
         public init(_ message: String) { self.message = message }

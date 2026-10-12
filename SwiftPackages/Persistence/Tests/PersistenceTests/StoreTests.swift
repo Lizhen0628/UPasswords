@@ -162,4 +162,46 @@ final class StoreV2Tests: XCTestCase {
         try store.delete(name: "Golf")
         XCTAssertFalse(FileManager.default.fileExists(atPath: store.keyURL(for: "Golf").path))
     }
+
+    /// 本地文件对还原(新设备向导):外部 .upw/.upwkey 校验解密后落为新本地库;
+    /// 错误密码/重名/坏信封在写盘前即被拒,不留半成品。
+    func testRestoreFromLocalFilePair() throws {
+        let store = DatabaseStore(root: tempDir)
+        try store.create(name: "Source", password: "pw1")
+        let (loaded, vek) = try store.loadUnlocked(name: "Source", password: "pw1")
+        var db = loaded
+        db.cards.append(Card(id: 902, title: "Migrated"))
+        try store.save(db, name: "Source", vaultKey: vek)
+
+        // 模拟"从其他设备拷来的一对文件":独立目录、任意文件名
+        let incoming = tempDir.appendingPathComponent("incoming", isDirectory: true)
+        try FileManager.default.createDirectory(at: incoming, withIntermediateDirectories: true)
+        let body = incoming.appendingPathComponent("Restored.upw")
+        let key = incoming.appendingPathComponent("Restored.upwkey")
+        try FileManager.default.copyItem(at: store.url(for: "Source"), to: body)
+        try FileManager.default.copyItem(at: store.keyURL(for: "Source"), to: key)
+
+        let file = try store.restore(body: body, envelope: key, name: "Restored", password: "pw1")
+        XCTAssertTrue(store.exists("Restored"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.keyURL(for: "Restored").path))
+        XCTAssertEqual(file.name, "Restored")
+        let migrated = try store.load(name: "Restored", password: "pw1")
+        XCTAssertEqual(migrated.card(id: 902)?.title, "Migrated", "content survives local restore")
+
+        // 错误密码:解信封失败,不落盘
+        XCTAssertThrowsError(try store.restore(body: body, envelope: key, name: "WrongPw", password: "bad"))
+        XCTAssertFalse(store.exists("WrongPw"))
+
+        // 与现有库重名:拒绝
+        XCTAssertThrowsError(try store.restore(body: body, envelope: key, name: "Restored", password: "pw1"))
+
+        // 非法库名(如备份戳含连字符):拒绝
+        XCTAssertThrowsError(try store.restore(body: body, envelope: key, name: "2026-0101", password: "pw1"))
+
+        // 字节不是合法信封:拒绝且不落盘
+        let stray = incoming.appendingPathComponent("Stray.upwkey")
+        try Data([0x01, 0x02]).write(to: stray)
+        XCTAssertThrowsError(try store.restore(body: body, envelope: stray, name: "Stray", password: "pw1"))
+        XCTAssertFalse(store.exists("Stray"))
+    }
 }

@@ -134,6 +134,22 @@ extension AppContext {
         }
     }
 
+    /// 引导「在线恢复」的账户库清单:已登录(引导登录在先)时从注册表
+    /// 预列库名,免先配网盘即可看到名下有哪些库。未登录或拉取失败返回
+    /// nil,表单回落纯网盘路径(既有行为不变)。
+    func relayVaultsForRestore() async -> [RelayClient.VaultRecord]? {
+        guard let email = relay.lastAccountEmail,
+              let token = relay.token(email: email) else { return nil }
+        do {
+            let records = try await relayClient.listVaults(token: token)
+            Log.info("sync", "relay restore list: \(records.count) vault(s) fetched")
+            return records
+        } catch {
+            Log.warn("sync", "relay restore list failed: \(error)")
+            return nil
+        }
+    }
+
     // MARK: - 同步编排的数据通道(供 AppContext+Sync 调用)
 
     /// 拉取注册表(未绑定/网络失败返回 nil,同步走纯网盘路径)。

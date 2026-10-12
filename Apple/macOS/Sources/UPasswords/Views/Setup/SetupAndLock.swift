@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import LocalAuthentication
+import UniformTypeIdentifiers
 import UPasswordsCore
 import UPasswordsPersistence
 
@@ -232,7 +233,7 @@ struct LockWindowView: View {
 struct SetupWindowView: View {
     @EnvironmentObject var ctx: AppContext
 
-    private enum SetupMode { case account, create, restoreCloud }
+    private enum SetupMode { case account, create, restoreCloud, restoreLocal }
 
     @State private var mode: SetupMode = .create
     @State private var name = ""
@@ -270,15 +271,25 @@ struct SetupWindowView: View {
                         error = ""
                         mode = .restoreCloud
                     }
+                    Button(L10n.t("restore_from_local_button")) {
+                        Log.info("ui", "setup: switch to local restore")
+                        error = ""
+                        mode = .restoreLocal
+                    }
                     Button(L10n.t("continue_button"), action: create)
                         .buttonStyle(.borderedProminent)
                         .keyboardShortcut(.defaultAction)
                         .disabled(name.isEmpty || password.isEmpty)
                 }
                 .padding(.bottom, 28)
-            } else {
+            } else if mode == .restoreCloud {
                 RestoreCloudForm(onBack: {
                     Log.info("ui", "setup: back to create from cloud restore")
+                    mode = .create
+                })
+            } else {
+                RestoreLocalForm(onBack: {
+                    Log.info("ui", "setup: back to create from local restore")
                     mode = .create
                 })
             }
@@ -432,8 +443,10 @@ private struct AccountStepView: View {
     }
 }
 
-/// 向导「在线恢复」表单:选云端(WebDAV / iCloud Drive)→ 列出云端 .upw
-/// 文件 → 选一个并输入该库主密码 → 下载解密落为本地库,直接进入主界面。
+/// 向导「在线恢复」表单。进入时已登录(引导账户步在先)则从服务端注册表
+/// 预列账户名下的库名——有服务端库体镜像的库选中心密码即可直接恢复,
+/// 免配网盘;无镜像或未登录的库走网盘通道(WebDAV / iCloud Drive):
+/// 配置 → 列出云端 .upw 文件 → 选一个并输入该库主密码 → 下载解密落库。
 struct RestoreCloudForm: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
@@ -441,6 +454,7 @@ struct RestoreCloudForm: View {
 
     @State private var listing = false
     @State private var restoring = false
+    @State private var serverVaults: [RelayClient.VaultRecord] = []
     @State private var names: [String] = []
     @State private var selected = ""
     @State private var password = ""
@@ -532,11 +546,16 @@ struct RestoreCloudForm: View {
                             if !names.isEmpty {
                                 Picker("", selection: $selected) {
                                     ForEach(names, id: \.self) { n in
-                                        Text(n).tag(n)
+                                        Text(rowLabel(n)).tag(n)
                                     }
                                 }
                                 .pickerStyle(.radioGroup)
                                 .labelsHidden()
+                                if !serverVaults.isEmpty {
+                                    Text(L10n.t("cloud_restore_server_list_hint"))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                         .frame(maxWidth: 420)
@@ -563,7 +582,7 @@ struct RestoreCloudForm: View {
             HStack {
                 Button(L10n.t("cancel_button"), action: onBack)
                 Button {
-                    Log.info("ui", "cloud restore: restore \"\(selected)\"")
+                    Log.info("ui", "online restore: restore \"\(selected)\" (server-listed=\(serverVaults.count))")
                     Task { await restore() }
                 } label: {
                     HStack(spacing: 6) {
@@ -578,10 +597,17 @@ struct RestoreCloudForm: View {
             .padding(.bottom, 28)
         }
         .onChange(of: settings.cloudType) { _, _ in
-            // 切换云端类型后,上一朵云的清单不再有效
-            names = []
-            selected = ""
+            // 切换云端类型后,网盘清单不再有效;服务端预列的库名仍然有效
+            names = serverVaults.map(\.name)
+            selected = names.first ?? ""
             error = ""
+        }
+        .task {
+            // 引导账户步登录在先:进入本表单即从注册表预列账户名下的库
+            guard let records = await ctx.relayVaultsForRestore() else { return }
+            serverVaults = records
+            names = Self.mergedNames(server: records, drive: names)
+            if selected.isEmpty { selected = names.first ?? "" }
         }
     }
 
@@ -591,6 +617,20 @@ struct RestoreCloudForm: View {
             get: { settings.cloud == .icloud ? .icloud : .webdav },
             set: { settings.cloudType = $0.rawValue }
         )
+    }
+
+    /// 服务端预列 + 网盘列出的合并清单(服务端在前,网盘独有的名追加,去重)。
+    private static func mergedNames(server: [RelayClient.VaultRecord], drive: [String]) -> [String] {
+        var merged = server.map(\.name)
+        for n in drive where !merged.contains(n) { merged.append(n) }
+        return merged
+    }
+
+    /// 单行标签:注册在案但服务端无库体镜像的库标注仍需网盘通道恢复。
+    private func rowLabel(_ n: String) -> String {
+        guard let record = serverVaults.first(where: { $0.name == n }),
+              record.bodyUpdatedAt == nil else { return n }
+        return n + L10n.t("cloud_restore_drive_only_suffix")
     }
 
     private func setupItem(_ n: Int, @ViewBuilder title: () -> some View) -> some View {
@@ -606,11 +646,15 @@ struct RestoreCloudForm: View {
         listing = true
         error = ""
         do {
-            names = try await ctx.listCloudDatabases()
-            selected = names.first ?? ""
+            let driveNames = try await ctx.listCloudDatabases()
+            names = Self.mergedNames(server: serverVaults, drive: driveNames)
+            if selected.isEmpty || !names.contains(selected) {
+                selected = names.first ?? ""
+            }
         } catch let err {
-            names = []
-            selected = ""
+            // 网盘列举失败保留服务端预列项:有镜像的库仍可直接恢复
+            names = serverVaults.map(\.name)
+            selected = names.first ?? ""
             error = err.localizedDescription
         }
         listing = false
@@ -620,11 +664,199 @@ struct RestoreCloudForm: View {
         restoring = true
         error = ""
         do {
-            try await ctx.restoreDatabaseFromCloud(name: selected, password: password)
+            try await ctx.restoreDatabaseOnline(
+                name: selected, serverVaults: serverVaults, password: password)
             // 成功即 phase → .unlocked,RootView 自动切主界面,本视图随之销毁
         } catch let err {
             error = err.localizedDescription
         }
         restoring = false
+    }
+}
+
+/// 向导「本地还原」表单:选择从其他设备拷来的一对 `<名>.upw`(本体)/
+/// `<名>.upwkey`(信封)文件 → 输入该库主密码 → 校验解密落为本地库,
+/// 直接进入主界面。无云端通道(未配 WebDAV/iCloud)时的迁移路径。
+struct RestoreLocalForm: View {
+    @EnvironmentObject var ctx: AppContext
+    var onBack: () -> Void
+
+    @State private var bodyURL: URL?
+    @State private var envelopeURL: URL?
+    @State private var envelopeAutoFound = false
+    @State private var name = ""
+    @State private var password = ""
+    @State private var error = ""
+    @State private var restoring = false
+
+    /// 信封与密码齐备才允许恢复;库名交由 store 校验(非法/重名在恢复时报错)。
+    private var readyToRestore: Bool {
+        bodyURL != nil && envelopeURL != nil && !name.isEmpty && !password.isEmpty
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    setupItem(3) { Text(L10n.t("database_setup_item_3")) }
+                        .font(.body.bold())
+                        .foregroundStyle(.primary)
+
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 10) {
+                            LabeledRow(label: L10n.t("database_name_prompt")) {
+                                TextField("Main", text: $name)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+                            LabeledRow(label: L10n.t("local_vault_file_prompt")) {
+                                HStack(spacing: 8) {
+                                    Button(bodyURL == nil
+                                           ? L10n.t("local_pick_file_button")
+                                           : bodyURL?.lastPathComponent ?? "") {
+                                        pickBodyFile()
+                                    }
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    if bodyURL != nil {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                    }
+                                }
+                            }
+                            LabeledRow(label: L10n.t("local_key_file_prompt")) {
+                                HStack(spacing: 8) {
+                                    Button(envelopeURL == nil
+                                           ? L10n.t("local_pick_key_button")
+                                           : envelopeURL?.lastPathComponent ?? "") {
+                                        pickKeyFile()
+                                    }
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    if envelopeURL != nil {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                    }
+                                }
+                            }
+                            if bodyURL != nil && envelopeURL == nil {
+                                Label(L10n.t("local_key_missing_hint"), systemImage: "exclamationmark.triangle")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else if envelopeAutoFound {
+                                Label(L10n.t("local_key_autofound_hint"), systemImage: "checkmark.circle")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: 420)
+                    }
+
+                    LabeledRow(label: L10n.t("password_prompt")) {
+                        SecureField("", text: $password)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    Text(L10n.t("local_restore_hint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if !error.isEmpty {
+                        Text(error)
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                    }
+                }
+                .padding(.horizontal, 60)
+                .padding(.vertical, 10)
+            }
+
+            HStack {
+                Button(L10n.t("cancel_button"), action: onBack)
+                Button {
+                    Log.info("ui", "local restore: restore \"\(name)\"")
+                    Task { await restore() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(L10n.t("restore_ok_button"))
+                        if restoring { ProgressView().controlSize(.small) }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!readyToRestore || restoring)
+            }
+            .padding(.bottom, 28)
+        }
+    }
+
+    /// 所选本体旁的同名信封(`<名>.upw` → `<名>.upwkey`)。
+    private func siblingKeyURL(for body: URL) -> URL? {
+        let candidate = body.deletingPathExtension().appendingPathExtension("upwkey")
+        return FileManager.default.fileExists(atPath: candidate.path) ? candidate : nil
+    }
+
+    /// 选本体文件:预填库名并自动探测同目录信封。
+    private func pickBodyFile() {
+        let panel = NSOpenPanel()
+        panel.title = L10n.t("restore_from_local_title")
+        panel.allowedContentTypes = [UTType(filenameExtension: "upw")].compactMap { $0 }
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else {
+            Log.info("ui", "local restore: body pick cancelled")
+            return
+        }
+        Log.info("ui", "local restore: body picked \(url.lastPathComponent)")
+        bodyURL = url
+        // 库名预填文件名(备份戳含连字符等非法字符时由恢复时的校验兜底)
+        name = url.deletingPathExtension().lastPathComponent
+        if let key = siblingKeyURL(for: url) {
+            envelopeURL = key
+            envelopeAutoFound = true
+            Log.info("ui", "local restore: sibling envelope found \(key.lastPathComponent)")
+        } else {
+            envelopeURL = nil
+            envelopeAutoFound = false
+        }
+        error = ""
+    }
+
+    /// 手动选信封文件(本体旁没有同名 .upwkey 时)。
+    private func pickKeyFile() {
+        let panel = NSOpenPanel()
+        panel.title = L10n.t("restore_from_local_title")
+        panel.allowedContentTypes = [UTType(filenameExtension: "upwkey")].compactMap { $0 }
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else {
+            Log.info("ui", "local restore: key pick cancelled")
+            return
+        }
+        Log.info("ui", "local restore: key picked \(url.lastPathComponent)")
+        envelopeURL = url
+        envelopeAutoFound = false
+        error = ""
+    }
+
+    private func restore() async {
+        guard let body = bodyURL, let envelope = envelopeURL else { return }
+        restoring = true
+        error = ""
+        do {
+            try await ctx.restoreDatabaseFromLocalFiles(
+                body: body, envelope: envelope, name: name, password: password)
+            // 成功即 phase → .unlocked,RootView 自动切主界面,本视图随之销毁
+        } catch let err {
+            error = err.localizedDescription
+        }
+        restoring = false
+    }
+
+    private func setupItem(_ n: Int, @ViewBuilder title: () -> some View) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("\(n).")
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            title()
+        }
     }
 }

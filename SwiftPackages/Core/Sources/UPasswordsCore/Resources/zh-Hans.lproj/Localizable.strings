@@ -97,6 +97,8 @@
 "cloud_databases_prompt" = "云端密码库：";
 "cloud_prompt" = "云端：";
 "cloud_restore_password_hint" = "云端密码库用它加密——请输入创建该密码库时设置的主密码。";
+"cloud_restore_server_list_hint" = "已自动列出账户下的密码库；无服务端副本的库仍需配置网盘后恢复。";
+"cloud_restore_drive_only_suffix" = "（需网盘）";
 "cloud_sync_task" = "设置云同步";
 "cloud_sync_text" = "选择一个网盘来同步加密的密码库。您需要有一个已注册的网盘帐户。";
 "cloud_sync_title" = "云同步";
@@ -278,7 +280,15 @@
 "license_is_active_text" = "您的许可证已激活。";
 "load_database_command" = "加载密码库";
 "local_database_exists_error" = "本地已存在同名密码库";
+"local_files_unreadable_error" = "无法读取所选文件，请确认文件存在且可访问。";
+"local_key_autofound_hint" = "已自动找到密码库文件旁配套的同名 .upwkey。";
+"local_key_file_prompt" = "密钥文件：";
+"local_key_missing_hint" = "所选文件旁没有同名 .upwkey，请手动选择配套的密钥文件。";
 "local_path_prompt" = "本地路径：";
+"local_pick_file_button" = "选择文件…";
+"local_pick_key_button" = "选择密钥文件…";
+"local_restore_hint" = "选择从其他设备拷来的一对文件：<名>.upw（密码库本体）与配套的 <名>.upwkey（密钥信封）。恢复使用创建该密码库时设置的主密码。";
+"local_vault_file_prompt" = "密码库文件：";
 "locally_and_in_cloud_button" = "本地和云端";
 "locally_button" = "本地";
 "logs_location_setting" = "日志位置：";
@@ -420,6 +430,8 @@
 "restore_from_cloud_button" = "在线恢复";
 "restore_ok_button" = "恢复并打开";
 "restore_from_cloud_title" = "在线恢复密码库";
+"restore_from_local_button" = "本地还原";
+"restore_from_local_title" = "从本地文件还原密码库";
 "restore_location_text" = "要复恢复密码库，请选择与之前相同的位置。";
 "restore_purchase_button" = "恢复购买";
 "restore_templates_command" = "恢复模板";

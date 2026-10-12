@@ -340,6 +340,76 @@ extension AppContext {
         Log.info("lifecycle", "restore from cloud \"\(name)\" ok (\(db.cards.count) cards)")
     }
 
+    /// 服务端通道恢复(新设备向导):注册表信封 + 服务端库体镜像 →
+    /// 解密校验后落为本地库,直接解锁进入主界面——不必配置 iCloud/WebDAV。
+    /// 前提:该库在服务端有库体镜像(记录 bodyUpdatedAt 非空);
+    /// 绑定与版本基准由解锁后的 relayBindCurrentVaultIfNeeded 自动补齐
+    /// (按库名认领现有注册,不产生重复 vaultId)。
+    private func restoreDatabaseFromRelay(record: RelayClient.VaultRecord,
+                                          password: String) async throws {
+        guard let email = relay.lastAccountEmail,
+              let token = relay.token(email: email) else { throw SyncError.notConfigured }
+        let name = record.name
+        Log.info("lifecycle", "restore from relay \"\(name)\" (vault=\(record.vaultId.prefix(8))…)")
+        guard !store.exists(name) else {
+            Log.warn("lifecycle", "restore from relay \"\(name)\" aborted: local database exists")
+            throw SyncError.localNameConflict
+        }
+        let detail = try await relayClient.getVault(token: token, vaultId: record.vaultId)
+        guard let envelope = detail.envelope else {
+            Log.warn("lifecycle", "restore from relay \"\(name)\": registry has no envelope")
+            throw DatabaseCipher.CipherError(message: L10n.t("envelope_missing_error"))
+        }
+        let data: Data
+        do {
+            data = try await relayClient.getBody(token: token, vaultId: record.vaultId)
+        } catch RelayClient.RelayError.notFound {
+            Log.warn("lifecycle", "restore from relay \"\(name)\": server body mirror missing")
+            throw SyncError.databaseNotFound
+        }
+        guard DatabaseCipher.isV2Container(data) else {
+            Log.warn("lifecycle", "restore from relay \"\(name)\": not a v2 container")
+            throw DatabaseCipher.CipherError(message: L10n.t("wrong_database_format_error"))
+        }
+        let vek = try DatabaseCipher.unwrapVaultKey(envelope, password: password)
+        let plain = try DatabaseCipher.decryptBody(data, vaultKey: vek)
+        let db = try PasswordDatabase.parse(plain)
+        try store.save(db, name: name, vaultKey: vek)
+        try store.saveEnvelope(envelope, for: name)
+        store.mainDatabaseName = name
+        try unlock(name: name, password: password)
+        markSetupTaskDone(.cloudSync)
+        scheduleSilentBreachCheck()
+        Log.info("lifecycle", "restore from relay \"\(name)\" ok (\(db.cards.count) cards)")
+    }
+
+    /// 向导「在线恢复」统一入口:选中库在服务端有库体镜像时走注册表
+    /// 通道(免配网盘),否则回落网盘通道下载。serverVaults 为引导登录后
+    /// 预列的注册表清单,可为空(未登录/拉取失败)——此时等价于纯网盘恢复。
+    func restoreDatabaseOnline(name: String, serverVaults: [RelayClient.VaultRecord],
+                               password: String) async throws {
+        if let record = serverVaults.first(where: { $0.name == name && $0.bodyUpdatedAt != nil }) {
+            try await restoreDatabaseFromRelay(record: record, password: password)
+        } else {
+            if serverVaults.contains(where: { $0.name == name }) {
+                Log.info("lifecycle", "online restore \"\(name)\": no server mirror — falling back to drive")
+            }
+            try await restoreDatabaseFromCloud(name: name, password: password)
+        }
+    }
+
+    /// 本地文件恢复(新设备向导):从任意位置的一对 `<名>.upw`/`<名>.upwkey`
+    /// 校验解密后落为本地库,直接解锁进入主界面——无云端通道时的迁移路径。
+    /// PBKDF2 解信封与云端恢复同样在主执行,耗时同量级(数百毫秒)。
+    func restoreDatabaseFromLocalFiles(body: URL, envelope: URL, name: String, password: String) async throws {
+        Log.info("lifecycle", "restore from local files \"\(name)\" (body=\(body.lastPathComponent))")
+        _ = try store.restore(body: body, envelope: envelope, name: name, password: password)
+        store.mainDatabaseName = name
+        try unlock(name: name, password: password)
+        scheduleSilentBreachCheck()
+        Log.info("lifecycle", "restore from local files \"\(name)\" ok (\(database.cards.count) cards)")
+    }
+
     /// 常驻到期 ticker:每 5s 检查一次,距上次同步超过设定间隔即静默同步。
     /// 不随设置变化重排(间隔改动下一跳自然生效);锁屏/未启用时空转,开销可忽略。
     func startAutoSyncTickerIfNeeded() {

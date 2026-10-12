@@ -97,6 +97,8 @@
 "cloud_databases_prompt" = "Cloud databases:";
 "cloud_prompt" = "Cloud:";
 "cloud_restore_password_hint" = "The cloud database is encrypted with the master password set on the device that created it.";
+"cloud_restore_server_list_hint" = "Vaults from your account are listed automatically; those without a server copy still need a cloud drive.";
+"cloud_restore_drive_only_suffix" = " (cloud drive required)";
 "cloud_sync_task" = "Setup cloud synchronization";
 "cloud_sync_text" = "Select a cloud to sync your encrypted database with. You should have a registered cloud account.";
 "cloud_sync_title" = "Cloud Sync";
@@ -278,7 +280,15 @@
 "license_is_active_text" = "Your license is active.";
 "load_database_command" = "Load Database";
 "local_database_exists_error" = "A local database with this name already exists";
+"local_files_unreadable_error" = "The selected files could not be read. Make sure they exist and are accessible.";
+"local_key_autofound_hint" = "A matching .upwkey was found next to the vault file.";
+"local_key_file_prompt" = "Key file:";
+"local_key_missing_hint" = "No matching .upwkey was found next to the vault file - choose the key file manually.";
 "local_path_prompt" = "Local path:";
+"local_pick_file_button" = "Choose File…";
+"local_pick_key_button" = "Choose Key File…";
+"local_restore_hint" = "Pick the pair copied from another device: <name>.upw (vault body) and its matching <name>.upwkey (key envelope). Restore uses the master password set when the vault was created.";
+"local_vault_file_prompt" = "Vault file:";
 "locally_and_in_cloud_button" = "Locally and in cloud";
 "locally_button" = "Locally";
 "logs_location_setting" = "Logs location:";
@@ -420,6 +430,8 @@
 "restore_from_cloud_button" = "Restore from cloud";
 "restore_ok_button" = "Restore && Open";
 "restore_from_cloud_title" = "Restore from Cloud";
+"restore_from_local_button" = "Restore from file";
+"restore_from_local_title" = "Restore from a Local File";
 "restore_location_text" = "To restore the database, select the same location as before.";
 "restore_purchase_button" = "Restore purchase";
 "restore_templates_command" = "Restore Templates";
