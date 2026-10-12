@@ -46,10 +46,12 @@ echo "==> copying binary + module bundle"
 cp "$BIN" "$CONTENTS/MacOS/UPasswords"
 # SPM 资源 bundle 落在 .build/<config>/ 下:应用自身的 UPasswords_UPasswords.bundle
 # (菜单栏图标)与依赖包的 UPasswordsCore_UPasswordsCore.bundle(lproj 字符串表)——
-# 必须全部拷入,漏掉 Core bundle 会让 L10n 取词全部回显键名。
+# 必须全部拷入,漏掉 Core bundle 会在首次取词时 fatalError 崩溃。
+# 拷贝目标必须是 Contents/Resources/:Xcode 27 工具链的 SPM 访问器只探测
+# Bundle.main.resourceURL(历史上把 bundle 放 MacOS/ 的做法已不再被找到)。
 for bundle in "$APP_PKG/.build/$CONFIG/"*.bundle; do
   [ -d "$bundle" ] || continue
-  cp -R "$bundle" "$CONTENTS/MacOS/"
+  cp -R "$bundle" "$CONTENTS/Resources/"
 done
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'
