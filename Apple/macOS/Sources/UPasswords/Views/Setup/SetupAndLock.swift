@@ -443,26 +443,26 @@ private struct AccountStepView: View {
     }
 }
 
-/// 向导「在线恢复」表单。进入时已登录(引导账户步在先)则从服务端注册表
-/// 预列账户名下的库名——有服务端库体镜像的库选中心密码即可直接恢复,
-/// 免配网盘;无镜像或未登录的库走网盘通道(WebDAV / iCloud Drive):
-/// 配置 → 列出云端 .upw 文件 → 选一个并输入该库主密码 → 下载解密落库。
+/// 向导「在线恢复」表单:自动从服务端注册表列出账户名下的库 →
+/// 选一个并输入该库主密码 → 服务端信封 + 库体镜像解密落为本地库,
+/// 直接进入主界面。尚无服务端镜像的库行尾标注(在原设备同步一次后即可恢复);
+/// 离线迁移走「本地还原」(.upw/.upwkey 文件对)。
 struct RestoreCloudForm: View {
     @EnvironmentObject var ctx: AppContext
-    @EnvironmentObject var settings: AppSettings
     var onBack: () -> Void
 
-    @State private var listing = false
     @State private var restoring = false
     @State private var serverVaults: [RelayClient.VaultRecord] = []
-    @State private var names: [String] = []
+    @State private var loaded = false
     @State private var selected = ""
     @State private var password = ""
     @State private var error = ""
 
-    /// WebDAV 填了主机即可尝试列表;iCloud 在列表/恢复时再验证账号状态。
-    private var cloudReady: Bool {
-        settings.cloud == .icloud || !settings.webdav.host.isEmpty
+    /// 选中且有服务端库体镜像的库才可恢复(镜像在绑定/每轮同步时推送)。
+    private var selectedRecord: RelayClient.VaultRecord? {
+        guard let record = serverVaults.first(where: { $0.name == selected }),
+              record.bodyUpdatedAt != nil else { return nil }
+        return record
     }
 
     var body: some View {
@@ -475,87 +475,28 @@ struct RestoreCloudForm: View {
 
                     GroupBox {
                         VStack(alignment: .leading, spacing: 10) {
-                            Picker(L10n.t("cloud_prompt"), selection: cloudBinding) {
-                                Text(L10n.t("webdav_cloud")).tag(CloudType.webdav)
-                                Text(CloudType.icloud.name).tag(CloudType.icloud)
-                            }
-                            .pickerStyle(.radioGroup)
-
-                            if settings.cloud == .webdav {
-                                LabeledRow(label: L10n.t("host_prompt")) {
-                                    TextField("dav.example.com", text: $settings.webdav.host)
-                                        .textFieldStyle(.roundedBorder)
-                                }
-                                HStack(spacing: 10) {
-                                    LabeledRow(label: L10n.t("port_prompt")) {
-                                        TextField("443", value: $settings.webdav.port, format: .number)
-                                            .textFieldStyle(.roundedBorder)
-                                    }
-                                    Toggle("HTTPS", isOn: $settings.webdav.useHTTPS)
-                                        .font(.callout)
-                                }
-                                LabeledRow(label: L10n.t("local_path_prompt")) {
-                                    TextField("/UPasswords/", text: $settings.webdav.path)
-                                        .textFieldStyle(.roundedBorder)
-                                }
-                                LabeledRow(label: L10n.t("user_name_prompt")) {
-                                    TextField("", text: $settings.webdav.user)
-                                        .textFieldStyle(.roundedBorder)
-                                }
-                                LabeledRow(label: L10n.t("password_prompt")) {
-                                    SecureField("", text: $settings.webdav.password)
-                                        .textFieldStyle(.roundedBorder)
-                                }
-                            } else {
-                                Label(L10n.t("icloud_sync_info"), systemImage: "icloud")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                // 沙盒构建无法直读 CloudDocs 根,必须经选择器授权书签访问
+                            if !loaded {
                                 HStack(spacing: 8) {
-                                    Text(L10n.t("ios_icloud_folder_label"))
-                                        .font(.caption)
-                                    Button(settings.icloudFolderName.isEmpty
-                                           ? L10n.t("ios_icloud_pick_folder_button")
-                                           : settings.icloudFolderName) {
-                                        Log.info("ui", "icloud folder pick from restore form")
-                                        ctx.pickICloudFolder()
-                                    }
-                                    if !settings.icloudFolderName.isEmpty {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(.green)
-                                    }
-                                }
-                            }
-
-                            HStack(spacing: 8) {
-                                Button(L10n.t("list_cloud_databases_button")) {
-                                    Log.info("ui", "cloud restore: list databases")
-                                    Task { await list() }
-                                }
-                                .disabled(listing || !cloudReady)
-                                if listing {
                                     ProgressView().controlSize(.small)
-                                }
-                                if !names.isEmpty {
-                                    Text(L10n.t("cloud_databases_prompt"))
+                                    Text(L10n.t("cloud_restore_loading_hint"))
                                         .font(.callout)
                                         .foregroundStyle(.secondary)
                                 }
-                            }
-
-                            if !names.isEmpty {
+                            } else if serverVaults.isEmpty {
+                                Text(L10n.t("cloud_restore_empty_hint"))
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            } else {
                                 Picker("", selection: $selected) {
-                                    ForEach(names, id: \.self) { n in
+                                    ForEach(serverVaults.map(\.name), id: \.self) { n in
                                         Text(rowLabel(n)).tag(n)
                                     }
                                 }
                                 .pickerStyle(.radioGroup)
                                 .labelsHidden()
-                                if !serverVaults.isEmpty {
-                                    Text(L10n.t("cloud_restore_server_list_hint"))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
+                                Text(L10n.t("cloud_restore_server_list_hint"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
                         }
                         .frame(maxWidth: 420)
@@ -582,7 +523,7 @@ struct RestoreCloudForm: View {
             HStack {
                 Button(L10n.t("cancel_button"), action: onBack)
                 Button {
-                    Log.info("ui", "online restore: restore \"\(selected)\" (server-listed=\(serverVaults.count))")
+                    Log.info("ui", "online restore: restore \"\(selected)\"")
                     Task { await restore() }
                 } label: {
                     HStack(spacing: 6) {
@@ -592,45 +533,25 @@ struct RestoreCloudForm: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(selected.isEmpty || password.isEmpty || restoring)
+                .disabled(selectedRecord == nil || password.isEmpty || restoring)
             }
             .padding(.bottom, 28)
         }
-        .onChange(of: settings.cloudType) { _, _ in
-            // 切换云端类型后,网盘清单不再有效;服务端预列的库名仍然有效
-            names = serverVaults.map(\.name)
-            selected = names.first ?? ""
-            error = ""
-        }
         .task {
-            // 引导账户步登录在先:进入本表单即从注册表预列账户名下的库
-            guard let records = await ctx.relayVaultsForRestore() else { return }
-            serverVaults = records
-            names = Self.mergedNames(server: records, drive: names)
-            if selected.isEmpty { selected = names.first ?? "" }
+            // 引导账户步登录在先:进入本表单即从注册表列出账户名下的库
+            if let records = await ctx.relayVaultsForRestore() {
+                serverVaults = records
+                selected = records.first { $0.bodyUpdatedAt != nil }?.name ?? ""
+            }
+            loaded = true
         }
     }
 
-    /// 现有云类型是其他网盘(gdrive 等)时落到 WebDAV,避免选中不可用项。
-    private var cloudBinding: Binding<CloudType> {
-        Binding(
-            get: { settings.cloud == .icloud ? .icloud : .webdav },
-            set: { settings.cloudType = $0.rawValue }
-        )
-    }
-
-    /// 服务端预列 + 网盘列出的合并清单(服务端在前,网盘独有的名追加,去重)。
-    private static func mergedNames(server: [RelayClient.VaultRecord], drive: [String]) -> [String] {
-        var merged = server.map(\.name)
-        for n in drive where !merged.contains(n) { merged.append(n) }
-        return merged
-    }
-
-    /// 单行标签:注册在案但服务端无库体镜像的库标注仍需网盘通道恢复。
+    /// 单行标签:尚无服务端库体镜像的库标注(在原设备同步一次后即可恢复)。
     private func rowLabel(_ n: String) -> String {
         guard let record = serverVaults.first(where: { $0.name == n }),
               record.bodyUpdatedAt == nil else { return n }
-        return n + L10n.t("cloud_restore_drive_only_suffix")
+        return n + L10n.t("cloud_restore_no_mirror_suffix")
     }
 
     private func setupItem(_ n: Int, @ViewBuilder title: () -> some View) -> some View {
@@ -642,30 +563,12 @@ struct RestoreCloudForm: View {
         }
     }
 
-    private func list() async {
-        listing = true
-        error = ""
-        do {
-            let driveNames = try await ctx.listCloudDatabases()
-            names = Self.mergedNames(server: serverVaults, drive: driveNames)
-            if selected.isEmpty || !names.contains(selected) {
-                selected = names.first ?? ""
-            }
-        } catch let err {
-            // 网盘列举失败保留服务端预列项:有镜像的库仍可直接恢复
-            names = serverVaults.map(\.name)
-            selected = names.first ?? ""
-            error = err.localizedDescription
-        }
-        listing = false
-    }
-
     private func restore() async {
+        guard let record = selectedRecord else { return }
         restoring = true
         error = ""
         do {
-            try await ctx.restoreDatabaseOnline(
-                name: selected, serverVaults: serverVaults, password: password)
+            try await ctx.restoreDatabaseFromRelay(record: record, password: password)
             // 成功即 phase → .unlocked,RootView 自动切主界面,本视图随之销毁
         } catch let err {
             error = err.localizedDescription

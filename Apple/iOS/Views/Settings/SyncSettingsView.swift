@@ -236,8 +236,7 @@ struct SyncSettingsView: View {
                 .frame(height: 42)
                 .background(Brand.accent.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
-            .disabled(vault.syncState == .syncing
-                      || (vault.cloud == .icloud && !vault.hasICloudFolder))
+            .disabled(vault.syncState == .syncing)
             .buttonStyle(.plain)
             statusLine
             // 远端解不开时两条路:密码被其他设备改过 → 输入新密码接管;

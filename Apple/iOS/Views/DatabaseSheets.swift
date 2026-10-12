@@ -27,30 +27,17 @@ struct VaultManageSheet: View {
     private func beginSwitch(_ db: DatabaseFile) {
         switchPassword = ""
         switchFailed = false
-        beginSwitch(db)
+        switchTarget = db
     }
     @State private var deleteTarget: DatabaseFile? = nil
     @State private var showRename = false
     @State private var showImporter = false
-    /// 云端(已配置同步)里存在但本地没有的库。
-    @State private var cloudOnlyNames: [String] = []
-    @State private var cloudImportTarget: String? = nil
 
     var body: some View {
         NavigationStack {
             List {
                 ForEach(vault.databases, id: \.name) { db in
                     manageRow(db)
-                }
-                // 云端分区:已配置同步时列出“云上有、本地没有”的库,点按下载
-                if !cloudOnlyNames.isEmpty {
-                    Section {
-                        ForEach(cloudOnlyNames, id: \.self) { name in
-                            cloudRow(name)
-                        }
-                    } header: {
-                        Text(L10n.t("ios_cloud_databases_section"))
-                    }
                 }
                 Section {
                     Text(L10n.t("ios_databases_section_footer"))
@@ -89,22 +76,12 @@ struct VaultManageSheet: View {
             }
             .onAppear {
                 vault.refreshDatabases()
-                Task { await loadCloudOnly() }
             }
             .fileImporter(isPresented: $showImporter, allowedContentTypes: Vault.vaultFileTypes) { result in
                 // 导入成功后库即切换并锁定,本页随锁屏自动退场
                 if case .success(let url) = result {
                     vault.importDatabaseFile(from: url)
                 }
-            }
-            .confirmationDialog(L10n.t("ios_db_import_query"), isPresented: Binding(
-                get: { cloudImportTarget != nil },
-                set: { if !$0 { cloudImportTarget = nil } }
-            ), titleVisibility: .visible, presenting: cloudImportTarget) { name in
-                Button(L10n.t("ios_cloud_restore_button")) {
-                    Task { _ = await vault.importCloudDatabase(name: name) }
-                }
-                Button(L10n.t("cancel_button"), role: .cancel) {}
             }
             .sheet(isPresented: $showRename) { DatabaseRenameSheet() }
             .alert(String(format: L10n.t("switch_database_unlock_title"), switchTarget?.name ?? ""),
@@ -142,38 +119,6 @@ struct VaultManageSheet: View {
                 Text(L10n.t("ios_db_delete_detail"))
             }
         }
-    }
-
-    /// 云端库行:点按弹确认后下载并切换。
-    private func cloudRow(_ name: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "icloud")
-                .font(.body)
-                .foregroundStyle(Brand.accent)
-                .frame(width: 26)
-            Text(name)
-                .font(.body)
-                .foregroundStyle(Brand.fg)
-            Spacer()
-            if vault.importingCloud {
-                ProgressView().tint(Brand.accent)
-            } else {
-                Image(systemName: "arrow.down.circle")
-                    .foregroundStyle(Brand.accent)
-            }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture { if !vault.importingCloud { cloudImportTarget = name } }
-        .listRowBackground(Brand.card)
-        .listRowInsets(EdgeInsets(top: 11, leading: 16, bottom: 11, trailing: 16))
-    }
-
-    /// 列出云端有而本地没有的库(未配置同步时为空,分区自动隐藏)。
-    private func loadCloudOnly() async {
-        guard vault.cloud == .icloud || vault.cloud == .webdav else { return }
-        let names = await vault.listCloudDatabases()
-        let localNames = Set(vault.databases.map(\.name))
-        cloudOnlyNames = names.filter { !localNames.contains($0) }
     }
 
     /// 库行:右滑(leading)揭示 删除/切换;点按非当前库弹切换确认。
@@ -365,16 +310,22 @@ struct DatabaseRenameSheet: View {
     }
 }
 
-/// 从 iCloud 云端文件夹导入库:列出云端 .upw,选中下载为本地库并锁定待解锁。
-/// 首次使用时云端文件夹书签还不存在,就地提供选择入口(而不是只报"没有找到")。
+/// 从账户恢复其他库:列出服务端注册表中有库体镜像、且本地尚未持有的库,
+/// 选中后输入该库主密码恢复为本地库并直接切换解锁。
 struct DatabaseImportSheet: View {
     @EnvironmentObject var vault: Vault
     @Environment(\.dismiss) private var dismiss
 
-    @State private var names: [String] = []
+    @State private var records: [RelayClient.VaultRecord] = []
     @State private var loading = false
-    @State private var importing: String? = nil
-    @State private var showFolderPicker = false
+    @State private var restoreTarget: RelayClient.VaultRecord? = nil
+    @State private var restorePassword = ""
+
+    /// 本地没有、且服务端有库体镜像的库(镜像在绑定/每轮同步时推送)。
+    private var importable: [RelayClient.VaultRecord] {
+        let localNames = Set(vault.databases.map(\.name))
+        return records.filter { !localNames.contains($0.name) && $0.bodyUpdatedAt != nil }
+    }
 
     var body: some View {
         NavigationStack {
@@ -387,49 +338,33 @@ struct DatabaseImportSheet: View {
                         }
                         .frame(height: 40)
                     }
-                } else if names.isEmpty {
+                } else if importable.isEmpty {
                     Section {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(vault.hasICloudFolder ? L10n.t("ios_db_import_none")
-                                                       : L10n.t("ios_db_import_need_folder"))
-                                .font(.subheadline)
-                                .foregroundStyle(Brand.muted)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Button {
-                                showFolderPicker = true
-                            } label: {
-                                Label(L10n.t("ios_icloud_pick_folder_button"), systemImage: "folder")
-                            }
-                            if vault.hasICloudFolder {
-                                // 已选过文件夹仍可能临时列不到(云端元数据未刷新),给一次手动重试
-                                Button {
-                                    Task { await load() }
-                                } label: {
-                                    Label(L10n.t("ios_refresh_button"), systemImage: "arrow.clockwise")
-                                }
-                            }
-                        }
-                        .padding(.vertical, 4)
+                        Text(L10n.t("ios_db_import_none"))
+                            .font(.subheadline)
+                            .foregroundStyle(Brand.muted)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
                     Section {
-                        ForEach(names, id: \.self) { name in
+                        ForEach(importable, id: \.vaultId) { record in
                             Button {
-                                importDatabase(name)
+                                restorePassword = ""
+                                restoreTarget = record
                             } label: {
                                 HStack {
-                                    Label(name, systemImage: "externaldrive.badge.icloud")
+                                    Label(record.name, systemImage: "person.icloud")
                                         .foregroundStyle(.primary)
                                     Spacer()
-                                    if importing == name {
+                                    if vault.restoringFromRelay {
                                         ProgressView().tint(Brand.accent)
                                     }
                                 }
                             }
-                            .disabled(importing != nil)
+                            .disabled(vault.restoringFromRelay)
                         }
                     } footer: {
-                        Text(L10n.t("ios_db_imported_locked_message"))
+                        Text(L10n.t("cloud_restore_password_hint"))
                     }
                 }
             }
@@ -441,13 +376,25 @@ struct DatabaseImportSheet: View {
                 }
             }
             .task { await load() }
-            .sheet(isPresented: $showFolderPicker) {
-                FolderPickerView { url in
+            .alert(String(format: L10n.t("switch_database_unlock_title"), restoreTarget?.name ?? ""),
+                   isPresented: Binding(
+                    get: { restoreTarget != nil },
+                    set: { if !$0 { restoreTarget = nil } }
+                   ), presenting: restoreTarget) { target in
+                SecureField("", text: $restorePassword)
+                Button(L10n.t("restore_ok_button")) {
+                    let pw = restorePassword
+                    restoreTarget = nil
                     Task {
-                        await vault.setICloudFolder(url)
-                        await load()
+                        if await vault.restoreFromRelay(record: target, password: pw) {
+                            dismiss()
+                        }
                     }
                 }
+                .disabled(restorePassword.isEmpty)
+                Button(L10n.t("cancel_button"), role: .cancel) { restoreTarget = nil }
+            } message: { _ in
+                Text(L10n.t("cloud_restore_password_hint"))
             }
         }
         .presentationDetents([.medium])
@@ -455,19 +402,7 @@ struct DatabaseImportSheet: View {
 
     private func load() async {
         loading = true
-        names = await vault.listCloudDatabases()
+        records = await vault.relayVaultsForRestore() ?? []
         loading = false
-    }
-
-    private func importDatabase(_ name: String) {
-        importing = name
-        Task {
-            let ok = await vault.importCloudDatabase(name: name)
-            importing = nil
-            if ok {
-                vault.showToast(L10n.t("ios_db_imported_locked_message"))
-                dismiss()
-            }
-        }
     }
 }

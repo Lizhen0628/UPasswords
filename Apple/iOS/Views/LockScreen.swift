@@ -3,7 +3,7 @@ import SwiftUI
 import UPasswordsCore
 import UPasswordsPersistence
 
-// MARK: - 锁屏 / 首次创建主密码(含 iCloud 云端库恢复)
+// MARK: - 锁屏 / 首次创建主密码(含服务端账户库恢复)
 
 struct LockScreen: View {
     @EnvironmentObject var vault: Vault
@@ -13,12 +13,12 @@ struct LockScreen: View {
     @State private var enableFaceID = true
     @State private var shake = false
     @State private var errorText: String? = nil
-    @State private var selectedCloudDB = ""
-    @State private var restoreFailed = false
+    @State private var serverVaults: [RelayClient.VaultRecord] = []
+    @State private var selectedVault = ""
+    @State private var restorePassword = ""
+    @State private var restoreBusy = false
     @State private var lockImage: UIImage? = nil
     @State private var showFileImporter = false
-    @State private var showFolderPicker = false
-    @State private var showFolderGuide = false
     @State private var accountStepDismissed = false
     @State private var accountEmail = ""
     @State private var accountCode = ""
@@ -27,6 +27,13 @@ struct LockScreen: View {
     private var isSetup: Bool { !vault.hasVault }
     private var theme: (name: String, colors: [Color]) {
         Vault.themes[max(0, min(Vault.themes.count - 1, vault.themeIndex))]
+    }
+
+    /// 选中且有服务端库体镜像的库才可恢复(镜像在绑定/每轮同步时推送)。
+    private var selectedRecord: RelayClient.VaultRecord? {
+        guard let record = serverVaults.first(where: { $0.name == selectedVault }),
+              record.bodyUpdatedAt != nil else { return nil }
+        return record
     }
 
     var body: some View {
@@ -103,9 +110,7 @@ struct LockScreen: View {
         }
         .onAppear {
             lockImage = vault.loadLockImage()
-            if isSetup {
-                Task { await vault.checkCloudDatabases() }
-            } else {
+            if !isSetup {
                 // 同机重装:钥匙串里还留有主密码时自动填入解锁框
                 if password.isEmpty, let stored = vault.storedMasterPassword() {
                     password = stored
@@ -116,7 +121,7 @@ struct LockScreen: View {
             }
         }
         .onChange(of: vault.hasVault) { hasVault in
-            // iCloud 恢复完成 → 转入解锁界面,同样尝试带出钥匙串密码
+            // 服务端恢复完成 → 转入解锁界面,同样尝试带出钥匙串密码
             if hasVault, password.isEmpty, let stored = vault.storedMasterPassword() {
                 password = stored
             }
@@ -129,20 +134,6 @@ struct LockScreen: View {
                 Log.warn("db", "ios import file picker failed: \(error)")
             }
         }
-        .sheet(isPresented: $showFolderPicker) {
-            // 文件夹选择器授予目录级安全作用域,恢复后同步书签直接可用
-            FolderPickerView { url in
-                showFolderPicker = false
-                Task { await vault.probeICloudFolder(url) }
-            }
-        }
-        // 文件夹模式下文件是灰的(要选的是文件夹本身),先给操作指引避免误点
-        .alert(L10n.t("ios_cloud_pick_folder_guide_title"), isPresented: $showFolderGuide) {
-            Button(L10n.t("ios_icloud_pick_folder_button")) { showFolderPicker = true }
-            Button(L10n.t("cancel_button"), role: .cancel) {}
-        } message: {
-            Text(L10n.t("ios_cloud_pick_folder_guide_message"))
-        }
     }
 
     @ViewBuilder
@@ -154,21 +145,7 @@ struct LockScreen: View {
                     // 一概后置到验证完成(库就绪后自动补绑云同步)
                     onboardingAccountCard
                 } else {
-                    if !vault.cloudDatabases.isEmpty {
-                        cloudRestoreCard
-                        Text(L10n.t("ios_or_create_new_hint"))
-                            .font(.footnote)
-                            .foregroundStyle(Brand.muted)
-                            .padding(.vertical, 4)
-                    } else if vault.cloudChecking {
-                        HStack(spacing: 8) {
-                            ProgressView().tint(Brand.muted)
-                            Text(L10n.t("ios_cloud_checking_text"))
-                                .font(.footnote)
-                                .foregroundStyle(Brand.muted)
-                        }
-                        .frame(height: 36)
-                    }
+                    serverRestoreCard
                     Button {
                         showFileImporter = true
                     } label: {
@@ -180,21 +157,23 @@ struct LockScreen: View {
                             .background(Brand.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .buttonStyle(.plain)
-                    Button {
-                        showFolderGuide = true
-                    } label: {
-                        Label(L10n.t("ios_cloud_restore_folder_button"), systemImage: "icloud")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(Brand.accent)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 46)
-                            .background(Brand.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
+                    Text(L10n.t("ios_or_create_new_hint"))
+                        .font(.footnote)
+                        .foregroundStyle(Brand.muted)
+                        .padding(.vertical, 4)
                     createFields
                 }
             } else {
                 unlockFields
+            }
+        }
+        .task(id: accountStepDismissed) {
+            // 账户登录完成后(或曾登录过的设备)从注册表取回账户名下的库清单;
+            // 引导登录在先的场景靠 task(id:) 在登录态翻转后重拉一次
+            guard isSetup else { return }
+            if let records = await vault.relayVaultsForRestore() {
+                serverVaults = records
+                selectedVault = records.first { $0.bodyUpdatedAt != nil }?.name ?? ""
             }
         }
     }
@@ -259,50 +238,62 @@ struct LockScreen: View {
         .background(Brand.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    // MARK: iCloud 恢复
+    // MARK: 服务端恢复
 
-    private var cloudRestoreCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label(String(format: L10n.t("ios_cloud_restore_hint_fmt"), vault.cloudDatabases.count),
-                  systemImage: "icloud")
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(Brand.fg)
-            Picker(L10n.t("ios_cloud_db_picker"), selection: $selectedCloudDB) {
-                ForEach(vault.cloudDatabases, id: \.self) { name in
-                    Text("\(name).upw").tag(name)
-                }
-            }
-            .pickerStyle(.menu)
-            .tint(Brand.accent)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Button {
-                guard !selectedCloudDB.isEmpty else { return }
-                Task {
-                    let ok = await vault.importCloudDatabase(name: selectedCloudDB)
-                    if !ok { restoreFailed = true }
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    if vault.importingCloud {
-                        ProgressView().tint(Brand.onAccent)
+    /// 账户名下的库恢复卡片:选库 + 输入该库主密码 → 服务端信封+库体镜像
+    /// 解密落库并直接解锁。无库/未登录/拉取失败时整卡隐藏,只留导入与新建。
+    @ViewBuilder
+    private var serverRestoreCard: some View {
+        if !serverVaults.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Label(String(format: L10n.t("ios_cloud_restore_hint_fmt"), serverVaults.count),
+                      systemImage: "person.icloud")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(Brand.fg)
+                Picker(L10n.t("ios_cloud_db_picker"), selection: $selectedVault) {
+                    ForEach(serverVaults.map(\.name), id: \.self) { name in
+                        Text(rowLabel(name)).tag(name)
                     }
-                    Text(vault.importingCloud ? L10n.t("ios_cloud_restoring_text") : L10n.t("ios_cloud_restore_button"))
                 }
-                .primaryButtonStyle()
+                .pickerStyle(.menu)
+                .tint(Brand.accent)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                SecureField(L10n.t("ios_master_password_prompt"), text: $restorePassword)
+                    .textContentType(.password)
+                    .textFieldStyle(.roundedBorder)
+                Button {
+                    guard let record = selectedRecord else { return }
+                    Log.info("ui", "ios online restore: restore \"\(record.name)\"")
+                    restoreBusy = true
+                    let pw = restorePassword
+                    restorePassword = ""
+                    Task {
+                        _ = await vault.restoreFromRelay(record: record, password: pw)
+                        restoreBusy = false
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        if vault.restoringFromRelay { ProgressView().tint(Brand.onAccent) }
+                        Text(vault.restoringFromRelay ? L10n.t("ios_cloud_restoring_text") : L10n.t("ios_cloud_restore_button"))
+                    }
+                    .primaryButtonStyle()
+                }
+                .disabled(selectedRecord == nil || restorePassword.isEmpty || vault.restoringFromRelay)
+                .buttonStyle(.plain)
+                Text(L10n.t("cloud_restore_server_list_hint"))
+                    .font(.caption2)
+                    .foregroundStyle(Brand.muted)
             }
-            .disabled(selectedCloudDB.isEmpty || vault.importingCloud)
-            .buttonStyle(.plain)
+            .padding(14)
+            .background(Brand.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
-        .padding(14)
-        .background(Brand.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .alert(L10n.t("ios_cloud_restore_failed_title"), isPresented: $restoreFailed) {
-            Button(L10n.t("ios_ok_button"), role: .cancel) {}
-        } message: {
-            Text(L10n.t("ios_cloud_restore_failed_message"))
-        }
-        .onAppear {
-            if selectedCloudDB.isEmpty { selectedCloudDB = vault.cloudDatabases.first ?? "" }
-        }
+    }
+
+    /// 单行标签:尚无服务端库体镜像的库标注(在原设备同步一次后即可恢复)。
+    private func rowLabel(_ n: String) -> String {
+        guard let record = serverVaults.first(where: { $0.name == n }),
+              record.bodyUpdatedAt == nil else { return n }
+        return n + L10n.t("cloud_restore_no_mirror_suffix")
     }
 
     // MARK: 创建 / 解锁

@@ -88,8 +88,18 @@ extension AppContext {
         relay.recordPasswordVersion(registered?.passwordVersion ?? 1, database: databaseName)
         AppToast.shared.show(L10n.t("relay_login_ok_toast"))
         Log.info("sync", "relay enabled for \"\(databaseName)\" vault=\(vaultId.prefix(8))…")
-        if settings.cloud != .none {
-            Task { await sync() }
+        // 绑定即推库体镜像与双哈希:服务端自此持有独立副本,新设备凭账户即可
+        // 在线恢复(不依赖任何网盘配置)。失败不回滚绑定——下轮同步自愈。
+        if let vaultKey {
+            do {
+                let cipher = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
+                await relayPushBody(cipher: cipher)
+                await relayReportHashes(cipher: cipher)
+            } catch {
+                Log.warn("sync", "relay enable body push failed: \(error)")
+            }
+        } else {
+            Log.warn("sync", "relay enable body push skipped: no vault key in session")
         }
     }
 
@@ -342,21 +352,12 @@ extension AppContext {
 
     // MARK: - 本地库改名后的云端迁移
 
-    /// 本地库改名后迁移云端身份:网盘三件套改名 → 注册表 PATCH(vaultId 不变)
-    /// → 本地绑定换键。失败仅记日志:残留旧名文件由下轮同步自愈重建,
-    /// 注册表名不影响 vaultId 寻址。
+    /// 本地库改名后迁移云端身份:本地绑定换键 + 注册表改名(vaultId 不变)。
+    /// 失败仅记日志:注册表名不影响 vaultId 寻址,下轮同步自愈。
     func relayMigrateAfterRename(from oldName: String, to newName: String) async {
         guard let binding = relay.binding(database: oldName),
               let token = relay.token(database: oldName) else { return }
         relay.migrateBinding(from: oldName, to: newName)
-        if let driver = makeCloudDriver(databaseName: oldName) {
-            do {
-                try await driver.testConnection()
-                try await driver.renameRemoteFiles(to: newName)
-            } catch {
-                Log.warn("sync", "relay drive rename failed: \(error)")
-            }
-        }
         do {
             try await relayClient.renameVault(token: token, vaultId: binding.vaultId, name: newName)
         } catch {

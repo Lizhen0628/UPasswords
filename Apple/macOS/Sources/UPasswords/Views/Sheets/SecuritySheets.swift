@@ -95,119 +95,24 @@ struct CompromisedSheet: View {
 
 // MARK: - Configure cloud
 
+/// 云同步设置弹窗(向导「后续步骤」入口):承载与设置页云面板相同的
+/// 账户中继内容——登录/设备管理与自动同步开关。同步通道只有账户中继,
+/// 网盘(iCloud/WebDAV)配置已移除。
 struct ConfigureCloudSheet: View {
-    @EnvironmentObject var ctx: AppContext
-    @EnvironmentObject var settings: AppSettings
     @Environment(\.dismiss) var dismiss
-
-    @State private var testing = false
-    @State private var testResult: String? = nil
 
     var body: some View {
         SheetShell(
             title: L10n.t("cloud_sync_title"),
             minWidth: 480,
-            okTitle: L10n.t("save_button"),
+            okTitle: L10n.t("ok_button"),
             onCancel: { dismiss() },
-            onOk: {
-                if settings.cloud == .none {
-                    saved()
-                } else {
-                    Task { await test() }
-                }
-            },
+            onOk: { dismiss() },
             content: {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(L10n.t("cloud_sync_text"))
-                        .font(.callout).foregroundStyle(.secondary)
-                        .frame(width: cloudSheetContentWidth, alignment: .leading)
-                    Picker(L10n.t("cloud_prompt"), selection: Binding(
-                        get: { settings.cloud }, set: { settings.cloudType = $0.rawValue }
-                    )) {
-                        ForEach(CloudType.allCases) { c in
-                            Text(c.name).tag(c)
-                        }
-                    }
-                    .pickerStyle(.radioGroup)
-
-                    if settings.cloud == .webdav {
-                        GroupBox {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Toggle(L10n.t("https_protocol_warning").prefix(6) + " HTTPS", isOn: $settings.webdav.useHTTPS)
-                                LabeledRow(label: L10n.t("host_prompt")) {
-                                    TextField("dav.example.com", text: $settings.webdav.host).textFieldStyle(.roundedBorder)
-                                }
-                                LabeledRow(label: L10n.t("port_prompt")) {
-                                    TextField("443", value: $settings.webdav.port, format: .number).textFieldStyle(.roundedBorder)
-                                }
-                                LabeledRow(label: L10n.db("database_name_field")) {
-                                    TextField("/UPasswords/", text: $settings.webdav.path).textFieldStyle(.roundedBorder)
-                                }
-                                LabeledRow(label: L10n.t("user_name_prompt")) {
-                                    TextField("", text: $settings.webdav.user).textFieldStyle(.roundedBorder)
-                                }
-                                LabeledRow(label: L10n.t("password_prompt")) {
-                                    SecureField("", text: $settings.webdav.password).textFieldStyle(.roundedBorder)
-                                }
-                                Text(L10n.t("https_protocol_warning"))
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    } else if settings.cloud == .icloud {
-                        Label(L10n.t("icloud_sync_info"), systemImage: "icloud")
-                            .font(.callout).foregroundStyle(.secondary)
-                            .frame(width: cloudSheetContentWidth, alignment: .leading)
-                        // 沙盒构建无法直读 CloudDocs 根,必须经选择器授权书签访问
-                        HStack(spacing: 8) {
-                            Text(L10n.t("ios_icloud_folder_label"))
-                                .font(.callout)
-                            Button(settings.icloudFolderName.isEmpty
-                                   ? L10n.t("ios_icloud_pick_folder_button")
-                                   : settings.icloudFolderName) {
-                                Log.info("ui", "icloud folder pick from setup sheet")
-                                ctx.pickICloudFolder()
-                            }
-                            if !settings.icloudFolderName.isEmpty {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                            }
-                        }
-                    } else if settings.cloud != .none {
-                        Label(L10n.t("not_configured_state"), systemImage: "info.circle")
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
-
-                    if settings.cloud == .none {
-                        Label(L10n.t("not_synchronizing_warning"), systemImage: "exclamationmark.triangle")
-                            .font(.caption).foregroundStyle(.orange)
-                    }
-
-                    if let testResult {
-                        Text(testResult).font(.callout)
-                    }
-                }
+                ConfigureCloudSheetContents()
+                    .frame(width: cloudSheetContentWidth, alignment: .leading)
             }
         )
-    }
-
-    private func saved() {
-        if settings.cloud != .none { ctx.markSetupTaskDone(.cloudSync) }
-        dismiss()
-    }
-
-    private func test() async {
-        guard let driver = ctx.makeCloudDriver() else { return }
-        Log.info("ui", "cloud connection test from setup sheet (cloud=\(settings.cloud.rawValue))")
-        testing = true
-        do {
-            try await driver.testConnection()
-            testResult = L10n.t("success_title")
-            ctx.markSetupTaskDone(.cloudSync)
-            dismiss()
-        } catch {
-            testResult = error.localizedDescription
-        }
-        testing = false
     }
 }
 

@@ -66,8 +66,10 @@ UPasswords/
 │                                   (NSExtensionRequestHandling 消息桥) + Info.plist；
 │                                   扩展 JS/manifest 资源注入 ../WebExtensions/safari（见 project.yml，
 │                                   manifest 平铺到 appex Resources 根、src/ 以 folder reference 保结构）
-├─ Cloud/                          云端协调服务（api.upasswords.com，密码库文件只存网盘，
-│  │                               服务器零知识：账户/信封中继/哈希注册表/只读统计）
+├─ Cloud/                          云端协调服务（api.upasswords.com，远端唯一副本=
+│  │                               R2 加密库体，服务器零知识：账户/信封中继/
+│  │                               哈希注册表/只读统计；网盘通道已移除，
+│  │                               v4/v5 网盘架构存于 cloud-drive-legacy 分支）
 │  ├─ DESIGN.md                    设计文档（威胁模型/离线降级/拖库防御/同步协议）
 │  └─ worker/                      Cloudflare Worker + D1（TypeScript 零依赖）：
 │                                  src/{index,auth,vaults,stats,smtp,db,util}.ts
@@ -104,11 +106,13 @@ UPasswords/
 │  ├─ Persistence/  (UPasswordsPersistence)  存储与同步层，依赖 Core
 │  │  ├─ Sources/UPasswordsPersistence/      DatabaseStore(库文件+备份+恢复)、
 │  │  │                              PasswordStore(钥匙串/Touch ID)、
-│  │  │                              CloudSync(WebDAV/iCloud 驱动+SyncConflict 冲突判定)
+│  │  │                              CloudSync(SyncConflict 冲突判定+基线哈希)、
+│  │  │                              RelayClient(账户中继 API 客户端)、
+│  │  │                              RelaySync(绑定/令牌/版本高水位本地状态)
 │  │  ├─ …/Import/                  CSV、CSVImporter、ImportFormat+ImportFormats(18 种导入)、
 │  │  │                              ExportCardsTask(XML/CSV/TXT 导出)
-│  │  └─ Tests/PersistenceTests/    Store/Backup/ImportExport/CloudDriverList/ICloudDriver/
-│  │                                 SyncConflict/TouchIDKeychain 七组测试
+│  │  └─ Tests/PersistenceTests/    Store/Backup/ImportExport/SyncConflict/
+│  │                                 RelayClient/TouchIDKeychain 六组测试
 │  └─ Networking/  (UPasswordsNetworking)    网络安全层，依赖 Core
 │     ├─ Sources/UPasswordsNetworking/       CompromisedService(HIBP k-匿名泄露检查+
 │     │                              本地动态清单+Card.compromised 扩展)

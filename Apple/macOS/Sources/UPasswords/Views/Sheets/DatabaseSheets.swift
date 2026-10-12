@@ -24,7 +24,7 @@ struct DatabaseInfoSheet: View {
                     infoRow(L10n.t("trash_label"), "\(cards.filter { $0.trashed }.count)")
                     infoRow(L10n.t("labels_text"), "\(ctx.database.labels.count)")
                     infoRow(L10n.db("templates_label"), "\(ctx.database.templateCards.count)")
-                    infoRow(L10n.t("cloud_prompt"), ctx.settings.cloud.name)
+                    infoRow(L10n.t("cloud_prompt"), ctx.relayAccountEmail ?? L10n.t("none_cloud"))
                     if let size = try? FileManager.default.attributesOfItem(atPath: DatabaseStore.shared.url(for: ctx.databaseName).path)[.size] as? Int {
                         infoRow(L10n.t("size_prompt"), ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
                     }

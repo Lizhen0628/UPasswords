@@ -58,8 +58,8 @@ struct SettingsView: View {
             SettingsLinkRow(icon: "lock.shield", title: L10n.t("ios_tab_security")) {
                 SecuritySettingsView(activeSheet: $activeSheet)
             }
-            SettingsLinkRow(icon: "icloud", title: L10n.t("cloud_sync_title"),
-                            detail: vault.cloud.name) {
+            SettingsLinkRow(icon: "person.icloud", title: L10n.t("cloud_sync_title"),
+                            detail: (vault.relayAccountEmail ?? L10n.t("none_cloud"))) {
                 SyncSettingsView()
             }
         } header: {

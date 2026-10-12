@@ -58,13 +58,8 @@ final class Vault: ObservableObject {
     /// UserDefaults 键集中定义:裸字符串散落多文件,任一侧改键即静默失配
     /// (书签/冲突判定/时间戳全面失效)。键名与 macOS 一致,便于对照排查。
     enum DefaultsKey {
-        static let cloudType = "sync.cloud"
-        static let webdavSettings = "sync.webdav"
         static let autoSyncEnabled = "sync.autoEnabled"
         static let autoSyncSeconds = "sync.autoSeconds"
-        static let icloudBookmark = "sync.icloud.bookmark"
-        static let icloudFolderName = "sync.icloud.name"
-        static let icloudMode = "sync.icloud.mode"
         /// 基线哈希按库分开:本地与远端均存明文 XML **内容**哈希
         /// (远端不比密文字节——密文每次上传换随机 nonce,同内容重传会被
         /// 误判为远端有修改)。
@@ -74,8 +69,6 @@ final class Vault: ObservableObject {
     }
 
     // 云同步设置(共享 defaults;键名与 macOS 一致,便于对照排查)
-    @Published var cloudTypeRaw: String { didSet { d.set(cloudTypeRaw, forKey: DefaultsKey.cloudType) } }
-    @Published var webdav: WebDavSettings { didSet { saveWebDav() } }
     @Published var autoSyncEnabled: Bool { didSet { d.set(autoSyncEnabled, forKey: DefaultsKey.autoSyncEnabled) } }
     @Published var autoSyncSeconds: Int { didSet { d.set(autoSyncSeconds, forKey: DefaultsKey.autoSyncSeconds) } }
     /// 同步进行态与上次成功同步时间(持久化;Vault+Sync 扩展写入)。
@@ -85,8 +78,6 @@ final class Vault: ObservableObject {
     @Published var syncRemoteUnreadable = false
     /// 未决同步冲突(密文现场);由 RootView 呈现裁决弹窗。
     @Published var pendingSyncConflict: PendingSyncConflict? = nil
-    /// 已选 iCloud 云盘文件夹名(书签本体在共享 defaults,不进 @Published)。
-    @Published var icloudFolderName: String = ""
     /// 本地数据库列表(设置页多库管理展示)。
     @Published private(set) var databases: [DatabaseFile] = []
     /// 最近一次同步尝试时间(成功或失败都算;自动同步失败退避用,仅内存)。
@@ -130,12 +121,6 @@ final class Vault: ObservableObject {
         autoBreachCheckDays = d.object(forKey: "sec.autoBreachCheckDays") as? Int ?? 7
         autoBackupEnabled = d.object(forKey: "set.autoBackup") as? Bool ?? false
         autoBackupIntervalDays = d.object(forKey: "set.autoBackupDays") as? Int ?? 7
-        cloudTypeRaw = d.string(forKey: DefaultsKey.cloudType) ?? CloudType.none.rawValue
-        if let data = d.data(forKey: DefaultsKey.webdavSettings) {
-            webdav = (try? JSONDecoder().decode(WebDavSettings.self, from: data)) ?? WebDavSettings()
-        } else {
-            webdav = WebDavSettings()
-        }
         autoSyncEnabled = d.object(forKey: DefaultsKey.autoSyncEnabled) as? Bool ?? false
         autoSyncSeconds = d.object(forKey: DefaultsKey.autoSyncSeconds) as? Int ?? 60
         if let main = SharedVaultStore.mainDatabase() {
@@ -146,22 +131,14 @@ final class Vault: ObservableObject {
         }
         lastSync = Self.storedDate(DefaultsKey.lastSync(database: databaseName))
         lastBreachCheck = Self.storedDate("breach.last.\(databaseName)")
-        icloudFolderName = d.string(forKey: DefaultsKey.icloudFolderName) ?? ""
         refreshDatabases()
-        Log.info("app", "ios vault init, db=\(databaseName), exists=\(store.exists(databaseName)), cloud=\(cloudTypeRaw)")
+        Log.info("app", "ios vault init, db=\(databaseName), exists=\(store.exists(databaseName))")
     }
 
     /// 从共享 defaults 读取持久化时间戳(0/缺失 = nil)。
     private static func storedDate(_ key: String) -> Date? {
         let t = SharedVaultStore.defaults.double(forKey: key)
         return t > 0 ? Date(timeIntervalSince1970: t) : nil
-    }
-
-    /// WebDAV 设置经 JSON 编码落共享 defaults。
-    private func saveWebDav() {
-        if let data = try? JSONEncoder().encode(webdav) {
-            d.set(data, forKey: DefaultsKey.webdavSettings)
-        }
     }
 
     // MARK: 建库 / 解锁 / 锁定
@@ -329,7 +306,7 @@ final class Vault: ObservableObject {
                 PasswordStore.savePasswordForBiometric(new, databaseName: databaseName)
             }
             Log.info("app", "ios master password changed db=\(databaseName) (vault key rotated, body re-encrypted)")
-            // 云端接力:信封先行(他机强锁定/直接认新密码),库体随后原子换代
+            // 云端接力(账户中继):信封先行(他机强锁定/直接认新密码),库体随后换代
             if relayBound {
                 Task {
                     await relayPushEnvelope()
@@ -339,22 +316,8 @@ final class Vault: ObservableObject {
                         await relayReportHashes(cipher: rotated)
                     }
                 }
-            } else if cloudConfigured {
-                Task {
-                    await uploadCloudEnvelope()
-                    let rotated = try? DatabaseCipher.encryptBody(database.xmlData(), vaultKey: effectiveKey)
-                    if let rotated, let mounted = makeCloudDriver() {
-                        do {
-                            try await mounted.driver.upload(rotated)
-                        } catch {
-                            // 信封已传、本体没跟上:正是下次「远端解不开」问题的种子,必须留痕
-                            Log.error("sync", "ios upload rotated body after password change failed: \(error)")
-                        }
-                        mounted.releaseAccess?()
-                    }
-                }
             } else {
-                Log.info("sync", "ios password changed with cloud unconfigured — other devices adopt via next sync")
+                Log.info("sync", "ios password changed with relay unbound — other devices adopt via next sync")
             }
             return true
         } catch {
@@ -585,31 +548,88 @@ final class Vault: ObservableObject {
         }
     }
 
-    // MARK: iCloud 恢复(首次初始化探测云端已有库)
+    // MARK: 服务端恢复(首次初始化:从账户注册表取回库)
 
-    @Published private(set) var cloudDatabases: [String] = []
-    @Published private(set) var cloudChecking = false
-    @Published private(set) var importingCloud = false
+    @Published private(set) var restoringFromRelay = false
 
-    /// 首次初始化前探测 iCloud 云端的加密库;iOS 依赖已保存的云盘文件夹
-    /// 书签(未选文件夹时保持为空,引导用户到设置里选择)。
-    func checkCloudDatabases() async {
-        guard cloudDatabases.isEmpty, !cloudChecking else { return }
-        guard let mounted = makeCloudDriver() else {
-            Log.info("sync", "ios setup probe: no icloud folder bookmark yet")
-            return
-        }
-        cloudChecking = true
-        defer { cloudChecking = false }
-        defer { mounted.releaseAccess?() }
+    /// 首次初始化时从服务端注册表列出账户名下的库(引导登录在先);
+    /// 未登录或拉取失败返回 nil,界面只保留新建/文件导入两条路。
+    func relayVaultsForRestore() async -> [RelayClient.VaultRecord]? {
+        guard let email = relay.lastAccountEmail,
+              let token = relay.token(email: email) else { return nil }
         do {
-            try await mounted.driver.testConnection()
-            let names = try await mounted.driver.listDatabases()
-            cloudDatabases = names
-            Log.info("sync", "ios setup probe: \(names.count) cloud db(s) [\(names.joined(separator: ","))]")
+            let records = try await relayClient.listVaults(token: token)
+            Log.info("sync", "ios relay restore list: \(records.count) vault(s) fetched")
+            return records
         } catch {
-            // 未登录 iCloud/未开云盘属正常路径,不惊扰用户
-            Log.info("sync", "ios setup probe: icloud unavailable")
+            Log.warn("sync", "ios relay restore list failed: \(error)")
+            return nil
+        }
+    }
+
+    /// 服务端通道恢复(首次初始化):注册表信封 + 服务端库体镜像 →
+    /// 解密校验后落为本地库并直接解锁进入应用。前提:该库在服务端有
+    /// 库体镜像;绑定与版本基准由解锁后的 relayBindCurrentVaultIfNeeded
+    /// 自动补齐(按库名认领现有注册,不产生重复 vaultId)。
+    /// - Returns: 成功返回 true(失败已 toast + 记日志)
+    @discardableResult
+    func restoreFromRelay(record: RelayClient.VaultRecord, password pw: String) async -> Bool {
+        guard !restoringFromRelay else { return false }
+        guard let email = relay.lastAccountEmail,
+              let token = relay.token(email: email) else {
+            showToast(L10n.t("not_configured_state"))
+            return false
+        }
+        let name = record.name
+        guard !store.exists(name) else {
+            Log.warn("lifecycle", "ios restore from relay \"\(name)\" aborted: local database exists")
+            showToast(L10n.t("local_database_exists_error"))
+            return false
+        }
+        restoringFromRelay = true
+        defer { restoringFromRelay = false }
+        Log.info("lifecycle", "ios restore from relay \"\(name)\" (vault=\(record.vaultId.prefix(8))…)")
+        do {
+            let detail = try await relayClient.getVault(token: token, vaultId: record.vaultId)
+            guard let envelope = detail.envelope else {
+                Log.warn("lifecycle", "ios restore from relay \"\(name)\": registry has no envelope")
+                showToast(L10n.t("envelope_missing_error"))
+                return false
+            }
+            let data: Data
+            do {
+                data = try await relayClient.getBody(token: token, vaultId: record.vaultId)
+            } catch RelayClient.RelayError.notFound {
+                Log.warn("lifecycle", "ios restore from relay \"\(name)\": server body mirror missing")
+                showToast(L10n.t("cloud_database_not_found"))
+                return false
+            }
+            guard DatabaseCipher.isV2Container(data) else {
+                Log.warn("lifecycle", "ios restore from relay \"\(name)\": not a v2 container")
+                showToast(L10n.t("ios_db_import_invalid_message"))
+                return false
+            }
+            let vek = try DatabaseCipher.unwrapVaultKey(envelope, password: pw)
+            let plain = try DatabaseCipher.decryptBody(data, vaultKey: vek)
+            let db = try PasswordDatabase.parse(plain)
+            try store.save(db, name: name, vaultKey: vek)
+            try store.saveEnvelope(envelope, for: name)
+            SharedVaultStore.currentDatabaseName = name
+            databaseName = name
+            lock()
+            reloadPerDatabaseState()
+            refreshDatabases()
+            guard unlock(with: pw) else {
+                Log.error("lifecycle", "ios restore from relay \"\(name)\": unlock after save failed")
+                showToast(L10n.t("sync_error"))
+                return false
+            }
+            Log.info("lifecycle", "ios restore from relay \"\(name)\" ok (\(db.cards.count) cards)")
+            return true
+        } catch {
+            Log.warn("lifecycle", "ios restore from relay \"\(name)\" failed: \(error)")
+            showToast(error.localizedDescription)
+            return false
         }
     }
 
@@ -618,8 +638,9 @@ final class Vault: ObservableObject {
         [UTType(filenameExtension: "upw") ?? .data]
     }
 
-    /// 从文件导入加密库(文档选择器;来源可为 iCloud 云盘/本地/AirDrop)。
-    /// 校验容器 magic 后落盘为本地库并切换为当前库,随后锁定等待解锁。
+    /// 从文件导入加密库(文档选择器;来源可为本地/AirDrop/任意云盘的
+    /// 手动下载目录)。校验容器 magic 后落盘为本地库并切换为当前库,
+    /// 随后锁定等待解锁。
     /// - Returns: 成功返回导入的库名;失败返回 nil(已 toast + 记日志)
     @discardableResult
     func importDatabaseFile(from url: URL) -> String? {
@@ -658,80 +679,12 @@ final class Vault: ObservableObject {
             lock()
             reloadPerDatabaseState()
             refreshDatabases()
-            // 来源在 iCloud 云盘时顺带配好同步书签,登录后同步开箱即用
-            adoptICloudFolderIfUbiquitous(fileURL: url)
             Log.info("db", "ios imported \"\(name).upw\" (\(data.count)B) from file — locked for unlock")
             return name
         } catch {
             Log.error("db", "ios import file \"\(name)\" failed: \(error)")
             showToast(error.localizedDescription)
             return nil
-        }
-    }
-
-    /// 初始化页「从 iCloud 云盘恢复」:用户选定云端 UPasswords 文件夹后存好书签
-    /// (文件夹选择器授予目录级安全作用域,书签才有效)并列出其中的库展示恢复卡片。
-    func probeICloudFolder(_ picked: URL) async {
-        guard await setICloudFolder(picked) else { return }
-        cloudTypeRaw = CloudType.icloud.rawValue
-        guard let mounted = makeCloudDriver() else { return }
-        defer { mounted.releaseAccess?() }
-        do {
-            try await mounted.driver.testConnection()
-            let names = try await mounted.driver.listDatabases()
-            cloudDatabases = names
-            Log.info("sync", "ios setup icloud folder probe: \(names.count) db(s) [\(names.joined(separator: ","))]")
-            if names.isEmpty { showToast(L10n.t("cloud_database_not_found")) }
-        } catch {
-            Log.warn("sync", "ios setup icloud folder probe failed: \(error)")
-            showToast(error.localizedDescription)
-        }
-    }
-
-    /// 从 iCloud 下载指定库到本地容器(校验 magic 后落盘)并切换为当前库。
-    /// 导入后立即锁定:内存中的主密码属于原库,绝不能带到新库上(防止误写)。
-    func importCloudDatabase(name: String) async -> Bool {
-        guard !importingCloud else { return false }
-        guard !store.exists(name) else {
-            Log.warn("sync", "ios import \"\(name)\": local database already exists")
-            showToast(L10n.t("local_database_exists_error"))
-            return false
-        }
-        guard let mounted = makeCloudDriver(databaseName: name) else {
-            Log.warn("sync", "ios import \"\(name)\": no icloud folder bookmark")
-            showToast(L10n.t("not_configured_state"))
-            return false
-        }
-        importingCloud = true
-        defer { importingCloud = false }
-        defer { mounted.releaseAccess?() }
-        do {
-            guard let data = try await mounted.driver.download(), DatabaseCipher.isV2Container(data) else {
-                Log.warn("sync", "ios import \"\(name)\": cloud container missing or not v2")
-                return false
-            }
-            // v2 本体必须连同信封一起取回,否则永远无法解锁
-            guard let envelope = try await mounted.driver.downloadKey() else {
-                Log.warn("sync", "ios import \"\(name)\": cloud envelope missing")
-                showToast(L10n.t("envelope_missing_error"))
-                return false
-            }
-            try data.write(to: store.url(for: name), options: .atomic)
-            try store.saveEnvelope(envelope, for: name)
-            SharedVaultStore.currentDatabaseName = name
-            databaseName = name
-            lock()
-            reloadPerDatabaseState()
-            refreshDatabases()
-            Log.info("sync", "ios imported \"\(name).upw\" (\(data.count)B) from iCloud — locked for unlock")
-            return true
-        } catch let error as SyncError where error == SyncError.notDownloaded {
-            Log.warn("sync", "ios import \"\(name)\": cloud file not materialized in time")
-            showToast(L10n.t("icloud_download_pending_error"))
-            return false
-        } catch {
-            Log.warn("sync", "ios import \"\(name)\" failed: \(error)")
-            return false
         }
     }
 

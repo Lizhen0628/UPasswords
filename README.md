@@ -5,8 +5,8 @@ macOS 14+ / iOS 17+）。
 
 核心能力：v2 双密钥信封加密（主密码经 PBKDF2-SHA256 ×310,000 包裹永不变的库密钥，
 库密钥以 AES-256-GCM 加密数据库本体，改密只重写信封、零重写）、Touch ID 快速解锁、
-15 个内置模板、密码生成与强度评估、TOTP 一次性代码、WebDAV/iCloud Drive 云同步
-（条目级合并 + 冲突裁决）、自动备份、18 种第三方密码管理器数据导入、XML/CSV/TXT 导出、
+15 个内置模板、密码生成与强度评估、TOTP 一次性代码、账户云同步
+（服务端零知识加密副本，条目级合并 + 冲突裁决）、自动备份、18 种第三方密码管理器数据导入、XML/CSV/TXT 导出、
 泄露密码检查（haveibeenpwned k-匿名）、菜单栏常驻、中英双语界面。
 
 ## 仓库结构
@@ -33,7 +33,7 @@ UPasswords/
 │   ├── Core/                       UPasswordsCore — 模型、XML 编解码、加密、生成器、
 │   │                               强度、TOTP、日志、本地化字符串表
 │   ├── Persistence/                UPasswordsPersistence — 文件存储、钥匙串、备份、
-│   │                               云同步（WebDAV/iCloud）、导入导出
+│   │                               云同步（账户中继）、导入导出
 │   └── Networking/                 UPasswordsNetworking — HIBP 泄露检查
 ├── Contracts/                      数据交换契约（JSON Schema + 说明）
 ├── package.json / pnpm-workspace.yaml   Web 扩展 monorepo
@@ -77,7 +77,7 @@ pnpm install && pnpm build
 | 钥匙串 | `SwiftPackages/Persistence/…/PasswordStore.swift`（GenericPassword + `.userPresence` 快速解锁） |
 | 导入导出 | `SwiftPackages/Persistence/…/Import/` — 18 种导入 + XML / CSV / TXT 导出（含明文警告） |
 | 泄露检查 | `SwiftPackages/Networking/…/CompromisedService.swift` — SHA-1 k-匿名 Range API + 离线演示集 |
-| 云同步 | `SwiftPackages/Persistence/…/CloudSync.swift` — WebDAV（PROPFIND/MKCOL/PUT/GET + 条目级合并）与 iCloud Drive |
+| 云同步 | `SwiftPackages/Persistence/…/CloudSync.swift` — 同步冲突判定与基线哈希（通道见 `RelayClient.swift` 账户中继） |
 | 自动备份 | `DatabaseStore.backup/restore/prune`（默认保留 10 份） |
 | 主窗口 | `Apple/macOS/…/Views/Main/` 三栏布局 + `Views/Window/` 自绘工具栏 |
 | 弹窗 | `Apple/macOS/…/Views/Sheets/`（SheetFactory 统一登记，按域分组） |
@@ -108,8 +108,8 @@ pnpm install && pnpm build
    （`.upw`）；主密码经 PBKDF2-SHA256 ×310,000 派生密钥包裹库密钥成信封
    （`.upwkey`）。改主密码只重写信封，本体不动，云端传播零重写。
 2. **图标/纹理**：全部使用 SF Symbol 与程序化渐变自绘，不含第三方素材。
-3. **云同步**：WebDAV 与 iCloud Drive 可用（含测试连接/条目级合并/冲突裁决）。
-   Google Drive/Dropbox/OneDrive 需要厂商 OAuth 应用凭据，界面保留但标注“未配置”。
+3. **云同步**：账户中继通道（邮箱验证码登录，服务端零知识：注册表信封 + R2 加密库体
+   副本，条目级合并 + 冲突裁决）；离线迁移走 `.upw`/`.upwkey` 文件对本地还原与导出。
 4. **iOS / Safari / Chrome 扩展**：iOS 端为完整应用（锁屏/首页/列表/详情/编辑/生成器/安全/设置
    七大界面），数据落在 App Group 容器的真实加密库，与 macOS 共用 Core/Persistence/Networking；
    AutoFill 凭据扩展经钥匙串/主密码解锁后按站点匹配填充。真机运行需配置签名与

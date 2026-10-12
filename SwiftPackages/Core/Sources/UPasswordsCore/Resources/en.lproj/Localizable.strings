@@ -94,13 +94,14 @@
 "close_button" = "Close";
 "close_command" = "Close";
 "cloud_database_not_found" = "Database not found in the cloud";
-"cloud_databases_prompt" = "Cloud databases:";
 "cloud_prompt" = "Cloud:";
 "cloud_restore_password_hint" = "The cloud database is encrypted with the master password set on the device that created it.";
-"cloud_restore_server_list_hint" = "Vaults from your account are listed automatically; those without a server copy still need a cloud drive.";
-"cloud_restore_drive_only_suffix" = " (cloud drive required)";
+"cloud_restore_no_mirror_suffix" = " (no server copy yet)";
+"cloud_restore_empty_hint" = "No vaults under this account yet. Create a new one below, or import a .upw file pair from another device.";
+"cloud_restore_loading_hint" = "Loading vaults from your account…";
+"cloud_restore_server_list_hint" = "Vaults under your account are listed automatically. Restore needs the master password set on the device that created the vault.";
 "cloud_sync_task" = "Setup cloud synchronization";
-"cloud_sync_text" = "Select a cloud to sync your encrypted database with. You should have a registered cloud account.";
+"cloud_sync_text" = "Your encrypted database syncs through the account relay. The server stores ciphertext and metadata only (zero knowledge).";
 "cloud_sync_title" = "Cloud Sync";
 "cloud_title" = "Cloud";
 "color_prompt" = "Color:";
@@ -151,7 +152,7 @@
 "database_restored_message" = "Database restored";
 "database_saved_message" = "Database saved to:";
 "database_setup_item_1" = "Create a new database and set a password for it";
-"database_setup_item_2" = "Restore database from a cloud";
+"database_setup_item_2" = "Restore database from your account";
 "database_setup_item_3" = "Restore database from a local file";
 "database_setup_title" = "Database Setup";
 "database_title" = "Database";
@@ -225,7 +226,6 @@
 "first_4_symbols_text" = "First 4 password symbols";
 "forgot_password_message" = "Forgot your password? Delete the database file and restart the app.";
 "found_text" = "Found text";
-"gdrive_cloud" = "Google Drive";
 "gdrive_root_folder_warning" = "This legacy synchronization method of syncing with Google Drive will be discontinued soon. We strongly recommend that you use the modern method of syncing to the UPasswords app folder in your Google Drive account.";
 "gdrive_switch_message_1" = "Your password database is currently syncing to the root folder of your Google Drive account. This legacy synchronization method will soon no longer be supported. Instead, you can switch to the modern method of syncing to the UPasswords app folder in your Google Drive account now. We strongly recommend doing this as early as possible to avoid any issues in the future.";
 "gdrive_switch_message_2" = "Attention! To properly synchronize data, you will need to make this switch on all your devices and computers on which UPasswords is installed.";
@@ -240,13 +240,8 @@
 "hide_others_command" = "Hide Others";
 "hide_passwords_setting" = "Hide passwords:";
 "history_title" = "History";
-"host_prompt" = "Host:";
 "hours_text" = "hours";
-"https_protocol_warning" = "To sync with own WebDAV server via HTTPS, you might need to export the server's SSL certificate and install it on your computer. Refer to your WebDAV provider's manual for detailed instructions.";
-"icloud_account_error" = "Sign into your iCloud account in System Preferences. Select Apple ID and turn iCloud Drive on.";
 "icloud_extra_database_warning" = "Extra databases on iCloud cannot be shared with others. Use another cloud if you want to share an extra database with your family or colleagues.";
-"icloud_folder_inaccessible_error" = "This build cannot access iCloud Drive directly. Use the \"Choose iCloud Drive Folder\" button to grant access to the UPasswords folder in your iCloud Drive.";
-"icloud_sync_info" = "The encrypted database is stored in the UPasswords folder of your iCloud Drive; macOS transfers it to your other Macs automatically. Sign in to the same Apple ID and enable iCloud Drive on every Mac you want to sync.";
 "icons_prompt" = "Icons";
 "ignore_button" = "Ignore";
 "image_saved_message" = "Image saved as:";
@@ -258,7 +253,6 @@
 "install_on_mobile_task" = "Install UPasswords on phone or tablet";
 "instant_text" = "instant";
 "interface_prompt" = "Interface";
-"invalid_address_text" = "Invalid address";
 "invalid_value_text" = "Invalid value";
 "labels_prompt" = "Labels";
 "labels_text" = "Labels";
@@ -284,7 +278,6 @@
 "local_key_autofound_hint" = "A matching .upwkey was found next to the vault file.";
 "local_key_file_prompt" = "Key file:";
 "local_key_missing_hint" = "No matching .upwkey was found next to the vault file - choose the key file manually.";
-"local_path_prompt" = "Local path:";
 "local_pick_file_button" = "Choose File…";
 "local_pick_key_button" = "Choose Key File…";
 "local_restore_hint" = "Pick the pair copied from another device: <name>.upw (vault body) and its matching <name>.upwkey (key envelope). Restore uses the master password set when the vault was created.";
@@ -297,7 +290,6 @@
 "log_level_info" = "Info";
 "log_level_warn" = "Warning";
 "log_level_error" = "Error";
-"list_cloud_databases_button" = "List Cloud Databases";
 "location_prompt" = "Location:";
 "lock_button" = "Lock";
 "lock_command" = "Lock";
@@ -358,7 +350,6 @@
 "not_now_button" = "Not now";
 "not_really_button" = "Not really";
 "not_recommended_text" = "Not recommended";
-"not_synchronizing_warning" = "Your data is not synchronizing and cannot be restored in a case of loss. Configure the synchronization to backup your data on a cloud.";
 "notes_empty_state" = "There's nothing here yet. Click the Plus button and add a note here.";
 "notes_prompt" = "Notes";
 "notes_tab" = "Notes";
@@ -393,7 +384,6 @@
 "paste_command" = "Paste";
 "pin_to_top_button" = "Pin to top";
 "pin_to_top_command" = "Pin to Top";
-"port_prompt" = "Port:";
 "preferences_button" = "Preferences";
 "preferences_command" = "Preferences…";
 "premium_command" = "Premium";
@@ -494,7 +484,6 @@
 "sorting_prompt" = "Sorting:";
 "sorting_title" = "Sorting";
 "source_prompt" = "Source:";
-"success_title" = "Success";
 "support_text" = "Support";
 "switch_button" = "Switch";
 "sync_button" = "Sync";
@@ -551,7 +540,6 @@
 "use_website_icon_command" = "Use Website Icon";
 "use_website_icons_setting" = "Use website icons:";
 "user_empty_state" = "There's nothing here yet. Click the Plus button and add a password or a credit card here.";
-"user_name_prompt" = "User name:";
 "version_text" = "Version";
 "view_image_title" = "View Image";
 "warn_expiring_cards_prompt" = "Warn cards expiring within:";
@@ -565,9 +553,6 @@
 "weak_passwords_empty_state" = "Congratulations! Your passwords are great.";
 "weak_passwords_title" = "Weak Passwords";
 "webdav_1012_error" = "Failed to establish a secure connection. The server's security certificate is invalid.";
-"webdav_401_error" = "Authentication failed. User name or Password is not correct.";
-"webdav_405_error" = "Failed to access the specified Local path. Make sure you have read/write rights for this location.";
-"webdav_cloud" = "Another cloud (via WebDAV)";
 "website_text" = "Website";
 "whats_new_title" = "What's New";
 "whete_to_delete_database_query" = "Where to delete the database?";
@@ -910,8 +895,6 @@
 "ios_cloud_db_picker" = "Cloud vault";
 "ios_cloud_restore_button" = "Restore from iCloud";
 "ios_cloud_restoring_text" = "Restoring…";
-"ios_cloud_restore_failed_title" = "Restore Failed";
-"ios_cloud_restore_failed_message" = "Could not download the vault. Check your network and iCloud Drive, then try again.";
 "ios_or_create_new_hint" = "Or create a new vault below";
 "ios_syncing_text" = "Syncing…";
 "ios_webdav_config_title" = "WebDAV Settings";
@@ -923,7 +906,6 @@
 "ios_add_file_button" = "Add File";
 "ios_attachment_too_large_error" = "Attachment is too large (max %d MB)";
 "ios_attachment_added_message" = "Attachment added";
-"ios_icloud_pick_folder_button" = "Choose iCloud Drive Folder";
 "ios_icloud_repick_folder_button" = "Choose a Different Folder";
 "ios_icloud_selected_folder_fmt" = "Selected folder: %@";
 "ios_icloud_folder_error" = "Could not access the selected folder";
@@ -947,9 +929,7 @@
 "ios_db_deleted_message" = "Database deleted";
 "ios_db_import_title" = "Import from iCloud";
 "ios_db_import_none" = "No databases found in the cloud folder.";
-"ios_db_imported_locked_message" = "Imported. Unlock with this database's master password.";
 "ios_create_button" = "Create";
-"ios_db_import_need_folder" = "Pick the iCloud Drive folder that holds your databases first — the list below is read from that folder.";
 "ios_faceid_not_setup_message" = "Face ID isn't set up for this database — unlock with the master password once to enable it.";
 "ios_icon_section_title" = "Website Icon";
 "ios_icon_section_footer" = "Fetches the site's favicon, normalizes it to ≤128 px PNG and stores it inside the encrypted database.";
@@ -990,16 +970,10 @@
 "ios_af_no_passkeys_text" = "No passkeys for this site in your vault.";
 "ios_import_file_button" = "Import Vault from File";
 "ios_db_import_invalid_message" = "This file is not a valid UPasswords vault.";
-"ios_cloud_restore_folder_button" = "Restore from iCloud Drive";
-"ios_cloud_pick_folder_guide_title" = "Choose Cloud Folder";
-"ios_cloud_pick_folder_guide_message" = "A file picker will open: go to iCloud Drive, tap the UPasswords folder once to highlight it, then tap Open in the top-right corner.\n\nNote: files inside appear greyed out — that's expected, you're selecting the folder itself.";
-"ios_cloud_databases_section" = "Cloud Vaults";
-"ios_db_import_query" = "Download this vault from the cloud and switch to it?";
 "ios_autolock_custom" = "Custom";
 "sync_remote_unreadable_error" = "Couldn't decrypt cloud data (it may be encrypted with the old master password).";
 "ios_sync_overwrite_cloud_button" = "Overwrite Cloud with Local Data";
 "ios_sync_overwrite_cloud_query" = "The current cloud content will be replaced with local data. Continue?";
-"ios_icloud_folder_label" = "Cloud Folder";
 "switch_database_command" = "Switch Database";
 "switch_database_unlock_title" = "Switch to “%@”";
 "switch_database_unlock_message" = "Enter the master password for this database.";
@@ -1009,11 +983,10 @@
 "ios_sync_adopt_password_message" = "The cloud vault is encrypted with the new password. Enter it to decrypt and merge your data.";
 "sync_adopt_failed_hint" = "Incorrect password. If you changed the password on THIS device, choose “Overwrite Cloud with Local Data” instead.";
 "sync_repair_button" = "Repair Sync…";
-"icloud_download_pending_error" = "The cloud file hasn't downloaded to this device yet. Please try again later.";
 
 "invalid_email_error" = "Invalid email address";
 "relay_account_label" = "Cloud Sync (UPasswords)";
-"relay_account_footer" = "Sign in with an email verification code to enable cloud sync. Vault files stay on your own cloud drive; the server only relays encrypted envelopes and metadata (zero knowledge). Sign-in requires an unlocked vault.";
+"relay_account_footer" = "Sign in with an email verification code to enable cloud sync. The server stores only encrypted vault bodies and metadata (zero knowledge); sign-in requires an unlocked vault.";
 "relay_email_placeholder" = "Email";
 "relay_code_placeholder" = "Code";
 "relay_send_code_button" = "Send Code";

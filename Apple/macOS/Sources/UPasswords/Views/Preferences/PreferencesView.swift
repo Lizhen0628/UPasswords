@@ -771,9 +771,6 @@ struct ConfigureCloudSheetContents: View {
         case unbind, deregister
     }
 
-    @State private var testing = false
-    @State private var testResult: String? = nil
-
     private let autoSyncChoices: [(String, Int)] = [
         ("30" + L10n.t("seconds_abbr_text"), 30),
         ("1" + L10n.t("minutes_abbr_text"), 60),
@@ -785,8 +782,8 @@ struct ConfigureCloudSheetContents: View {
     var body: some View {
         PaneContainer {
             VStack(alignment: .leading, spacing: 20) {
-                // 网盘(iCloud/WebDAV)配置入口已隐藏:同步默认走 relay API;
-                // 网盘代码保留作老库迁移兜底,已配置用户的存量设置不受影响
+                // 同步通道为账户中继(注册表信封 + 服务端库体副本):
+                // 自动同步开关/间隔与账户登录/设备管理都在本面板
                 Grid(alignment: .leading, horizontalSpacing: settingsRowSpacing, verticalSpacing: 14) {
                     GridRow {
                         Text(L10n.t("auto_sync_setting"))

@@ -94,13 +94,14 @@
 "close_button" = "关闭";
 "close_command" = "关闭";
 "cloud_database_not_found" = "云端未找到该密码库";
-"cloud_databases_prompt" = "云端密码库：";
 "cloud_prompt" = "云端：";
 "cloud_restore_password_hint" = "云端密码库用它加密——请输入创建该密码库时设置的主密码。";
-"cloud_restore_server_list_hint" = "已自动列出账户下的密码库；无服务端副本的库仍需配置网盘后恢复。";
-"cloud_restore_drive_only_suffix" = "（需网盘）";
+"cloud_restore_no_mirror_suffix" = "（暂无服务端副本）";
+"cloud_restore_empty_hint" = "账户下还没有密码库。可在下方新建，或从其他设备导入 .upw 文件。";
+"cloud_restore_loading_hint" = "正在从账户获取密码库…";
+"cloud_restore_server_list_hint" = "已自动列出账户下的密码库；输入创建该库时设置的主密码即可还原。";
 "cloud_sync_task" = "设置云同步";
-"cloud_sync_text" = "选择一个网盘来同步加密的密码库。您需要有一个已注册的网盘帐户。";
+"cloud_sync_text" = "加密的密码库经账户中继同步；服务器只保存密文与元数据（零知识）。";
 "cloud_sync_title" = "云同步";
 "cloud_title" = "云端";
 "color_prompt" = "颜色:";
@@ -151,7 +152,7 @@
 "database_restored_message" = "密码库已还原";
 "database_saved_message" = "密码库保存到：";
 "database_setup_item_1" = "创建新密码库并设置密码";
-"database_setup_item_2" = "从网盘还原现有密码库";
+"database_setup_item_2" = "从账户在线还原密码库";
 "database_setup_item_3" = "从本地文件还原密码库";
 "database_setup_title" = "初始化密码库";
 "database_title" = "密码库";
@@ -225,7 +226,6 @@
 "first_4_symbols_text" = "密码前四位";
 "forgot_password_message" = "忘记密码了吗？请删除密码库文件，然后重新启动应用程序。";
 "found_text" = "搜索内容";
-"gdrive_cloud" = "Google 云端硬盘";
 "gdrive_root_folder_warning" = "这种旧的 Google Drive 同步方式即将停用。强烈建议您改用同步到 Google Drive 账户中 UPasswords 应用文件夹的现代方式。";
 "gdrive_switch_message_1" = "您的密码密码库目前正在同步到您的 Google Drive 帐户的根文件夹。此旧版同步方法即将不再受支持。您可以立即切换到现代同步方法，同步到 Google Drive 帐户中的 UPasswords 应用文件夹。我们强烈建议您尽早执行此操作，以避免将来出现任何问题。";
 "gdrive_switch_message_2" = "注意！为了正确同步数据，您需要在所有安装了 UPasswords 的设备和计算机上进行此切换。";
@@ -240,13 +240,8 @@
 "hide_others_command" = "隐藏其它界面";
 "hide_passwords_setting" = "隐藏密码：";
 "history_title" = "历史";
-"host_prompt" = "主机地址：";
 "hours_text" = " 小时";
-"https_protocol_warning" = "若要与自己的 WebDAV 服务器通过 HTTPS 同步，您可能需要导出服务器的 SSL 证书并将其安装在您的设备上。请参阅程序 WebDAV 手册的详细说明。";
-"icloud_account_error" = "在系统首选项中登录到您的 iCloud 帐户。 选择 Apple ID 并打开 iCloud Drive 。";
 "icloud_extra_database_warning" = "iCloud 上的额外密码库无法与他人共享。如需与家人或同事共享额外密码库，请使用其他云端。";
-"icloud_folder_inaccessible_error" = "当前构建无法直接访问 iCloud 云盘。请点按「选择 iCloud 云盘文件夹」按钮，授权访问 iCloud 云盘中的 UPasswords 文件夹。";
-"icloud_sync_info" = "加密密码库保存在 iCloud 云盘的 UPasswords 文件夹中，由 macOS 自动同步到您的其他 Mac。需要在每台要同步的 Mac 上登录同一 Apple 账户并开启 iCloud 云盘。";
 "icons_prompt" = "图标";
 "ignore_button" = "忽略";
 "image_saved_message" = "图片保存为：";
@@ -258,7 +253,6 @@
 "install_on_mobile_task" = "在手机或平板电脑上安装 UPasswords";
 "instant_text" = "瞬间";
 "interface_prompt" = "界面";
-"invalid_address_text" = "无效的地址";
 "invalid_value_text" = "无效的值";
 "labels_prompt" = "标签";
 "labels_text" = "标签";
@@ -284,7 +278,6 @@
 "local_key_autofound_hint" = "已自动找到密码库文件旁配套的同名 .upwkey。";
 "local_key_file_prompt" = "密钥文件：";
 "local_key_missing_hint" = "所选文件旁没有同名 .upwkey，请手动选择配套的密钥文件。";
-"local_path_prompt" = "本地路径：";
 "local_pick_file_button" = "选择文件…";
 "local_pick_key_button" = "选择密钥文件…";
 "local_restore_hint" = "选择从其他设备拷来的一对文件：<名>.upw（密码库本体）与配套的 <名>.upwkey（密钥信封）。恢复使用创建该密码库时设置的主密码。";
@@ -297,7 +290,6 @@
 "log_level_info" = "信息";
 "log_level_warn" = "警告";
 "log_level_error" = "错误";
-"list_cloud_databases_button" = "列出云端密码库";
 "location_prompt" = "位置:";
 "lock_button" = "锁定";
 "lock_command" = "锁定";
@@ -358,7 +350,6 @@
 "not_now_button" = "稍后";
 "not_really_button" = "并不";
 "not_recommended_text" = "不推荐";
-"not_synchronizing_warning" = "你的数据没有启用同步，如果遇到数据丢失那么你将无法恢复你的所有数据。请启用同步配置，将你的数据在云端备份。";
 "notes_empty_state" = "这里还没有任何内容。点击“添加”按钮，在这里添加一条笔记。";
 "notes_prompt" = "笔记";
 "notes_tab" = "笔记";
@@ -393,7 +384,6 @@
 "paste_command" = "粘贴";
 "pin_to_top_button" = "置顶";
 "pin_to_top_command" = "置顶";
-"port_prompt" = "端口：";
 "preferences_button" = "设置";
 "preferences_command" = "设置…";
 "premium_command" = "高级功能";
@@ -494,7 +484,6 @@
 "sorting_prompt" = "排序：";
 "sorting_title" = "排序";
 "source_prompt" = "来源：";
-"success_title" = "成功";
 "support_text" = "技术支持";
 "switch_button" = "切换";
 "sync_button" = "同步";
@@ -551,7 +540,6 @@
 "use_website_icon_command" = "使用网站图标";
 "use_website_icons_setting" = "使用网站图标：";
 "user_empty_state" = "这里还没有任何内容。点击“添加”按钮，在这里添加一个密码或一张信用卡。";
-"user_name_prompt" = "用户名：";
 "version_text" = "版本";
 "view_image_title" = "查看图片";
 "warn_expiring_cards_prompt" = "项目到期预警:";
@@ -565,9 +553,6 @@
 "weak_passwords_empty_state" = "恭喜！您的密码都很安全。";
 "weak_passwords_title" = "弱密码";
 "webdav_1012_error" = "未能建立安全连接。服务器安全证书无效。";
-"webdav_401_error" = "身份验证失败。用户名或密码错误。";
-"webdav_405_error" = "无法访问指定的本地路径。请确保您具有此位置的读/写权限。";
-"webdav_cloud" = "其他云盘(通过WebDAV)";
 "website_text" = "网址";
 "whats_new_title" = "新增内容";
 "whete_to_delete_database_query" = "在哪里删除密码库？";
@@ -910,8 +895,6 @@
 "ios_cloud_db_picker" = "云端密码库";
 "ios_cloud_restore_button" = "从 iCloud 恢复";
 "ios_cloud_restoring_text" = "正在恢复…";
-"ios_cloud_restore_failed_title" = "恢复失败";
-"ios_cloud_restore_failed_message" = "无法下载密码库，请检查网络与 iCloud 云盘后重试。";
 "ios_or_create_new_hint" = "或在下方新建密码库";
 "ios_syncing_text" = "正在同步…";
 "ios_webdav_config_title" = "WebDAV 设置";
@@ -923,7 +906,6 @@
 "ios_add_file_button" = "添加文件";
 "ios_attachment_too_large_error" = "附件过大（上限 %d MB）";
 "ios_attachment_added_message" = "附件已添加";
-"ios_icloud_pick_folder_button" = "选择 iCloud 云盘文件夹";
 "ios_icloud_repick_folder_button" = "重新选择文件夹";
 "ios_icloud_selected_folder_fmt" = "已选文件夹：%@";
 "ios_icloud_folder_error" = "无法访问所选文件夹";
@@ -947,9 +929,7 @@
 "ios_db_deleted_message" = "密码库已删除";
 "ios_db_import_title" = "从 iCloud 导入";
 "ios_db_import_none" = "云端文件夹里没有找到密码库。";
-"ios_db_imported_locked_message" = "已导入，请用该密码库的主密码解锁。";
 "ios_create_button" = "创建";
-"ios_db_import_need_folder" = "请先选择存有密码库的 iCloud 云盘文件夹，下面的清单从该文件夹读取。";
 "ios_faceid_not_setup_message" = "此密码库尚未启用面容 ID，请先用主密码解锁一次。";
 "ios_icon_section_title" = "网站图标";
 "ios_icon_section_footer" = "抓取站点 favicon，归一化为 ≤128 像素的 PNG，随条目一起加密入库。";
@@ -990,16 +970,10 @@
 "ios_af_no_passkeys_text" = "密码库中没有该站点的通行密钥";
 "ios_import_file_button" = "从文件导入密码库";
 "ios_db_import_invalid_message" = "文件不是有效的 UPasswords 密码库";
-"ios_cloud_restore_folder_button" = "从 iCloud 云盘恢复";
-"ios_cloud_pick_folder_guide_title" = "选择云端文件夹";
-"ios_cloud_pick_folder_guide_message" = "接下来会打开文件选择器：进入 iCloud 云盘，轻点 UPasswords 文件夹使其高亮选中，再点右上角「打开」。\n\n注意：此模式下文件夹里的文件显示为灰色属正常，要选的是文件夹本身。";
-"ios_cloud_databases_section" = "云端密码库";
-"ios_db_import_query" = "从云端下载该密码库并切换为当前库？";
 "ios_autolock_custom" = "自定义";
 "sync_remote_unreadable_error" = "云端数据无法解密（可能由修改前的主密码加密）";
 "ios_sync_overwrite_cloud_button" = "用本地数据覆盖云端";
 "ios_sync_overwrite_cloud_query" = "云端现有内容将被本地数据替换，确定继续吗？";
-"ios_icloud_folder_label" = "云端文件夹";
 "switch_database_command" = "切换密码库";
 "switch_database_unlock_title" = "切换到「%@」";
 "switch_database_unlock_message" = "请输入该密码库的解锁密码。";
@@ -1009,11 +983,10 @@
 "ios_sync_adopt_password_message" = "云端密码库已使用新密码加密。输入新密码以解密并合并数据。";
 "sync_adopt_failed_hint" = "密码不正确。如果您刚在本设备上修改过密码，请改用「用本地数据覆盖云端」。";
 "sync_repair_button" = "修复同步…";
-"icloud_download_pending_error" = "云端文件尚未下载到本机，请稍后重试。";
 
 "invalid_email_error" = "邮箱地址无效";
 "relay_account_label" = "云同步（UPasswords）";
-"relay_account_footer" = "使用邮箱验证码登录并启用云同步。密码库文件保存在你自己的网盘，服务器只中继加密信封与元数据（零知识）；登录需库处于解锁状态。";
+"relay_account_footer" = "使用邮箱验证码登录并启用云同步。服务器只保存加密库体与元数据（零知识）；登录需库处于解锁状态。";
 "relay_email_placeholder" = "邮箱";
 "relay_code_placeholder" = "验证码";
 "relay_send_code_button" = "发送验证码";
