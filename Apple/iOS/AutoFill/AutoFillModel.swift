@@ -103,7 +103,8 @@ final class AutoFillModel: ObservableObject {
         // 存在)时,静默路径同样必须过 evaluatePolicy——否则持已解锁设备者
         // 打开 AutoFill 即可无面容读全库,快解形同虚设
         canAutoUnlock = PasswordStore.loadPassword(databaseName: main.name) != nil
-        let biometricEnabled = PasswordStore.loadPassword(databaseName: main.name, biometric: true) != nil
+        // 存在性探测必须用 hasBiometricItem:ACL 项的值读取需要已评估的 ctx
+        let biometricEnabled = PasswordStore.hasBiometricItem(databaseName: main.name)
         if canAutoUnlock, biometricEnabled {
             Task { await unlockWithBiometrics() }
         } else if canAutoUnlock {
@@ -135,11 +136,11 @@ final class AutoFillModel: ObservableObject {
     func unlockWithBiometrics() async {
         guard !biometricWorking else { return }
         guard let main = SharedVaultStore.mainDatabase(),
-              let pw = PasswordStore.loadPassword(databaseName: main.name, biometric: true) else { return }
+              PasswordStore.hasBiometricItem(databaseName: main.name) else { return }
         biometricWorking = true
         defer { biometricWorking = false }
-        // 钥匙串副本无硬件 ACL:门禁必须由扩展自己做(与 macOS biometricPassword
-        // 对齐),否则持机者无面容即可解锁全库
+        // 双层门禁:先应用层评估(交互入口),再凭已评估的 ctx 读取——
+        // ACL 项(设备已设密码锁时)读取本身也要求生物识别,全程单次弹窗
         let context = LAContext()
         var policyError: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &policyError) else {
@@ -153,6 +154,10 @@ final class AutoFillModel: ObservableObject {
             guard ok else { return }
         } catch {
             Log.warn("keychain", "autofill: biometric evaluate failed: \(error)")
+            return
+        }
+        guard let pw = PasswordStore.loadPassword(databaseName: main.name, biometric: true, context: context) else {
+            Log.warn("keychain", "autofill: biometric item unreadable")
             return
         }
         guard let (db, vek) = try? SharedVaultStore.store.loadUnlocked(name: main.name, password: pw) else {
@@ -191,16 +196,31 @@ final class AutoFillModel: ObservableObject {
         stage = .unlocked
     }
 
-    /// 解锁后的写库(signCount 写回 / 注册入库);失败仅记日志。
+    /// 合并写:以磁盘最新库为基线应用单点变更后落盘。
+    /// 主 App 与扩展是共享同一 .upw 的两个进程,整库快照覆盖会把对端
+    /// 并发保存静默回滚(last-writer-wins);重放式合并消除覆盖窗口。
+    /// v2 本体只需库密钥即可解密重解析,无需主密码。
+    /// - Parameter mutate: 在最新库上应用变更;返回 false 表示无事可做
+    ///   (如目标条目已被对端删除),此时放弃写入、绝不覆盖。
     @discardableResult
-    private func saveDatabase(_ db: PasswordDatabase, reason: String) -> Bool {
+    private func saveMerged(reason: String, _ mutate: (inout PasswordDatabase) -> Bool) -> Bool {
         guard let name = vaultName, let vaultKey else { return false }
         do {
-            try SharedVaultStore.store.save(db, name: name, vaultKey: vaultKey)
-            vaultDB = db
+            let data = try Data(contentsOf: SharedVaultStore.store.url(for: name))
+            guard DatabaseCipher.isV2Container(data) else {
+                Log.warn("db", "autofill: merge-write skipped: container not v2 (\(reason))")
+                return false
+            }
+            var latest = try PasswordDatabase.parse(DatabaseCipher.decryptBody(data, vaultKey: vaultKey))
+            guard mutate(&latest) else {
+                Log.debug("db", "autofill: merge-write no-op (\(reason))")
+                return false
+            }
+            try SharedVaultStore.store.save(latest, name: name, vaultKey: vaultKey)
+            vaultDB = latest
             return true
         } catch {
-            Log.error("db", "autofill: save failed (\(reason)): \(error)")
+            Log.error("db", "autofill: merge-write failed (\(reason)): \(error)")
             return false
         }
     }
@@ -334,9 +354,11 @@ final class AutoFillModel: ObservableObject {
 
     /// 断言后的计数器写回(失败不阻塞本次登录,仅记日志)。
     private func persistSignCount(_ passkey: Passkey, on cardID: Int) {
-        guard var db = vaultDB, let i = db.cards.firstIndex(where: { $0.id == cardID }) else { return }
-        db.cards[i].setPasskey(passkey)
-        saveDatabase(db, reason: "signCount")
+        saveMerged(reason: "signCount") { db in
+            guard let i = db.cards.firstIndex(where: { $0.id == cardID }) else { return false }
+            db.cards[i].setPasskey(passkey)
+            return true
+        }
     }
 
     /// 注册流确认创建:生成密钥对与 attestation,凭据入库后提交系统。
@@ -344,7 +366,7 @@ final class AutoFillModel: ObservableObject {
         guard flow == .passkeyRegistration,
               let request = passkeyRequest,
               let identity = request.credentialIdentity as? ASPasskeyCredentialIdentity,
-              var db = vaultDB else { return }
+              vaultDB != nil else { return }
         registerError = false
         do {
             let pair = WebAuthn.generateKeyPair()
@@ -361,7 +383,7 @@ final class AutoFillModel: ObservableObject {
                                   userName: identity.userName,
                                   privateKey: pair.privateKey,
                                   signCount: 0, created: Date().millis)
-            var card = Card(id: db.nextItemId())
+            var card = Card(id: 0)  // id 在合并闭包内按最新库分配
             card.title = identity.relyingPartyIdentifier
             card.symbol = "person.badge.key.fill"
             card.autofillEnabled = true
@@ -373,8 +395,12 @@ final class AutoFillModel: ObservableObject {
                       value: "https://\(identity.relyingPartyIdentifier)"),
             ]
             card.setPasskey(passkey)
-            db.cards.append(card)
-            guard saveDatabase(db, reason: "passkey register") else {
+            let register: (inout PasswordDatabase) -> Bool = { db in
+                card.id = db.nextItemId()
+                db.cards.append(card)
+                return true
+            }
+            guard saveMerged(reason: "passkey register", register) else {
                 registerError = true
                 return
             }

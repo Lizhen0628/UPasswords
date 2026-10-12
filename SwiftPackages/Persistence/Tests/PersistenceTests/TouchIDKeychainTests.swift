@@ -6,6 +6,12 @@ import XCTest
 final class TouchIDKeychainTests: XCTestCase {
     private let dbName = "TouchIDTestsDB"
 
+    override func setUp() {
+        super.setUp()
+        // CI 与本机都可能设了密码锁:统一走普通项,ACL 读取需交互无法自动化
+        PasswordStore.usePlainBiometricItemsForTesting = true
+    }
+
     override func tearDown() {
         PasswordStore.removeBiometricPassword(databaseName: dbName)
         super.tearDown()

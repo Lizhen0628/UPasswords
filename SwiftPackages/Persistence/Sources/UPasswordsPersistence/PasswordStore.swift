@@ -12,15 +12,53 @@ public enum PasswordStore {
         save(password: password, account: "database", databaseName: databaseName)
     }
 
+    /// 测试缝隙:CI 无密码锁/生物识别,强制走普通项路径保证确定性。
+    static var usePlainBiometricItemsForTesting = false
+
     /// Biometry-gated copy of the database password.
     ///
-    /// 注意:带 SecAccessControl(.userPresence) 的钥匙串项要求 app 有正式签名 +
-    /// keychain-access-groups 权限,否则 SecItemAdd 返回 -34018(missing
-    /// entitlement),Touch ID 永远无法启用(未签名分发正好命中)。因此这里存
-    /// 普通项(与 "database" 项同等保护级别,其他进程读取仍会弹系统授权框),
-    /// Touch ID 门禁改由 biometricPassword 的 LAContext.evaluatePolicy 完成。
+    /// 双层门禁:优先存 kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly +
+    /// SecAccessControl(.userPresence) 项——读取必须过系统生物识别(硬件层),
+    /// 配合 kSecUseAuthenticationContext 复用调用方已评估的 LAContext,
+    /// 全程只弹一次。设备未设密码锁或未正确签名(SecItemAdd 失败,如 -34018)
+    /// 时回退普通项,由 evaluatePolicy 做唯一门禁(历史行为)。
     public static func savePasswordForBiometric(_ password: String, databaseName: String) {
+        if !usePlainBiometricItemsForTesting, saveSecured(password: password, databaseName: databaseName) {
+            return
+        }
         save(password: password, account: "biometric", databaseName: databaseName)
+    }
+
+    /// 带 userPresence ACL 的加固项;成功返回 true。
+    private static func saveSecured(password: String, databaseName: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service(forDatabaseName: databaseName),
+            kSecAttrAccount as String: "biometric",
+        ]
+        SecItemDelete(query as CFDictionary)
+        var accessError: Unmanaged<CFError>?
+        guard let access = SecAccessControlCreateWithFlags(
+            kCFAllocatorDefault,
+            kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
+            .userPresence,
+            &accessError
+        ) else {
+            // 未设密码锁等场景:创建失败走普通项回退
+            Log.warn("keychain", "secured biometric item unavailable (\(accessError?.takeRetainedValue().localizedDescription ?? "unknown")) — falling back to plain item")
+            return false
+        }
+        var attrs = query
+        attrs[kSecValueData as String] = Data(password.utf8)
+        attrs[kSecAttrAccessControl as String] = access
+        let status = SecItemAdd(attrs as CFDictionary, nil)
+        if status == errSecSuccess {
+            Log.info("keychain", "secured biometric item saved for \(service(forDatabaseName: databaseName)) (userPresence ACL)")
+            return true
+        }
+        Log.logKeychain("save secured biometric item (falling back to plain)", status: status)
+        SecItemDelete(query as CFDictionary)
+        return false
     }
 
     /// 写入钥匙串密码副本的共用实现(普通项与生物识别项仅 account 不同)。
@@ -81,7 +119,8 @@ public enum PasswordStore {
         ) { ok, error in
             if ok {
                 Log.debug("keychain", "Touch ID ok → reading biometric item")
-                completion(loadPassword(databaseName: databaseName, biometric: true))
+                // 复用已评估的 context 读取 ACL 项:钥匙串不再二次弹窗
+                completion(loadPassword(databaseName: databaseName, biometric: true, context: ctx))
             } else {
                 Log.warn("keychain", "Touch ID denied: \(error?.localizedDescription ?? "unknown")")
                 completion(nil)
@@ -89,15 +128,20 @@ public enum PasswordStore {
         }
     }
 
-    public static func loadPassword(databaseName: String, biometric: Bool = false) -> String? {
-        let query: [String: Any] = [
+    /// - Parameter context: 已通过 evaluatePolicy 的 LAContext;带 ACL 的
+    ///   biometric 项必须凭它静默读取(否则 errSecInteractionNotAllowed)。
+    public static func loadPassword(databaseName: String, biometric: Bool = false,
+                                    context: LAContext? = nil) -> String? {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service(forDatabaseName: databaseName),
             kSecAttrAccount as String: biometric ? "biometric" : "database",
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
-        // biometric 项不带 ACL(evaluatePolicy 已做生物识别门禁),静默读取
+        if let context {
+            query[kSecUseAuthenticationContext as String] = context
+        }
         var out: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &out)
         let account = biometric ? "biometric" : "database"
