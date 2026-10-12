@@ -38,6 +38,37 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
     /// 解锁后缓存的活动条目(剔除回收站/归档/模板)。
     private static var cachedCards: [Card]? = nil
     private static var cachedVaultName: String? = nil
+    /// 缓存写入时间:空闲超过 unlockTTL 即自动锁定(与主 App 自动锁定对齐,
+    /// 原生桥常驻进程不受主 App 锁定事件管辖,必须自带时效)。
+    private static var cachedAt: Date? = nil
+    /// 解锁失败退避:指数递增,封顶 15 分钟——扩展弹窗不得成为
+    /// 绕过主 App 自毁/锁定体系的爆破入口。
+    private static var failedUnlocks = 0
+    private static var lockedUntil = Date.distantPast
+    private static let unlockTTL: TimeInterval = 5 * 60
+    private static let maxBackoff: TimeInterval = 15 * 60
+
+    /// 空闲超时自动锁定:ping/query/unlock 进入时都先过这道闸。
+    private static func lockIfIdle() {
+        guard let at = cachedAt, Date().timeIntervalSince(at) > unlockTTL else { return }
+        cachedCards = nil
+        cachedVaultName = nil
+        cachedAt = nil
+        diag("auto-lock after idle")
+    }
+
+    private static func clearCache() {
+        cachedCards = nil
+        cachedVaultName = nil
+        cachedAt = nil
+    }
+
+    private static func registerUnlockFailure() {
+        failedUnlocks += 1
+        let backoff = min(30 * pow(2, Double(failedUnlocks - 1)), maxBackoff)
+        lockedUntil = Date().addingTimeInterval(backoff)
+        diag("unlock failed count=\(failedUnlocks) backoff=\(Int(backoff))s")
+    }
 
     func beginRequest(with context: NSExtensionContext) {
         let items = context.inputItems.compactMap { $0 as? NSExtensionItem }
@@ -45,11 +76,13 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         let type = (message?["type"] as? String) ?? ""
         Log.info("chrome", "safari native message: \(type)")
         Self.diag("msg \(type)")
+        Self.lockIfIdle()
         let response: [String: Any]
         switch type {
         case "ping": response = Self.handlePing()
         case "unlock": response = Self.handleUnlock(message)
         case "query": response = Self.handleQuery(message)
+        case "lock": response = Self.handleLock()
         default: response = ["type": "error", "message": "unknown message type"]
         }
         Self.diag("resp \(type) -> \(response["type"] as? String ?? "?") ok=\(response["ok"] as? Bool ?? false) reason=\(response["reason"] as? String ?? "-")")
@@ -79,6 +112,10 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         guard let password = message?["password"] as? String, !password.isEmpty else {
             return ["type": "error", "message": "missing password"]
         }
+        if Date() < Self.lockedUntil {
+            diag("unlock throttled")
+            return ["type": "unlocked", "ok": false, "reason": "throttled"]
+        }
         guard let vault = vaultFile() else {
             Log.warn("chrome", "safari unlock: no vault file accessible (snapshot and local db missing)")
             diag("unlock no vault accessible")
@@ -103,16 +140,26 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                 let db = try PasswordDatabase.parse(DatabaseCipher.decryptBody(data, vaultKey: vek))
                 cachedCards = db.cards.filter { !$0.trashed && !$0.archived && !$0.template }
                 cachedVaultName = vault.name
+                cachedAt = Date()
+                failedUnlocks = 0
                 Log.info("chrome", "safari vault \"\(vault.name)\" unlocked: \(cachedCards?.count ?? 0) cards")
                 return ["type": "unlocked", "ok": true, "count": cachedCards?.count ?? 0]
             } catch {
                 Log.warn("chrome", "safari unlock \"\(vault.name)\" rejected (wrong password or corrupt container)")
+                Self.registerUnlockFailure()
                 return ["type": "unlocked", "ok": false, "reason": "badPassword"]
             }
         } catch {
             Log.warn("chrome", "safari unlock \"\(vault.name)\" failed reading container: \(error)")
             return ["type": "unlocked", "ok": false, "reason": "badPassword"]
         }
+    }
+
+    /// 主动锁定:清空内存缓存(前端在锁定按钮/空闲时调用)。
+    private static func handleLock() -> [String: Any] {
+        clearCache()
+        diag("locked by message")
+        return ["type": "locked", "ok": true]
     }
 
     /// 查询:返回与页面 host 匹配的填充候选(含凭据,契约允许)。

@@ -6,6 +6,7 @@
 import {
     base64ToBytes,
     canonicalizeHost,
+    clearItems,
     credentialsOf,
     decryptBody,
     getVaultBody,
@@ -303,7 +304,9 @@ refreshButton.addEventListener("click", async () => {
     await render();
 });
 lockButton.addEventListener("click", async () => {
-    await saveItems([]);
+    // 锁定 = 彻底退出:明文条目与会话令牌一并清除
+    await clearItems();
+    await browser.storage.local.remove(SESSION_KEY);
     await render();
 });
 

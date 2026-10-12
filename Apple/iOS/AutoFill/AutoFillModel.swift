@@ -1,6 +1,7 @@
 import Foundation
 import AuthenticationServices
 import CryptoKit
+import LocalAuthentication
 
 import UPasswordsCore
 import UPasswordsPersistence
@@ -132,6 +133,23 @@ final class AutoFillModel: ObservableObject {
               let pw = PasswordStore.loadPassword(databaseName: main.name, biometric: true) else { return }
         biometricWorking = true
         defer { biometricWorking = false }
+        // 钥匙串副本无硬件 ACL:门禁必须由扩展自己做(与 macOS biometricPassword
+        // 对齐),否则持机者无面容即可解锁全库
+        let context = LAContext()
+        var policyError: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &policyError) else {
+            Log.warn("keychain", "autofill: biometry unavailable (code \(policyError?.code ?? -1))")
+            return
+        }
+        do {
+            let ok = try await context.evaluatePolicy(
+                .deviceOwnerAuthenticationWithBiometrics,
+                localizedReason: L10n.t("ios_autofill_biometric_reason"))
+            guard ok else { return }
+        } catch {
+            Log.warn("keychain", "autofill: biometric evaluate failed: \(error)")
+            return
+        }
         guard let (db, vek) = try? SharedVaultStore.store.loadUnlocked(name: main.name, password: pw) else {
             Log.warn("keychain", "autofill: biometric password rejected")
             return

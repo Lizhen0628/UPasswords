@@ -1,7 +1,12 @@
-// Safari background script (standalone): data comes from the relay API via the
-// popup (login/unlock/decrypt happen there); background answers "query" from
-// the decrypted snapshot in browser.storage.local. Never logs secrets.
-import { canonicalizeHost, credentialsOf, hostMatches, loadItems, hostnameOf } from "./shared/index.js";
+// Safari/Firefox background (standalone): data comes from the relay API via the
+// popup (login/unlock/decrypt happen there); background answers "query" from the
+// decrypted snapshot in browser.storage.local. Never logs secrets.
+import { canonicalizeHost, credentialsOf, hostMatches, loadItems, clearItems, hostnameOf } from "./shared/index.js";
+
+// query 返回含明文密码的候选,只服务扩展自身页面(popup);
+// content script 上下文与任何外部来源一律拒绝
+const ownOrigin = browser.runtime.getURL("");
+const isOwnPage = (sender) => typeof sender.url === "string" && sender.url.startsWith(ownOrigin);
 
 async function queryItems(host) {
     const items = await loadItems();
@@ -11,11 +16,15 @@ async function queryItems(host) {
     return { type: "items", candidates };
 }
 
-browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!message || typeof message.type !== "string") {
         return false;
     }
     if (message.type === "query") {
+        if (!isOwnPage(sender)) {
+            sendResponse({ type: "error", message: "forbidden sender" });
+            return false;
+        }
         queryItems(message.host)
             .then(sendResponse)
             .catch(() => sendResponse({ type: "error", message: "query failed" }));
@@ -23,6 +32,10 @@ browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
     return false;
 });
+
+// 浏览器启动/扩展安装更新即视为锁定:清掉上次会话遗留的明文条目
+browser.runtime.onStartup?.addListener(() => { void clearItems(); });
+browser.runtime.onInstalled?.addListener(() => { void clearItems(); });
 
 // Log canonical host of the active tab on startup for debugging.
 browser.tabs

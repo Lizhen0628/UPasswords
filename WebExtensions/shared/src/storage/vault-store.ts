@@ -1,12 +1,18 @@
 /**
- * browser.storage.local wrapper holding the last snapshot pushed by the
- * native app (already filtered per-origin; no cross-site payload).
+ * browser.storage.local wrapper holding the unlocked extension snapshot.
+ *
+ * 安全模型:明文条目只允许短驻留——TTL 过期后读取即自毁(空闲自动锁定);
+ * 浏览器重启/扩展更新由 background 主动清空。令牌/会话由调用方管理,
+ * 本模块绝不触碰密钥材料。
  */
 
 import type { ExtensionItem } from "../core/types.js";
 
 const itemsKey = "vault.items";
 const updatedAtKey = "vault.updatedAt";
+
+/** 明文条目驻留上限:超时即视为已锁定,读取时清除并返回空(免 idle 权限)。 */
+export const ITEMS_TTL_MS = 5 * 60 * 1000;
 
 interface BrowserStorageArea {
     get(keys: string[]): Promise<Record<string, unknown>>;
@@ -20,26 +26,57 @@ export function setStorageArea(area: BrowserStorageArea): void {
 
 let storageArea: BrowserStorageArea | null = null;
 
+/** 惰性接线:未显式注入时直接取全局命名空间(popup/background 四端通用)。 */
+function resolveArea(): BrowserStorageArea | null {
+    if (storageArea) return storageArea;
+    const ns = globalThis as {
+        browser?: { storage?: { local?: BrowserStorageArea } };
+        chrome?: { storage?: { local?: BrowserStorageArea } };
+    };
+    return ns.browser?.storage?.local ?? ns.chrome?.storage?.local ?? null;
+}
+
 export async function saveItems(items: ExtensionItem[]): Promise<void> {
-    if (!storageArea) {
+    const area = resolveArea();
+    if (!area) {
         throw new Error("storage area not configured");
     }
-    await storageArea.set({ [itemsKey]: items, [updatedAtKey]: Date.now() });
+    await area.set({ [itemsKey]: items, [updatedAtKey]: Date.now() });
 }
 
 export async function loadItems(): Promise<ExtensionItem[]> {
-    if (!storageArea) {
+    const area = resolveArea();
+    if (!area) {
         return [];
     }
-    const bag = await storageArea.get([itemsKey]);
+    const bag = await area.get([itemsKey, updatedAtKey]);
     const value = bag[itemsKey];
-    return Array.isArray(value) ? (value as ExtensionItem[]) : [];
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const ts = typeof bag[updatedAtKey] === "number" ? (bag[updatedAtKey] as number) : 0;
+    if (Date.now() - ts > ITEMS_TTL_MS) {
+        // 空闲超时 = 自动锁定:明文条目即刻清除
+        await clearItems();
+        return [];
+    }
+    return value as ExtensionItem[];
+}
+
+/** 清空明文条目缓存(锁定/浏览器启动/扩展更新时调用)。 */
+export async function clearItems(): Promise<void> {
+    const area = resolveArea();
+    if (!area) {
+        return;
+    }
+    await area.set({ [itemsKey]: null, [updatedAtKey]: 0 });
 }
 
 export async function updatedAt(): Promise<number> {
-    if (!storageArea) {
+    const area = resolveArea();
+    if (!area) {
         return 0;
     }
-    const bag = await storageArea.get([updatedAtKey]);
+    const bag = await area.get([updatedAtKey]);
     return typeof bag[updatedAtKey] === "number" ? (bag[updatedAtKey] as number) : 0;
 }
