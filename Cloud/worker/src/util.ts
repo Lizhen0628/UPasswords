@@ -178,6 +178,12 @@ export async function sha256Hex(input: string): Promise<string> {
   return bytesToHex(new Uint8Array(digest));
 }
 
+/// 字节版 SHA-256(库体 commit 的服务端实算校验用)。
+export async function sha256OfBytes(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return bytesToHex(new Uint8Array(digest));
+}
+
 // ---------- 常量时间比较 ----------
 
 export function timingSafeEqual(a: string, b: string): boolean {
@@ -251,4 +257,17 @@ export async function readJson(request: Request): Promise<Record<string, unknown
     // 落到统一 bad_request
   }
   throw new ApiError(400, "bad_request");
+}
+
+/// R2 前缀全删(游标翻页到空)。删库与注销 purge 共用同一实现——
+/// 曾因两处手写循环复制走样,staging 前缀漏了 `vaults/` 段造成密文残留。
+export async function deleteR2Prefix(bucket: R2Bucket, prefix: string): Promise<void> {
+  let cursor: string | undefined;
+  do {
+    const listing = await bucket.list({ prefix, cursor });
+    for (const item of listing.objects) {
+      await bucket.delete(item.key);
+    }
+    cursor = listing.truncated ? listing.cursor : undefined;
+  } while (cursor);
 }

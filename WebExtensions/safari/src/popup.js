@@ -145,8 +145,9 @@ async function unlock() {
     unlockButton.disabled = true;
     status(t("正在拉取并解密密码库…", "Fetching and decrypting vault…"));
     try {
-        const [{ [SESSION_KEY]: session }, { [VAULT_KEY]: vault }] =
-            await storageGet([SESSION_KEY, VAULT_KEY]);
+        const bag = await storageGet([SESSION_KEY, VAULT_KEY]);
+        const session = bag[SESSION_KEY];
+        const vault = bag[VAULT_KEY];
         if (!session || !vault) {
             await render();
             return;
@@ -180,8 +181,10 @@ async function unlock() {
         status("");
         await render();
     } catch (error) {
+        // 只记错误名/错误码定位问题;message 可能含上下文,不打出
+        console.warn("unlock failed:", error?.name, error?.code ?? "");
         if (!statusEl.className.includes("error")) {
-            status(t("解锁失败，请稍后重试", "Unlock failed — try again"), true);
+            status(t("Unlock failed, please try again later", "Unlock failed — try again later"), true);
         }
     } finally {
         unlockButton.disabled = false;

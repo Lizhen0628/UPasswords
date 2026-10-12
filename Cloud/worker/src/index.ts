@@ -28,7 +28,7 @@ import {
   sweepStaleStaging,
 } from "./vaults";
 import { handleStats } from "./stats";
-import { ApiError, json, nowSec, sha256Hex, type Env } from "./util";
+import { ApiError, json, nowSec, numVar, sha256Hex, type Env } from "./util";
 
 interface RouteCtx {
   env: Env;
@@ -84,7 +84,7 @@ async function authenticate(ctx: RouteCtx): Promise<AuthContext> {
     throw new ApiError(401, "unauthorized");
   }
   const now = nowSec();
-  const ttlDays = Number(ctx.env.SESSION_TTL_DAYS) > 0 ? Number(ctx.env.SESSION_TTL_DAYS) : 90;
+  const ttlDays = numVar(ctx.env, "SESSION_TTL_DAYS", 90);
   await ctx.env.DB.prepare(
     "UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?",
   )

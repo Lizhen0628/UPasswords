@@ -10,6 +10,7 @@ declare const chrome: {
     runtime: {
         sendMessage(message: unknown, cb: (response: unknown) => void): void;
         onMessage: { addListener(listener: (message: unknown, sender: unknown, sendResponse: (r: unknown) => void) => boolean | undefined): void };
+        lastError?: { message?: string };
     };
 };
 
@@ -24,7 +25,14 @@ export const chromeAdapter: BrowserAdapter = {
         set: (entries) => new Promise((resolve) => chrome.storage.local.set(entries, () => resolve())),
     }),
     runtime: () => ({
-        sendMessage: (message) => new Promise((resolve) => chrome.runtime.sendMessage(message, resolve)),
+        // 回调式 API 必须触碰 lastError,否则接收端缺席时控制台刷
+        // "Unchecked runtime.lastError" 且 Promise 静默 resolve(undefined)
+        sendMessage: (message) =>
+            new Promise((resolve) =>
+                chrome.runtime.sendMessage(message, (response) => {
+                    void chrome.runtime.lastError;
+                    resolve(response);
+                })),
         onMessage: (listener) =>
             chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 const result = listener(message, sender);

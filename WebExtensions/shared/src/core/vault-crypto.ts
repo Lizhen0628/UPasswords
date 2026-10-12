@@ -100,6 +100,16 @@ export function envelopeChangedAt(envelope: Uint8Array): number | null {
     return view.getFloat64(0, true);
 }
 
+/** XML 属性来自不可信输入:白名单外的值回退默认,禁止 as 断言直接放行。 */
+const FIELD_TYPES: ReadonlySet<string> = new Set([
+    "login", "password", "pin", "number", "date", "phone",
+    "website", "email", "one_time_password", "text", "expiry", "secret",
+]);
+const AUTOFILL_TOKENS: ReadonlySet<string> = new Set([
+    "off", "username", "current-password", "url", "one-time-code",
+    "cc-number", "cc-name", "cc-exp", "cc-csc",
+]);
+
 /**
  * Parse the vault XML into fill items. Mirrors the native handler filter
  * (skip trashed/archived/template cards); DOMParser is required, so call
@@ -118,15 +128,21 @@ export function parseVaultXml(xml: string): ExtensionItem[] {
         if (card.getAttribute("trashed") === "true" || card.getAttribute("archived") === "true" || card.getAttribute("template") === "true") {
             continue;
         }
-        const fields = Array.from(card.querySelectorAll("field")).map((field) => ({
-            name: field.getAttribute("name") ?? "",
-            type: (field.getAttribute("type") ?? "text") as ExtensionItem["fields"][number]["type"],
-            value: field.textContent ?? "",
-            autofill: (field.getAttribute("autofill") ?? "off") as ExtensionItem["fields"][number]["autofill"],
-        }));
+        const fields = Array.from(card.querySelectorAll("field")).map((field) => {
+            const type = field.getAttribute("type") ?? "text";
+            const autofill = field.getAttribute("autofill") ?? "off";
+            return {
+                name: field.getAttribute("name") ?? "",
+                type: (FIELD_TYPES.has(type) ? type : "text") as ExtensionItem["fields"][number]["type"],
+                value: field.textContent ?? "",
+                autofill: (AUTOFILL_TOKENS.has(autofill) ? autofill : "off") as ExtensionItem["fields"][number]["autofill"],
+            };
+        });
         const website = fields.find((f) => f.type === "website")?.value ?? "";
+        // 非数字 id 会得到 NaN 并让所有坏卡片共享同一指纹,变更检测失真
+        const rawId = Number(card.getAttribute("id") ?? "0");
         items.push({
-            id: Number(card.getAttribute("id") ?? "0"),
+            id: Number.isFinite(rawId) ? rawId : 0,
             title: card.getAttribute("title") ?? "",
             symbol: card.getAttribute("symbol"),
             fields,

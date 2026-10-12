@@ -13,7 +13,8 @@ export async function handleStats(env: Env, request: Request): Promise<Response>
   // 先过一次异步边界再抛错:规避测试 harness 对同步抛出的 unhandled 误报
   await Promise.resolve();
   const token = request.headers.get("x-admin-token") ?? "";
-  if (!timingSafeEqual(token, env.ADMIN_TOKEN)) throw new ApiError(401, "unauthorized");
+  // ADMIN_TOKEN 未配置时按空串比较(恒 false):以 401 暴露配置缺失,而非 500
+  if (!timingSafeEqual(token, env.ADMIN_TOKEN ?? "")) throw new ApiError(401, "unauthorized");
 
   const now = nowSec();
   const userRows = await env.DB.prepare(

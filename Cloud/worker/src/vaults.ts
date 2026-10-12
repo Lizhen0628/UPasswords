@@ -3,17 +3,17 @@
 
 import {
   consumeCodeForEmail,
+  getOrCreateUser,
   issueSession,
   requireSensitiveCode,
-  purgeUser,
   type AuthContext,
-  type UserRow,
 } from "./auth";
 import { audit } from "./db";
 import {
   ApiError,
   b64ToBytes,
   bytesToB64,
+  deleteR2Prefix,
   emailHmac,
   json,
   kekOpen,
@@ -23,6 +23,7 @@ import {
   numVar,
   randomHex,
   readJson,
+  sha256OfBytes,
   utf8,
   validSha256Hex,
   validVaultName,
@@ -229,14 +230,7 @@ export async function handleDeleteVault(
     .run();
   // R2 库体与该库全部 staging 一并清除(元数据列随注册表行消亡)
   await env.VAULTS.delete(bodyKey(vaultId));
-  let cursor: string | undefined;
-  do {
-    const listing = await env.VAULTS.list({ prefix: `staging/${vaultId}/`, cursor });
-    for (const item of listing.objects) {
-      await env.VAULTS.delete(item.key);
-    }
-    cursor = listing.truncated ? listing.cursor : undefined;
-  } while (cursor);
+  await deleteR2Prefix(env.VAULTS, stagingPrefix(vaultId));
   await audit(env.DB, "vault_registry_delete", { userId: auth.user.id, vaultId });
   return json({ ok: true });
 }
@@ -254,6 +248,9 @@ function bodyQuotaBytes(env: Env): number {
 /// 全部收纳在 vaults/ 前缀下(桶内其他前缀留给未来的非库体数据)。
 function bodyKey(vaultId: string): string {
   return `vaults/${vaultId}`;
+}
+function stagingPrefix(vaultId: string): string {
+  return `vaults/staging/${vaultId}/`;
 }
 function stagingKey(vaultId: string, uploadId: string): string {
   return `vaults/staging/${vaultId}/${uploadId}`;
@@ -282,8 +279,9 @@ export async function handleBodyPut(
 }
 
 /// 提交换入:POST /v1/vaults/{id}/body/commit {uploadId,sha256}
-/// 服务端把 staging 对象流式拷贝为生效对象(R2 无服务端 copy,经 Worker 管道
-/// 转发,全程流式不落内存),成功后更新 D1 元数据、删除 staging。
+/// 服务端对 staging 字节实算 SHA-256 并与申报值比对(不信客户端申报,
+/// 中断/损坏的密文不换入),通过后写生效对象、更新 D1、删除 staging。
+/// 库体已在配额内(≤50MB),经缓冲区哈希后整写 R2。
 /// 崩溃窗口:R2 已写生效对象但 D1 未更新 → 读端哈希不匹配可检测,下次上传自愈;
 /// staging 残留 → 日度 cron 清扫。
 export async function handleBodyCommit(
@@ -304,7 +302,15 @@ export async function handleBodyCommit(
 
   const stagedObject = await env.VAULTS.get(stagingKey(vaultId, uploadId));
   if (!stagedObject) throw new ApiError(400, "incomplete_upload");
-  await env.VAULTS.put(bodyKey(vaultId), stagedObject.body, {
+  const bytes = new Uint8Array(await stagedObject.arrayBuffer());
+  const actual = await sha256OfBytes(bytes);
+  if (actual !== sha256) {
+    // 申报哈希与实际字节不符:上传中断/损坏,废弃本次 staging
+    await env.VAULTS.delete(stagingKey(vaultId, uploadId));
+    console.log(JSON.stringify({ t: Date.now(), action: "body_commit_hash_mismatch", size: bytes.length }));
+    throw new ApiError(400, "hash_mismatch");
+  }
+  await env.VAULTS.put(bodyKey(vaultId), bytes, {
     httpMetadata: { contentType: "application/octet-stream" },
   });
   const now = nowSec();
@@ -367,29 +373,18 @@ export async function handleTransferVault(
 
   // 目标账户:不存在则建(同注册语义);曾注销则清残行后重建
   const targetEh = await emailHmac(env, email);
-  let target = await env.DB.prepare("SELECT * FROM users WHERE email_hmac = ?")
-    .bind(targetEh)
-    .first<UserRow>();
-  if (target && target.state === "deregistered") {
-    await purgeUser(env, target.id, targetEh);
-    target = null;
-  }
-  if (!target) {
-    const id = randomHex(16);
-    const emailEnc = await kekSeal(env, utf8(email));
-    await env.DB.prepare(
-      "INSERT INTO users (id, email_hmac, email_enc, state, plan, created_at, last_login_at) VALUES (?, ?, ?, 'active', 'normal', ?, ?)",
-    )
-      .bind(id, targetEh, emailEnc, nowSec(), nowSec())
-      .run();
-    target = { id, email_hmac: targetEh, email_enc: emailEnc, state: "active", plan: "normal", created_at: nowSec(), last_login_at: nowSec() };
-    await audit(env.DB, "register", { userId: id }, { via: "transfer" });
-  }
+  const target = await getOrCreateUser(env, email, targetEh, "transfer");
 
-  // 注册表换主(vaultId/信封/哈希/库体全部保留,双端无感)
-  await env.DB.prepare("UPDATE vaults SET user_id = ?, updated_at = ? WHERE vault_id = ?")
-    .bind(target.id, nowSec(), vaultId)
-    .run();
+  // 注册表换主(vaultId/信封/哈希/库体全部保留,双端无感);
+  // 目标账户已有同名库时 UNIQUE 约束 → 409(与建库同语义)
+  try {
+    await env.DB.prepare("UPDATE vaults SET user_id = ?, updated_at = ? WHERE vault_id = ?")
+      .bind(target.id, nowSec(), vaultId)
+      .run();
+  } catch (error) {
+    if (String(error).includes("UNIQUE")) throw new ApiError(409, "name_exists");
+    throw error;
+  }
   const session = await issueSession(env, target.id, typeof body.deviceName === "string" ? body.deviceName : "");
   await audit(env.DB, "vault_transfer", { userId: auth.user.id, vaultId }, { toUserId: target.id.slice(0, 8) });
   return json({ token: session.token, expiresAt: session.expiresAt, userId: target.id });

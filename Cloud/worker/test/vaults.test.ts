@@ -1,7 +1,7 @@
 // vault 注册表测试:登记/配额/信封决胜与钳制/哈希/改名/解绑/跨用户隔离。
 
 import { describe, expect, it } from "vitest";
-import { call, createVault, fakeEnvelope, registerUser, sensitiveCode } from "./helpers";
+import { call, createVault, fakeEnvelope, registerUser, sensitiveCode, workerEnv } from "./helpers";
 
 async function putEnvelope(
   token: string,
@@ -310,6 +310,59 @@ describe("库体密文存储(R2)", () => {
       { "content-type": "application/octet-stream", "content-length": String(60 * 1024 * 1024) },
     );
     expect(over.status).toBe(413);
+  });
+
+  it("commit 申报哈希与实际字节不符 → 400 hash_mismatch,生效对象保持旧版", async () => {
+    const token = await registerUser("body-hash@example.com");
+    const vaultId = await createVault(token, "Main");
+    const gen1 = new Uint8Array(400);
+    fillRandom(gen1);
+    await uploadBody(token, vaultId, gen1, "e1b2c3d4e5f60718293a4b5c6d7e8f90");
+
+    const gen2 = new Uint8Array(600);
+    fillRandom(gen2);
+    const put = await call(
+      "PUT",
+      `/v1/vaults/${vaultId}/body?upload=e2b2c3d4e5f60718293a4b5c6d7e8f90`,
+      gen2,
+      token,
+      { "content-type": "application/octet-stream" },
+    );
+    expect(put.status).toBe(200);
+    const bad = await call(
+      "POST",
+      `/v1/vaults/${vaultId}/body/commit`,
+      { uploadId: "e2b2c3d4e5f60718293a4b5c6d7e8f90", sha256: await shaOf(new Uint8Array(1)) },
+      token,
+    );
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toBe("hash_mismatch");
+
+    // 坏数据未换入:生效对象仍是 gen1;残 staging 已被废弃
+    const get = await call("GET", `/v1/vaults/${vaultId}/body`, undefined, token);
+    const round = new Uint8Array(await get.arrayBuffer());
+    expect(await shaOf(round)).toBe(await shaOf(gen1));
+    const staging = await workerEnv.VAULTS.list({ prefix: `vaults/staging/${vaultId}/` });
+    expect(staging.objects.length).toBe(0);
+  });
+
+  it("删库清理 vaults/staging/<vaultId>/ 前缀(中断上传残渣不残留)", async () => {
+    const token = await registerUser("body-staging@example.com");
+    const vaultId = await createVault(token, "Main");
+    await workerEnv.VAULTS.put(
+      `vaults/staging/${vaultId}/ffeeddccbbaa99887766554433221100`,
+      new Uint8Array(8),
+    );
+    const del = await call(
+      "DELETE",
+      `/v1/vaults/${vaultId}`,
+      { code: await sensitiveCode("body-staging@example.com") },
+      token,
+    );
+    expect(del.status).toBe(200);
+    const staging = await workerEnv.VAULTS.list({ prefix: `vaults/staging/${vaultId}/` });
+    expect(staging.objects.length).toBe(0);
+    expect(await workerEnv.VAULTS.head(`vaults/${vaultId}`)).toBeNull();
   });
 
   it("跨用户隔离:他人 vaultId 一律 404", async () => {

@@ -7,6 +7,9 @@
 
 export const RELAY_BASE_URL = "https://api.upasswords.com";
 
+/** 网络黑洞兜底:超时后 fetch 以 TimeoutError 拒绝,UI 可恢复(否则按钮永久禁用)。 */
+const REQUEST_TIMEOUT_MS = 30_000;
+
 export class RelayApiError extends Error {
     constructor(public status: number, public code: string) {
         super(`relay api ${status}: ${code}`);
@@ -45,6 +48,7 @@ async function call(
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
         let code = `http_${response.status}`;
@@ -99,6 +103,7 @@ export async function getVaultEnvelope(token: string, vaultId: string): Promise<
 export async function getVaultBody(token: string, vaultId: string): Promise<Uint8Array> {
     const response = await fetch(`${RELAY_BASE_URL}/v1/vaults/${vaultId}/body`, {
         headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
         throw new RelayApiError(response.status, "body_not_found");

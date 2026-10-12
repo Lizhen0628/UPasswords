@@ -6,6 +6,7 @@ import { sendVerificationMail } from "./smtp";
 import {
   ApiError,
   codeHash,
+  deleteR2Prefix,
   emailHmac,
   json,
   kekHmac,
@@ -158,7 +159,7 @@ export async function consumeCodeForEmail(env: Env, email: string, purpose: stri
 }
 
 /** 签发会话(登录与换绑共用):令牌只在返回值出现一次,库中仅存 SHA-256。 */
-export async function issueSession(env: Env, userId: string, deviceName: string): Promise<{ token: string; expiresAt: number }> {
+export async function issueSession(env: Env, userId: string, deviceName: unknown): Promise<{ token: string; expiresAt: number }> {
   const token = randomHex(32);
   const now = nowSec();
   const ttlDays = numVar(env, "SESSION_TTL_DAYS", 90);
@@ -166,21 +167,13 @@ export async function issueSession(env: Env, userId: string, deviceName: string)
   await env.DB.prepare(
     "INSERT INTO sessions (id, user_id, token_hash, device_name, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
   )
-    .bind(randomHex(16), userId, await sha256Hex(token), deviceName.replace(/[\u0000-\u001f]/g, "").trim().slice(0, 64), now, now, expiresAt)
+    .bind(randomHex(16), userId, await sha256Hex(token), sanitizeDeviceName(deviceName), now, now, expiresAt)
     .run();
   return { token, expiresAt };
 }
 
-// ---------- 注册/登录(统一) ----------
-
-export async function handleVerify(env: Env, request: Request): Promise<Response> {
-  const body = await readJson(request);
-  const email = normalizeEmail(body.email);
-  if (!email) throw new ApiError(400, "invalid_email");
-  const eh = await emailHmac(env, email);
-
-  if (!(await consumeCode(env, eh, "login", body.code))) throw new ApiError(400, "invalid_code");
-
+/** 查目标账户:注销态先物理清除再重建,不存在则注册(登录与换绑共用)。 */
+export async function getOrCreateUser(env: Env, email: string, eh: string, via?: "transfer"): Promise<UserRow> {
   const now = nowSec();
   let user = await env.DB.prepare("SELECT * FROM users WHERE email_hmac = ?")
     .bind(eh)
@@ -199,15 +192,29 @@ export async function handleVerify(env: Env, request: Request): Promise<Response
       .bind(id, eh, emailEnc, now, now)
       .run();
     user = { id, email_hmac: eh, email_enc: emailEnc, state: "active", plan: "normal", created_at: now, last_login_at: now };
-    await audit(env.DB, "register", { userId: id });
-  } else {
-    await env.DB.prepare("UPDATE users SET last_login_at = ? WHERE id = ?")
-      .bind(now, user.id)
-      .run();
+    await audit(env.DB, "register", { userId: id }, via ? { via } : undefined);
   }
+  return user;
+}
+
+// ---------- 注册/登录(统一) ----------
+
+export async function handleVerify(env: Env, request: Request): Promise<Response> {
+  const body = await readJson(request);
+  const email = normalizeEmail(body.email);
+  if (!email) throw new ApiError(400, "invalid_email");
+  const eh = await emailHmac(env, email);
+
+  if (!(await consumeCode(env, eh, "login", body.code))) throw new ApiError(400, "invalid_code");
+
+  const user = await getOrCreateUser(env, email, eh);
+  // 存量账户刷新登录时间(新建账户 INSERT 时已带同值,多跑一条 UPDATE 幂等)
+  await env.DB.prepare("UPDATE users SET last_login_at = ? WHERE id = ?")
+    .bind(nowSec(), user.id)
+    .run();
 
   // 签发会话:令牌只在此响应出现一次,库中仅存 SHA-256
-  const session = await issueSession(env, user.id, sanitizeDeviceName(body.deviceName));
+  const session = await issueSession(env, user.id, body.deviceName);
   await audit(env.DB, "login", { userId: user.id }, { expiresAt: session.expiresAt });
   return json({ token: session.token, expiresAt: session.expiresAt, userId: user.id, createdAt: user.created_at });
 }
@@ -286,14 +293,7 @@ export async function purgeUser(env: Env, userId: string, eh: string): Promise<v
     .all<{ vault_id: string }>();
   for (const row of vaults.results ?? []) {
     await env.VAULTS.delete(`vaults/${row.vault_id}`);
-    let cursor: string | undefined;
-    do {
-      const listing = await env.VAULTS.list({ prefix: `vaults/staging/${row.vault_id}/`, cursor });
-      for (const item of listing.objects) {
-        await env.VAULTS.delete(item.key);
-      }
-      cursor = listing.truncated ? listing.cursor : undefined;
-    } while (cursor);
+    await deleteR2Prefix(env.VAULTS, `vaults/staging/${row.vault_id}/`);
   }
   await env.DB.prepare("DELETE FROM vaults WHERE user_id = ?").bind(userId).run();
   await env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId).run();
