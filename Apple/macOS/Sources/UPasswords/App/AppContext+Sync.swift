@@ -48,7 +48,12 @@ extension AppContext {
                 await uploadCloudEnvelope()
                 let rotated = try? DatabaseCipher.encryptBody(database.xmlData(), vaultKey: effectiveKey)
                 if let rotated, let driver = makeCloudDriver() {
-                    try? await driver.upload(rotated)
+                    do {
+                        try await driver.upload(rotated)
+                    } catch {
+                        // 信封已传、本体没跟上:正是下次「远端解不开」问题的种子,必须留痕
+                        Log.error("sync", "upload rotated body after password change failed: \(error)")
+                    }
                 }
             }
         } else {
@@ -108,8 +113,8 @@ extension AppContext {
     /// auto = true 走静默同步(自动备份场景);手动备份用 auto = false,成败均有 toast。
     /// 云未配置时跳过;已有同步在飞行中时也跳过——那一次同步同样会带走最新数据。
     private func syncAfterBackup(auto: Bool) {
-        guard makeCloudDriver() != nil else {
-            Log.debug("sync", "sync after backup skipped: cloud not configured")
+        guard relay.token(database: databaseName) != nil || makeCloudDriver() != nil else {
+            Log.debug("sync", "sync after backup skipped: no channel (relay unbound, cloud not configured)")
             return
         }
         guard syncState != .syncing else {
@@ -124,6 +129,10 @@ extension AppContext {
 
     /// 自动同步间隔下限(秒):防止误设过小的间隔频繁打云端。
     private static let minAutoSyncSeconds = 30
+
+    /// 信封 changedAt 的时钟偏差容差(秒):差值不超过它视为同一时刻,
+    /// 不触发信封决胜(两端时钟不可能完全同步)。
+    private static let envelopeClockSkewTolerance: TimeInterval = 1
 
     /// 接管远端的结果:成功 / 密码不对。
     enum AdoptResult {
@@ -165,14 +174,16 @@ extension AppContext {
             if let driver, !apiMode(binding: apiBinding, token: apiToken) {
                 keyData = try await driver.downloadKey()
             }
-            if let record = await relayRegistryRecord(), let apiEnvelope = record.envelope {
+            // 注册表记录取一次复用(避免同一接管流程两次网络往返)
+            let registryRecord = await relayRegistryRecord()
+            if let apiEnvelope = registryRecord?.envelope {
                 let apiChanged = DatabaseCipher.envelopeChangedAt(apiEnvelope) ?? .distantPast
                 let driverChanged = keyData.flatMap { DatabaseCipher.envelopeChangedAt($0) } ?? .distantPast
                 if apiChanged > driverChanged { keyData = apiEnvelope }
             }
             if apiMode(binding: apiBinding, token: apiToken), keyData == nil {
                 // API 通道无网盘信封可读:直接以注册表信封为源
-                if let record = await relayRegistryRecord() { keyData = record.envelope }
+                keyData = registryRecord?.envelope
             }
             // v2 路径:只需解开远端信封——收敛库身份(云端为准),顺带合并本体
             if let keyData {
@@ -463,6 +474,10 @@ extension AppContext {
             Log.warn("sync", "sync skipped: vault locked")
             return
         }
+        guard syncState != .syncing else {
+            Log.debug("sync", "sync skipped: another sync already in flight")
+            return
+        }
         // API 数据面(relay 绑定的默认通道):库体直连 relay(R2 副本),
         // 网盘仅在"API 尚无副本"时作迁移兜底;未绑定 relay 才走纯网盘路径。
         let apiBinding = relay.binding(database: databaseName)
@@ -499,14 +514,19 @@ extension AppContext {
                     .flatMap { DatabaseCipher.envelopeChangedAt($0) } ?? .distantPast
                 let remoteChangedAt = record.envelopeChangedAt ?? .distantPast
                 if let remoteEnvelope = record.envelope,
-                   remoteChangedAt.timeIntervalSince(localChangedAt) > 1 {
+                   remoteChangedAt.timeIntervalSince(localChangedAt) > Self.envelopeClockSkewTolerance {
                     if let remoteVEK = try? DatabaseCipher.unwrapVaultKey(remoteEnvelope, password: password) {
                         joinRemoteVaultIdentity(remoteVEK)
                         sessionKey = remoteVEK
                         // 云端驱动的信封追平(iCloud/WebDAV 上还是改密前的旧信封;
                         // 仅网盘通道需要——API 通道以注册表为强一致源)
                         if !apiMode, let envelope = store.envelopeData(for: databaseName) {
-                            try? await driver?.uploadKey(envelope)
+                            do {
+                                try await driver?.uploadKey(envelope)
+                            } catch {
+                                // 追平失败下轮同步自愈,但原因要留痕
+                                Log.warn("sync", "driver envelope catch-up upload failed: \(error)")
+                            }
                         }
                         driverEnvelopeNeeded = false
                         Log.info("sync", "relay envelope adopted (remote changedAt newer)")
@@ -527,7 +547,7 @@ extension AppContext {
                         }
                         return
                     }
-                } else if localChangedAt.timeIntervalSince(remoteChangedAt) > 1,
+                } else if localChangedAt.timeIntervalSince(remoteChangedAt) > Self.envelopeClockSkewTolerance,
                           store.envelopeData(for: databaseName) != nil {
                     // 本地信封更新(含注册表尚无信封的首次接入):自愈推送
                     Task { await relayPushEnvelope() }

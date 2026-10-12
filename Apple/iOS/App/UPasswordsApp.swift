@@ -121,7 +121,7 @@ struct MainTabView: View {
                     let result = await vault.adoptRemotePassword(pw)
                     if result == .wrongPassword {
                         adoptFailed = true
-                        try? await Task.sleep(nanoseconds: 300_000_000)
+                        try? await Task.sleep(for: .milliseconds(300))
                         showAdoptPrompt = true
                     }
                 }

@@ -174,7 +174,12 @@ extension Vault {
     /// 解锁后刷新本会话设备名(管理设备页显示型号;历史通用名自愈)。
     func relayRenameCurrentSession() async {
         guard let token = relay.token(database: databaseName) else { return }
-        try? await relayClient.renameSession(token: token, deviceName: DeviceIdentity.displayName())
+        do {
+            try await relayClient.renameSession(token: token, deviceName: DeviceIdentity.displayName())
+        } catch {
+            // 自愈性改名,失败不影响功能;留痕即可
+            Log.debug("sync", "ios relay session rename failed: \(error)")
+        }
     }
 
     func relayReportHashes(cipher: Data) async {
@@ -349,7 +354,11 @@ extension Vault {
     func checkRelayPasswordVersion() async {
         guard !locked, let binding = relay.binding(database: databaseName),
               let token = relay.token(database: databaseName) else { return }
-        guard let record = try? await relayClient.getVault(token: token, vaultId: binding.vaultId) else { return }
+        guard let record = try? await relayClient.getVault(token: token, vaultId: binding.vaultId) else {
+            // 改密检测入口:网络失败留痕,否则「他机改密为何没触发锁定」无从排查
+            Log.debug("sync", "ios relay password-version check fetch failed (network/offline)")
+            return
+        }
         let known = relay.knownPasswordVersion(database: databaseName) ?? record.passwordVersion
         relay.recordPasswordVersion(record.passwordVersion, database: databaseName)
         guard record.passwordVersion > known, let envelope = record.envelope else { return }

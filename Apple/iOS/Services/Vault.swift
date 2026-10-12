@@ -293,7 +293,7 @@ final class Vault: ObservableObject {
     /// 永久作废,用户无需判断是否轮换。云端顺序:信封先行(他机强制锁定),
     /// 库体随后原子换代。
     func changeMasterPassword(old: String, new: String) -> Bool {
-        guard verifyMaster(old), new.count >= 4 else { return false }
+        guard verifyMaster(old), new.count >= PasswordPolicy.minimumMasterPasswordLength else { return false }
         guard let vaultKey else {
             Log.error("app", "ios master password change failed: no vault key in session")
             return false
@@ -325,7 +325,12 @@ final class Vault: ObservableObject {
                     await uploadCloudEnvelope()
                     let rotated = try? DatabaseCipher.encryptBody(database.xmlData(), vaultKey: effectiveKey)
                     if let rotated, let mounted = makeCloudDriver() {
-                        try? await mounted.driver.upload(rotated)
+                        do {
+                            try await mounted.driver.upload(rotated)
+                        } catch {
+                            // 信封已传、本体没跟上:正是下次「远端解不开」问题的种子,必须留痕
+                            Log.error("sync", "ios upload rotated body after password change failed: \(error)")
+                        }
                         mounted.releaseAccess?()
                     }
                 }
@@ -740,7 +745,7 @@ final class Vault: ObservableObject {
         toastTask?.cancel()
         toast = text
         toastTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            try? await Task.sleep(for: .seconds(1.6))
             guard !Task.isCancelled else { return }
             self?.toast = nil
         }
@@ -753,7 +758,7 @@ final class Vault: ObservableObject {
         let delay = clipboardClearSeconds
         guard delay > 0 else { return }
         Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000)
+            try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled else { return }
             if UIPasteboard.general.string == text {
                 UIPasteboard.general.string = ""

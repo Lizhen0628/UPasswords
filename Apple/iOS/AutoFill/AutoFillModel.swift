@@ -371,7 +371,7 @@ final class AutoFillModel: ObservableObject {
         pickedID = card.id
         Log.info("app", "autofill: picked cardId=\(card.id) (只提交该站点凭据)")
         Task {
-            try? await Task.sleep(nanoseconds: 350_000_000)
+            try? await Task.sleep(for: .milliseconds(350))
             let credential = ASPasswordCredential(user: card.login, password: card.password)
             context?.completeRequest(withSelectedCredential: credential)
         }
@@ -389,7 +389,7 @@ final class AutoFillModel: ObservableObject {
         pickedID = card.id
         Log.info("app", "autofill: picked otp cardId=\(card.id)")
         Task {
-            try? await Task.sleep(nanoseconds: 350_000_000)
+            try? await Task.sleep(for: .milliseconds(350))
             context?.completeOneTimeCodeRequest(using: ASOneTimeCodeCredential(code: code),
                                                 completionHandler: nil)
         }

@@ -24,6 +24,10 @@ extension Vault {
 
     var cloud: CloudType { CloudType(rawValue: cloudTypeRaw) ?? .none }
 
+    /// 信封 changedAt 的时钟偏差容差(秒):差值不超过它视为同一时刻,
+    /// 不触发信封决胜(两端时钟不可能完全同步)。
+    private static let envelopeClockSkewTolerance: TimeInterval = 1
+
     // MARK: iCloud 云端文件夹(iOS 沙盒经安全作用域书签访问云盘)
 
     /// 已保存 iCloud 云盘文件夹书签(设置页据此显示入口状态)。
@@ -419,14 +423,19 @@ extension Vault {
                     .flatMap { DatabaseCipher.envelopeChangedAt($0) } ?? .distantPast
                 let remoteChangedAt = record.envelopeChangedAt ?? .distantPast
                 if let remoteEnvelope = record.envelope,
-                   remoteChangedAt.timeIntervalSince(localChangedAt) > 1 {
+                   remoteChangedAt.timeIntervalSince(localChangedAt) > Self.envelopeClockSkewTolerance {
                     if let remoteVEK = try? DatabaseCipher.unwrapVaultKey(remoteEnvelope, password: password) {
                         joinRemoteVaultIdentity(remoteVEK)
                         sessionKey = remoteVEK
                         // 云端驱动的信封追平(iCloud/WebDAV 上还是改密前的旧信封;
                         // 仅网盘通道需要——API 通道以注册表为强一致源)
                         if !apiMode, let envelope = store.envelopeData(for: databaseName) {
-                            try? await driver?.uploadKey(envelope)
+                            do {
+                                try await driver?.uploadKey(envelope)
+                            } catch {
+                                // 追平失败下轮同步自愈,但原因要留痕
+                                Log.warn("sync", "ios driver envelope catch-up upload failed: \(error)")
+                            }
                         }
                         driverEnvelopeNeeded = false
                         Log.info("sync", "ios relay envelope adopted (remote changedAt newer)")
@@ -442,7 +451,7 @@ extension Vault {
                         if !auto { showToast(L10n.t("sync_remote_unreadable_error")) }
                         return
                     }
-                } else if localChangedAt.timeIntervalSince(remoteChangedAt) > 1,
+                } else if localChangedAt.timeIntervalSince(remoteChangedAt) > Self.envelopeClockSkewTolerance,
                           store.envelopeData(for: databaseName) != nil {
                     // 本地信封更新(含注册表尚无信封的首次接入):自愈推送
                     Task { await relayPushEnvelope() }

@@ -1,5 +1,7 @@
 import UIKit
 
+import UPasswordsCore
+
 /// 设备展示名:营销型号 + 用户命名(如 "iPhone 13 · 李振的 iPhone")。
 /// 云同步「管理设备」以此区分多台同类设备;未知新型号回退硬件标识
 /// (仍是可区分的稳定信息),模拟器标注为模拟器。
@@ -23,7 +25,7 @@ enum DeviceIdentity {
 
     /// 硬件标识 → 营销型号。未收录的新型号返回 nil(调用方回退硬件标识)。
     private static func marketingName(for hw: String) -> String? {
-        if hw.contains("arm64") || hw.contains("x86") { return "模拟器" }
+        if hw.contains("arm64") || hw.contains("x86") { return L10n.t("ios_device_name_simulator") }
         return iPhoneModels[hw] ?? iPadModels[hw]
     }
 

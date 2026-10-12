@@ -212,7 +212,7 @@ struct SyncSettingsView: View {
                             relayBusy = false
                         }
                     }
-                    .disabled(relayEmail.isEmpty || relayCode.count < 6 || vault.locked)
+                    .disabled(relayEmail.isEmpty || relayCode.count < RelayClient.verificationCodeLength || vault.locked)
                 }
             }
         }
@@ -286,7 +286,7 @@ struct SyncSettingsView: View {
                     if result != .success {
                         // 原地重试:重开弹窗并带错误文案(空库残骸时文案引导覆盖)
                         adoptFailed = true
-                        try? await Task.sleep(nanoseconds: 300_000_000)
+                        try? await Task.sleep(for: .milliseconds(300))
                         showAdoptPrompt = true
                     }
                 }
@@ -378,7 +378,7 @@ struct RelayTransferSheet: View {
                             busy = false
                         }
                     }
-                    .disabled(masterPassword.isEmpty || !newEmail.contains("@") || code.count < 6 || busy)
+                    .disabled(masterPassword.isEmpty || !newEmail.contains("@") || code.count < RelayClient.verificationCodeLength || busy)
                 }
             }
         }

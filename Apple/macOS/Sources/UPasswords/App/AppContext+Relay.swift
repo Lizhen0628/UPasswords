@@ -173,7 +173,12 @@ extension AppContext {
     func relayRenameCurrentSession() async {
         guard let token = relay.token(database: databaseName) else { return }
         let device = Host.current().localizedName ?? "Mac"
-        try? await relayClient.renameSession(token: token, deviceName: device)
+        do {
+            try await relayClient.renameSession(token: token, deviceName: device)
+        } catch {
+            // 自愈性改名,失败不影响功能;留痕即可
+            Log.debug("sync", "relay session rename failed: \(error)")
+        }
     }
 
     func relayReportHashes(cipher: Data) async {
@@ -349,7 +354,11 @@ extension AppContext {
     func checkRelayPasswordVersion() async {
         guard phase == .unlocked, let binding = relay.binding(database: databaseName),
               let token = relay.token(database: databaseName) else { return }
-        guard let record = try? await relayClient.getVault(token: token, vaultId: binding.vaultId) else { return }
+        guard let record = try? await relayClient.getVault(token: token, vaultId: binding.vaultId) else {
+            // 改密检测入口:网络失败留痕,否则「他机改密为何没触发锁定」无从排查
+            Log.debug("sync", "relay password-version check fetch failed (network/offline)")
+            return
+        }
         let known = relay.knownPasswordVersion(database: databaseName) ?? record.passwordVersion
         relay.recordPasswordVersion(record.passwordVersion, database: databaseName)
         guard record.passwordVersion > known, let envelope = record.envelope else { return }

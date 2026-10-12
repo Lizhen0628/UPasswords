@@ -340,7 +340,7 @@ struct SetupWindowView: View {
     }
 
     private func create() {
-        guard password.count >= 4 else {
+        guard password.count >= PasswordPolicy.minimumMasterPasswordLength else {
             error = L10n.t("minimum_password_length_error")
             return
         }
@@ -419,7 +419,7 @@ private struct AccountStepView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(email.isEmpty || code.count < 6 || busy)
+                .disabled(email.isEmpty || code.count < RelayClient.verificationCodeLength || busy)
             }
             .padding(.bottom, 28)
             Spacer()

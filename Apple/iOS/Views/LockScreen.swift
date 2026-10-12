@@ -1,6 +1,7 @@
 import SwiftUI
 
 import UPasswordsCore
+import UPasswordsPersistence
 
 // MARK: - 锁屏 / 首次创建主密码(含 iCloud 云端库恢复)
 
@@ -251,7 +252,7 @@ struct LockScreen: View {
                 .frame(height: 42)
                 .background(Brand.accent, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
-            .disabled(accountEmail.isEmpty || accountCode.count < 6 || accountBusy)
+            .disabled(accountEmail.isEmpty || accountCode.count < RelayClient.verificationCodeLength || accountBusy)
             .buttonStyle(.plain)
         }
         .padding(14)
@@ -376,7 +377,7 @@ struct LockScreen: View {
     }
 
     private func create() {
-        guard password.count >= 4 else { fail(L10n.t("ios_password_too_short_error")); return }
+        guard password.count >= PasswordPolicy.minimumMasterPasswordLength else { fail(L10n.t("ios_password_too_short_error")); return }
         guard password == confirm else { fail(L10n.t("ios_password_mismatch_error")); return }
         vault.createVault(password: password, biometric: enableFaceID && vault.biometricAvailable)
         UINotificationFeedbackGenerator().notificationOccurred(.success)

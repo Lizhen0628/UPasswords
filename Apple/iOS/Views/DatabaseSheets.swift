@@ -308,7 +308,7 @@ struct DatabaseCreateSheet: View {
 
     private func create() {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard password.count >= 4 else { error = L10n.t("ios_password_too_short_error"); return }
+        guard password.count >= PasswordPolicy.minimumMasterPasswordLength else { error = L10n.t("ios_password_too_short_error"); return }
         guard password == confirm else { error = L10n.t("ios_password_mismatch_error"); return }
         // 名称非法/已存在等原因由 Vault 经 toast 展示
         if vault.createDatabase(name: trimmed, password: password, biometric: enableBiometric && vault.biometricAvailable) {

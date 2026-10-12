@@ -37,7 +37,7 @@ struct ChangePasswordSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button(L10n.t("cancel_button")) { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(L10n.t("ios_save_button")) { save() }
-                        .disabled(old.isEmpty || new.count < 4)
+                        .disabled(old.isEmpty || new.count < PasswordPolicy.minimumMasterPasswordLength)
                 }
             }
         }
@@ -47,7 +47,11 @@ struct ChangePasswordSheet: View {
     private func save() {
         guard new == confirm else { error = L10n.t("ios_password_mismatch_error"); return }
         guard vault.verifyMaster(old) else { error = L10n.t("ios_wrong_password_error"); return }
-        _ = vault.changeMasterPassword(old: old, new: new)
+        // 改密落盘失败(rewrap/存储异常)不得谎报成功
+        guard vault.changeMasterPassword(old: old, new: new) else {
+            error = L10n.t("ios_wrong_password_error")
+            return
+        }
         vault.showToast(L10n.t("ios_master_changed_message"))
         dismiss()
     }

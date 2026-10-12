@@ -61,7 +61,7 @@ struct ChangePasswordSheet: View {
             okDisabled: current.isEmpty || new.isEmpty,
             onCancel: { dismiss() },
             onOk: {
-                guard new.count >= 4 else {
+                guard new.count >= PasswordPolicy.minimumMasterPasswordLength else {
                     error = L10n.t("minimum_password_length_error")
                     return
                 }

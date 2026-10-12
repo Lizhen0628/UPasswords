@@ -281,13 +281,13 @@ struct SecurityPane: View {
     @EnvironmentObject var settings: AppSettings
 
     private let lockChoices: [(String, Int)] = [
-        (L10n.t("never_text"), 0), ("1 m", 60), ("5 m", 300), ("15 m", 900), ("1 h", 3600),
+        (L10n.t("never_text"), 0), ("1" + L10n.t("minutes_abbr_text"), 60), ("5" + L10n.t("minutes_abbr_text"), 300), ("15" + L10n.t("minutes_abbr_text"), 900), ("1" + L10n.t("hours_text"), 3600),
     ]
     private let requireChoices: [(String, Int)] = [
-        (L10n.t("never_text"), 0), ("8 h", 28800), ("1 d", 86400), ("7 d", 604800),
+        (L10n.t("never_text"), 0), ("8" + L10n.t("hours_text"), 28800), ("1" + L10n.t("days_text"), 86400), ("7" + L10n.t("days_text"), 604800),
     ]
     private let clipboardChoices: [(String, Int)] = [
-        (L10n.t("off_text"), 0), ("10 s", 10), ("30 s", 30), ("1 m", 60), ("2 m", 120),
+        (L10n.t("off_text"), 0), ("10" + L10n.t("seconds_abbr_text"), 10), ("30" + L10n.t("seconds_abbr_text"), 30), ("1" + L10n.t("minutes_abbr_text"), 60), ("2" + L10n.t("minutes_abbr_text"), 120),
     ]
     private let attemptsChoices: [(String, Int)] = [
         (L10n.t("unlimited_text"), 0), ("5", 5), ("10", 10), ("20", 20),
@@ -358,7 +358,7 @@ struct SecurityPane: View {
                             .disabled(!ctx.touchIDAvailable)
                         Text(ctx.touchIDAvailable
                              ? L10n.t("touch_id_login_warning")
-                             : L10n.t("not_recommended_text") + ": Touch ID unavailable")
+                             : L10n.t("not_recommended_text") + ": " + L10n.t("touch_id_unavailable_hint"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -405,7 +405,7 @@ struct AutoBackupPane: View {
     @EnvironmentObject var settings: AppSettings
 
     private let intervalChoices: [(String, Int)] = [
-        ("1 d", 1), ("3 d", 3), ("7 d", 7), ("30 d", 30),
+        ("1" + L10n.t("days_text"), 1), ("3" + L10n.t("days_text"), 3), ("7" + L10n.t("days_text"), 7), ("30" + L10n.t("days_text"), 30),
     ]
 
     /// 备份文件列表快照。故意不用计算属性直读文件系统:SwiftUI 不感知
@@ -561,8 +561,10 @@ struct AutoBackupPane: View {
         do {
             try ctx.store.restore(backup: url, to: ctx.databaseName)
             try ctx.unlock(name: ctx.databaseName, password: ctx.password)
+            Log.info("backup", "restored from \(url.lastPathComponent)")
             AppToast.shared.show(L10n.t("database_restored_message"))
         } catch {
+            Log.error("backup", "restore from \(url.lastPathComponent) failed: \(error)")
             AppToast.shared.show(error.localizedDescription)
         }
         reloadBackups()
@@ -851,11 +853,6 @@ struct ConfigureCloudSheetContents: View {
         }
     }
 
-    private func field(_ placeholder: String, text: Binding<String>) -> some View {
-        TextField(placeholder, text: text)
-            .textFieldStyle(.roundedBorder)
-            .frame(width: 240)
-    }
 
     /// UPasswords 云同步账户:未登录=邮箱+验证码登录(登录即为当前库启用);
     /// 已登录=账户邮箱 + 登出/设备管理/解绑/注销。登录需库处于解锁态(要上传本地信封)。
@@ -960,17 +957,12 @@ struct ConfigureCloudSheetContents: View {
                             relayBusy = false
                         }
                     }
-                    .disabled(relayEmail.isEmpty || relayCode.count < 6 || ctx.phase != .unlocked)
+                    .disabled(relayEmail.isEmpty || relayCode.count < RelayClient.verificationCodeLength || ctx.phase != .unlocked)
                 }
             }
         }
     }
 
-    private func field(_ placeholder: String, value: Binding<Int>) -> some View {
-        TextField(placeholder, value: value, format: .number)
-            .textFieldStyle(.roundedBorder)
-            .frame(width: 240)
-    }
 
 }
 
@@ -1049,7 +1041,7 @@ private struct RelayTransferSheet: View {
         SheetShell(
             title: L10n.t("relay_transfer_title"),
             okTitle: L10n.t("relay_transfer_button"),
-            okDisabled: masterPassword.isEmpty || !newEmail.contains("@") || code.count < 6 || busy,
+            okDisabled: masterPassword.isEmpty || !newEmail.contains("@") || code.count < RelayClient.verificationCodeLength || busy,
             onCancel: { dismiss() },
             onOk: {
                 busy = true
