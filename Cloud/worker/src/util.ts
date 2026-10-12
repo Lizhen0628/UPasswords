@@ -103,7 +103,10 @@ async function kekKeys(env: Env): Promise<{ aesKey: CryptoKey; hmacKey: CryptoKe
   if (kekCache?.material === env.APP_KEK) return kekCache;
   const raw = hexToBytes(env.APP_KEK);
   if (!raw || raw.length !== 32) throw new Error("APP_KEK invalid (need 64 hex chars)");
-  // KEK(32B) 直接作为 AES-GCM 与 HMAC 密钥
+  // KEK(32B) 直接作为 AES-GCM 与 HMAC 密钥。设计决策:已知同钥复用属
+  // key-separation 卫生问题,GCM(计数器)与 HMAC(迭代)构造不同且 HMAC 消息
+  // 域有 "email:"/"code:" 前缀分离,无已知跨协议攻击路径——接受现状;
+  // 未来新增 KEK 用途必须走 HKDF 分域,轮换 KEK 时顺带引入 v2 双读。
   const aesKey = await crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, [
     "encrypt",
     "decrypt",
@@ -152,6 +155,11 @@ export async function kekOpen(env: Env, sealed: string | null): Promise<Uint8Arr
 
 /// 键控哈希 HMAC-SHA256(APP_KEK, info) → hex。
 /// 拖库后既不可逆也不可枚举(无 KEK 无法验证猜测)。
+/// 日志脱敏:错误文本中若混入邮箱(未来邮件库变更),统一替换为 [email]。
+export function scrubEmails(text: string): string {
+  return text.replace(/[\w.+-]+@[\w.-]+/g, "[email]");
+}
+
 export async function kekHmac(env: Env, info: string): Promise<string> {
   const { hmacKey } = await kekKeys(env);
   const mac = await crypto.subtle.sign("HMAC", hmacKey, utf8(info));
@@ -247,6 +255,11 @@ export function json(data: unknown, status = 200, extra?: Record<string, string>
 /// 读取 JSON 请求体;非法/超限抛 400。
 export async function readJson(request: Request): Promise<Record<string, unknown>> {
   const MAX_BODY_BYTES = 64 * 1024;
+  // 未认证端点也走这里:content-length 预检防匿名大包先把 isolate 内存吃满
+  const declaredLength = Number(request.headers.get("content-length") ?? "");
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+    throw new ApiError(413, "too_large");
+  }
   const raw = await request.text();
   if (raw.length > MAX_BODY_BYTES) throw new ApiError(400, "bad_request");
   try {

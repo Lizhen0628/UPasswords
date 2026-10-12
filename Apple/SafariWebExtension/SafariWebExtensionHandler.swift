@@ -28,10 +28,18 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         let data = Data("\(stamp) \(line)\n".utf8)
         if !FileManager.default.fileExists(atPath: url.path) {
             FileManager.default.createFile(atPath: url.path, contents: data)
-        } else if let handle = try? FileHandle(forWritingTo: url) {
-            _ = try? handle.seekToEnd()
-            try? handle.write(contentsOf: data)
-            try? handle.close()
+        } else {
+            // 超过 1MB 保留一代(镜像 AppLog 轮转),防 App Group 慢速填充
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+               let size = attrs[.size] as? Int, size > 1_048_576 {
+                try? FileManager.default.removeItem(at: url.appendingPathExtension("old.log"))
+                try? FileManager.default.moveItem(at: url, to: url.appendingPathExtension("old.log"))
+            }
+            if let handle = try? FileHandle(forWritingTo: url) {
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: data)
+                try? handle.close()
+            }
         }
     }
 
@@ -151,7 +159,8 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
             }
         } catch {
             Log.warn("chrome", "safari unlock \"\(vault.name)\" failed reading container: \(error)")
-            return ["type": "unlocked", "ok": false, "reason": "badPassword"]
+            // 读失败≠密码错:如实上报,前端按数据问题提示而非误导改密
+            return ["type": "unlocked", "ok": false, "reason": "unreadable"]
         }
     }
 
@@ -263,11 +272,19 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         return raw
     }
 
-    /// 标签级后缀匹配(任一方向),镜像 TS hostMatches。
+    /// 标签级后缀匹配(任一方向),镜像 TS hostMatches——含同款两道守卫:
+    /// 单标签 host(com/io 这类裸公共后缀)与纯数字标签(IP 字面量/尾段)
+    /// 禁止泛匹配,只允许全等。曾与 domain.ts 漂移导致守卫在原生侧缺失。
     private static func hostMatches(pageHost: String, itemHost: String) -> Bool {
         guard !pageHost.isEmpty, !itemHost.isEmpty else { return false }
-        return pageHost == itemHost
-            || pageHost.hasSuffix(".\(itemHost)")
+        if pageHost == itemHost { return true }
+        let labels = { (host: String) in host.split(separator: ".").filter { !$0.isEmpty } }
+        guard labels(pageHost).count >= 2, labels(itemHost).count >= 2 else { return false }
+        let isNumericHost = { (host: String) in
+            host.split(separator: ".").allSatisfy { UInt($0) != nil }
+        }
+        if isNumericHost(pageHost) || isNumericHost(itemHost) { return false }
+        return pageHost.hasSuffix(".\(itemHost)")
             || itemHost.hasSuffix(".\(pageHost)")
     }
 }

@@ -63,6 +63,24 @@ export async function loadItems(): Promise<ExtensionItem[]> {
     return value as ExtensionItem[];
 }
 
+/** 主动擦除:过期的明文立即清除(不等下次读取)。供 background 周期闹钟调用,
+ * 消除"popup 关闭后 SW 挂起、明文在磁盘驻留远超 TTL"的静态缺口。 */
+export async function purgeIfStale(): Promise<void> {
+    const area = resolveArea();
+    if (!area) {
+        return;
+    }
+    const bag = await area.get([itemsKey, updatedAtKey]);
+    const value = bag[itemsKey];
+    if (!Array.isArray(value)) {
+        return;
+    }
+    const ts = typeof bag[updatedAtKey] === "number" ? (bag[updatedAtKey] as number) : 0;
+    if (Date.now() - ts > ITEMS_TTL_MS) {
+        await clearItems();
+    }
+}
+
 /** 清空明文条目缓存(锁定/浏览器启动/扩展更新时调用)。 */
 export async function clearItems(): Promise<void> {
     const area = resolveArea();

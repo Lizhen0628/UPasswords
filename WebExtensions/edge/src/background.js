@@ -1,6 +1,6 @@
 // Chrome/Edge MV3 service worker: answers host queries from the popup using the
 // shared domain core (promise-wrapped chrome.* adapter shape).
-import { canonicalizeHost, credentialsOf, hostMatches, loadItems, clearItems } from "./shared/index.js";
+import { canonicalizeHost, credentialsOf, hostMatches, loadItems, clearItems, purgeIfStale } from "./shared/index.js";
 
 // query 返回含明文密码的候选,只服务扩展自身页面(popup);
 // content script 上下文与任何外部来源一律拒绝
@@ -32,6 +32,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // 浏览器启动/扩展安装更新即视为锁定:清掉上次会话遗留的明文条目
 chrome.runtime.onStartup.addListener(() => { void clearItems(); });
 chrome.runtime.onInstalled.addListener(() => { void clearItems(); });
+
+// 周期闹钟主动擦除过期明文(不等下次读取;MV3 SW 挂起期间明文会静态驻留)
+chrome.alarms.create("upw-purge", { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener(() => { void purgeIfStale(); });
 
 // 启动诊断:打印当前标签页的规范化 host,不携带任何凭据
 chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {

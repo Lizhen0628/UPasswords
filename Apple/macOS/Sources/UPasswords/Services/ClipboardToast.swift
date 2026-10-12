@@ -37,6 +37,19 @@ final class ClipboardModel: ObservableObject {
         }
     }
 
+    /// 锁定时清空本 App 写入的剪贴板内容(changeCount 比对避免误清他人复制);
+    /// 自动清除被关掉或计时未走完时,密码不在系统剪贴板残留过锁。
+    func clearIfOurs() {
+        clearTask?.cancel()
+        clearTask = nil
+        let pb = NSPasteboard.general
+        if changeCountAtCopy != 0, pb.changeCount == changeCountAtCopy {
+            pb.clearContents()
+            changeCountAtCopy = 0
+            Log.debug("app", "clipboard cleared on lock")
+        }
+    }
+
     /// Copies an OTP code with the dedicated message (otp_copied_message).
     func copyOTP(_ code: String) {
         copy(code, alert: false)

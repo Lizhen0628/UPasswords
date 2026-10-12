@@ -16,6 +16,9 @@ public enum DatabaseCipher {
     public static let iterations: UInt32 = 600_000
     /// 信封迭代下限:低于此值视为恶意/损坏文件,拒绝解(格式错误,非密码错误)
     public static let minimumEnvelopeIterations: UInt32 = 100_000
+    /// 迭代上限(与 TS 端 vault-crypto 对齐):伪造 40 亿次迭代的信封
+    /// 会把解密端 UI 冻结 1-2 小时
+    public static let maximumEnvelopeIterations: UInt32 = 10_000_000
 
     public struct CipherError: LocalizedError {
         public let message: String
@@ -142,8 +145,8 @@ extension DatabaseCipher {
         }
         let iters = data.subdata(in: envelopeIterationsOffset..<(envelopeIterationsOffset + 4))
             .withUnsafeBytes { UInt32(littleEndian: $0.load(as: UInt32.self)) }
-        guard iters >= Self.minimumEnvelopeIterations else {
-            Log.warn("cipher", "envelope rejected: iterations below floor")
+        guard iters >= Self.minimumEnvelopeIterations, iters <= Self.maximumEnvelopeIterations else {
+            Log.warn("cipher", "envelope rejected: iterations out of bounds")
             throw CipherError(message: "not a key envelope")
         }
         let salt = data.subdata(in: envelopeSaltOffset..<(envelopeSaltOffset + saltLength))

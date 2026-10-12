@@ -7,6 +7,7 @@ import {
   ApiError,
   codeHash,
   deleteR2Prefix,
+  scrubEmails,
   emailHmac,
   json,
   kekHmac,
@@ -115,7 +116,7 @@ export async function handleCodeRequest(
   try {
     await sendVerificationMail(env, email, code, purpose);
   } catch (error) {
-    console.log(JSON.stringify({ t: Date.now(), action: "smtp_failed", reason: String(error).slice(0, 120) }));
+    console.log(JSON.stringify({ t: Date.now(), action: "smtp_failed", reason: scrubEmails(String(error)).slice(0, 120) }));
   }
   await audit(env.DB, "code_send", {}, { purpose });
   return json({ ok: true }, 202);
@@ -146,8 +147,13 @@ async function consumeCode(env: Env, eh: string, purpose: string, code: unknown)
   }
   const expected = await codeHash(env, eh, code, purpose);
   if (!timingSafeEqual(expected, row.code_hash)) return false;
-  await env.DB.prepare("UPDATE email_codes SET used_at = ? WHERE id = ?").bind(now, row.id).run();
-  return true;
+  // 条件置位保单次性:并发双请求持同一正确码时只有先落地的那个成功
+  const spend = await env.DB.prepare(
+    "UPDATE email_codes SET used_at = ? WHERE id = ? AND used_at IS NULL",
+  )
+    .bind(now, row.id)
+    .run();
+  return spend.meta.changes === 1;
 }
 
 /** 敏感操作码校验(删库/注销复用);失败统一 403,不泄露具体原因。 */
@@ -273,6 +279,12 @@ export async function handleDeregister(env: Env, request: Request, auth: AuthCon
   const body = await readJson(request);
   await requireSensitiveCode(env, auth.user, body.code);
   const now = nowSec();
+  // 先吊销全部会话再删数据:注销进行中其他设备的并发写入不再产生孤儿
+  await env.DB.prepare(
+    "UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+  )
+    .bind(now, auth.user.id)
+    .run();
   // R2 库体与 staging 先于注册表行清除:行删了就再也找不回 vaultId,
   // 曾造成注销用户的密文副本在桶里无限期残留
   const owned = await env.DB.prepare("SELECT vault_id FROM vaults WHERE user_id = ?")
@@ -289,11 +301,6 @@ export async function handleDeregister(env: Env, request: Request, auth: AuthCon
     .bind(now, auth.user.id)
     .run();
   await env.DB.prepare("DELETE FROM vaults WHERE user_id = ?").bind(auth.user.id).run();
-  await env.DB.prepare(
-    "UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
-  )
-    .bind(now, auth.user.id)
-    .run();
   await audit(env.DB, "account_deregister", { userId: auth.user.id });
   return json({ ok: true });
 }

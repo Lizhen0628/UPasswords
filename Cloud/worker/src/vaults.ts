@@ -164,9 +164,9 @@ export async function handleEnvelopePut(
   }
   const version = row.password_version + 1;
   await env.DB.prepare(
-    "UPDATE vaults SET envelope_enc = ?, envelope_changed_at = ?, password_version = ?, updated_at = ? WHERE vault_id = ?",
+    "UPDATE vaults SET envelope_enc = ?, envelope_changed_at = ?, password_version = ?, updated_at = ? WHERE vault_id = ? AND user_id = ?",
   )
-    .bind(await kekSeal(env, bytes), changedAt, version, now, vaultId)
+    .bind(await kekSeal(env, bytes), changedAt, version, now, vaultId, auth.user.id)
     .run();
   await audit(env.DB, "envelope_put", { userId: auth.user.id, vaultId }, { version, size: bytes.length });
   return json({ passwordVersion: version, changedAt });
@@ -184,9 +184,9 @@ export async function handleHashesPut(
   if (!cipherSha256 || !xmlSha256) throw new ApiError(400, "invalid_hash");
   await loadVault(env, auth.user.id, vaultId);
   await env.DB.prepare(
-    "UPDATE vaults SET cipher_sha256 = ?, xml_sha256 = ?, updated_at = ? WHERE vault_id = ?",
+    "UPDATE vaults SET cipher_sha256 = ?, xml_sha256 = ?, updated_at = ? WHERE vault_id = ? AND user_id = ?",
   )
-    .bind(cipherSha256, xmlSha256, nowSec(), vaultId)
+    .bind(cipherSha256, xmlSha256, nowSec(), vaultId, auth.user.id)
     .run();
   await audit(env.DB, "hashes_put", { userId: auth.user.id, vaultId });
   return json({ ok: true });
@@ -208,9 +208,15 @@ export async function handleRenameVault(
     .bind(auth.user.id, name, vaultId)
     .first<{ hit: number }>();
   if (dup) throw new ApiError(409, "name_exists");
-  await env.DB.prepare("UPDATE vaults SET name = ?, updated_at = ? WHERE vault_id = ?")
-    .bind(name, nowSec(), vaultId)
-    .run();
+  try {
+    await env.DB.prepare("UPDATE vaults SET name = ?, updated_at = ? WHERE vault_id = ? AND user_id = ?")
+      .bind(name, nowSec(), vaultId, auth.user.id)
+      .run();
+  } catch (error) {
+    // dup 检查与 UPDATE 之间的并发同名:UNIQUE 冲突按 409 而非 500
+    if (String(error).includes("UNIQUE")) throw new ApiError(409, "name_exists");
+    throw error;
+  }
   await audit(env.DB, "vault_rename", { userId: auth.user.id, vaultId });
   return json({ ok: true });
 }
@@ -275,8 +281,17 @@ export async function handleBodyPut(
   // 单库未提交 staging 数量配额:staging 24h 才被 cron 清扫,
   // 无配额时登录用户可无限堆 R2 存储(账单 DoS)
   const stagingMax = numVar(env, "VAULT_STAGING_MAX_OBJECTS", 4);
-  const existing = await env.VAULTS.list({ prefix: stagingPrefix(vaultId) });
-  if (existing.objects.length >= stagingMax) throw new ApiError(413, "quota_exceeded");
+  let existing = await env.VAULTS.list({ prefix: stagingPrefix(vaultId) });
+  if (existing.objects.length >= stagingMax) {
+    // 配额触发先清 1 小时以上的陈旧 staging(中断上传残渣),避免正常
+    // 客户端的偶发残渣把后续上传阻塞到 24h cron
+    const cutoff = Date.now() - 3600 * 1000;
+    for (const item of existing.objects) {
+      if (item.uploaded.getTime() < cutoff) await env.VAULTS.delete(item.key);
+    }
+    existing = await env.VAULTS.list({ prefix: stagingPrefix(vaultId) });
+    if (existing.objects.length >= stagingMax) throw new ApiError(413, "quota_exceeded");
+  }
   await env.VAULTS.put(stagingKey(vaultId, uploadId), request.body, {
     httpMetadata: { contentType: "application/octet-stream" },
   });
@@ -320,9 +335,9 @@ export async function handleBodyCommit(
   });
   const now = nowSec();
   await env.DB.prepare(
-    "UPDATE vaults SET body_sha256 = ?, body_bytes = ?, body_updated_at = ?, updated_at = ? WHERE vault_id = ?",
+    "UPDATE vaults SET body_sha256 = ?, body_bytes = ?, body_updated_at = ?, updated_at = ? WHERE vault_id = ? AND user_id = ?",
   )
-    .bind(sha256, staged.size, now, now, vaultId)
+    .bind(sha256, staged.size, now, now, vaultId, auth.user.id)
     .run();
   await env.VAULTS.delete(stagingKey(vaultId, uploadId));
   await audit(env.DB, "body_put", { userId: auth.user.id, vaultId }, { size: staged.size });
@@ -381,13 +396,15 @@ export async function handleTransferVault(
 
   // 目标账户:不存在则建(同注册语义);曾注销则清残行后重建
   const targetEh = await emailHmac(env, email);
+  // 过户给当前账户自身没有意义,且两级 sensitive 码同邮箱单活跃必然失败
+  if (targetEh === auth.user.email_hmac) throw new ApiError(400, "invalid_email");
   const target = await getOrCreateUser(env, email, targetEh, "transfer");
 
   // 注册表换主(vaultId/信封/哈希/库体全部保留,双端无感);
   // 目标账户已有同名库时 UNIQUE 约束 → 409(与建库同语义)
   try {
-    await env.DB.prepare("UPDATE vaults SET user_id = ?, updated_at = ? WHERE vault_id = ?")
-      .bind(target.id, nowSec(), vaultId)
+    await env.DB.prepare("UPDATE vaults SET user_id = ?, updated_at = ? WHERE vault_id = ? AND user_id = ?")
+      .bind(target.id, nowSec(), vaultId, auth.user.id)
       .run();
   } catch (error) {
     if (String(error).includes("UNIQUE")) throw new ApiError(409, "name_exists");

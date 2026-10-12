@@ -99,9 +99,14 @@ final class AutoFillModel: ObservableObject {
             return
         }
         vaultName = main.name
-        // 钥匙串里有主密码则可直接(静默或经面容 ID)解锁
+        // 钥匙串里有主密码则可解锁;用户启用了生物识别快解(biometric 副本
+        // 存在)时,静默路径同样必须过 evaluatePolicy——否则持已解锁设备者
+        // 打开 AutoFill 即可无面容读全库,快解形同虚设
         canAutoUnlock = PasswordStore.loadPassword(databaseName: main.name) != nil
-        if canAutoUnlock {
+        let biometricEnabled = PasswordStore.loadPassword(databaseName: main.name, biometric: true) != nil
+        if canAutoUnlock, biometricEnabled {
+            Task { await unlockWithBiometrics() }
+        } else if canAutoUnlock {
             unlock(withStoredPassword: main.name)
         } else if showBiometricButton {
             Task { await unlockWithBiometrics() }

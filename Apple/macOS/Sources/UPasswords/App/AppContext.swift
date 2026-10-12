@@ -280,7 +280,7 @@ final class AppContext: ObservableObject {
     // MARK: - Setup / lifecycle
 
     func createDatabase(name: String, password: String, touchID: Bool) throws {
-        Log.info("lifecycle", "createDatabase \"\(name)\" touchID=\(touchID) (password length \(password.count))")
+        Log.info("lifecycle", "createDatabase \"\(name)\" touchID=\(touchID)")
         do {
             try store.create(name: name, password: password)
         } catch {
@@ -296,7 +296,7 @@ final class AppContext: ObservableObject {
     }
 
     func unlock(name: String, password: String) throws {
-        Log.info("lifecycle", "unlock \"\(name)\" (password length \(password.count))")
+        Log.info("lifecycle", "unlock \"\(name)\"")
         do {
             let (db, vek) = try store.loadUnlocked(name: name, password: password)
             database = db
@@ -429,6 +429,8 @@ final class AppContext: ObservableObject {
         pendingSyncConflict = nil
         // 关闭设置窗等独立窗口,不让它们残留在锁屏之上
         WindowChromeManager.shared.closeAuxiliaryWindows()
+        // 锁定即清掉本 App 复制进剪贴板的内容(自动清除关闭/未走完时不残留)
+        ClipboardModel.shared.clearIfOurs()
     }
 
     var touchIDAvailable: Bool {

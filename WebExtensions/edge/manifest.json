@@ -5,7 +5,8 @@
     "description": "UPasswords password manager companion for Edge.",
     "permissions": [
         "activeTab",
-        "storage"
+        "storage",
+        "alarms"
     ],
     "background": {
         "service_worker": "src/background.js",

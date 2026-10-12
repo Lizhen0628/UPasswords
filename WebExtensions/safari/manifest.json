@@ -5,7 +5,8 @@
     "description": "UPasswords password manager companion for Safari.",
     "permissions": [
         "activeTab",
-        "storage"
+        "storage",
+        "alarms"
     ],
     "host_permissions": [
         "https://api.upasswords.com/*"

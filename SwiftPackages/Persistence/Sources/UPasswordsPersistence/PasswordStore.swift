@@ -35,7 +35,7 @@ public enum PasswordStore {
         attrs[kSecValueData as String] = Data(password.utf8)
         attrs[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         let status = SecItemAdd(attrs as CFDictionary, nil)
-        Log.logKeychain("save \"\(account)\" for \(service(forDatabaseName: databaseName)) (\(password.count) chars)", status: status)
+        Log.logKeychain("save \"\(account)\" for \(service(forDatabaseName: databaseName))", status: status)
     }
 
     /// 移除库的钥匙串密码副本(数据库项与生物识别项)。
