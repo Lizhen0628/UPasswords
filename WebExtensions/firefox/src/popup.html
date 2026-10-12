@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body { font: 13px -apple-system, sans-serif; width: 300px; margin: 0; padding: 12px; }
+        h1 { font-size: 14px; margin: 0 0 4px; }
+        .host { color: #666; word-break: break-all; margin-bottom: 8px; }
+        .muted { color: #888; }
+        ul { list-style: none; padding: 0; margin: 8px 0 0; }
+        li.item {
+            padding: 8px 10px; border-radius: 8px; cursor: pointer;
+            display: flex; flex-direction: column; gap: 2px;
+        }
+        li.item:hover { background: rgba(128, 128, 128, 0.15); }
+        li.item .title { font-weight: 600; }
+        li.item .user { color: #666; font-size: 12px; }
+        .panel { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+        .panel input, .panel select {
+            font: inherit; padding: 7px 10px; border-radius: 8px;
+            border: 1px solid rgba(128, 128, 128, 0.4); background: transparent; color: inherit;
+        }
+        .panel button {
+            font: inherit; font-weight: 600; padding: 7px 10px; border: 0;
+            border-radius: 8px; cursor: pointer; color: #fff; background: #0a84ff;
+        }
+        .panel button:disabled { opacity: 0.5; cursor: default; }
+        .row { display: flex; gap: 8px; }
+        .row > * { flex: 1; }
+        .error { color: #ff453a; font-size: 12px; }
+        .ok { color: #30d158; font-size: 12px; }
+        .footer { display: flex; justify-content: space-between; margin-top: 10px; }
+        .footer button {
+            font: inherit; font-size: 12px; padding: 4px 10px; border: 0;
+            border-radius: 6px; cursor: pointer;
+            background: rgba(128, 128, 128, 0.2); color: inherit;
+        }
+    </style>
+</head>
+<body>
+    <h1>UPasswords</h1>
+    <div class="host" id="host">…</div>
+    <div id="status" class="muted"></div>
+
+    <!-- 邮箱验证码登录(独立数据通路,不依赖桌面 App) -->
+    <div class="panel" id="loginBox" hidden>
+        <input type="email" id="email" autocomplete="off" placeholder="邮箱">
+        <div class="row">
+            <input type="text" id="code" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="验证码">
+            <button id="sendCodeButton" type="button">发送验证码</button>
+        </div>
+        <button id="loginButton" type="button">登录</button>
+    </div>
+
+    <!-- 主密码解锁(每次解锁都从云端拉最新信封+库体) -->
+    <div class="panel" id="unlockBox" hidden>
+        <input type="password" id="masterPassword" autocomplete="off" placeholder="主密码">
+        <button id="unlockButton" type="button">解锁</button>
+    </div>
+
+    <ul id="items"></ul>
+    <div class="footer" id="footer" hidden>
+        <button id="refreshButton" type="button"></button>
+        <button id="lockButton" type="button"></button>
+    </div>
+    <script type="module" src="popup.js"></script>
+</body>
+</html>

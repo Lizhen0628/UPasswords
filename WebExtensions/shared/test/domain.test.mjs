@@ -104,26 +104,31 @@ test('Contracts: extension message schema covers all request/response tags', () 
     assert.deepEqual(response.oneOf.map(tag).sort(), ['error', 'filled', 'items', 'locked', 'noVault', 'pong', 'unlocked'])
 })
 
-test('Contracts: safari and chrome manifests agree on shared entry points', () => {
-    const safari = JSON.parse(
-        readFileSync(join(here, '../../safari/manifest.json'), 'utf8')
-    )
-    const chrome = JSON.parse(
-        readFileSync(join(here, '../../chrome/manifest.json'), 'utf8')
-    )
-    for (const m of [safari, chrome]) {
+test('Contracts: all four browser manifests agree on shared entry points', () => {
+    const read = (browser) =>
+        JSON.parse(readFileSync(join(here, `../../${browser}/manifest.json`), 'utf8'))
+    const safari = read('safari')
+    const chrome = read('chrome')
+    const edge = read('edge')
+    const firefox = read('firefox')
+    for (const m of [safari, chrome, edge, firefox]) {
         assert.equal(m.manifest_version, 3)
         assert.ok(m.content_scripts.some((cs) => cs.js.includes('src/content.js')))
         assert.ok(m.action.default_popup.includes('popup.html'))
-    }
-    assert.equal(safari.background.scripts[0], 'src/background.js')
-    assert.equal(chrome.background.service_worker, 'src/background.js')
-    // 双端都要能直连 relay API;Chrome 的 module SW 是 ES import 生效前提
-    for (const m of [safari, chrome]) {
+        // relay 数据通路:各端都要覆盖 relay 域名(Firefox 为可选授予语义)
         assert.ok(
             (m.host_permissions ?? []).some((h) => h.startsWith('https://api.upasswords.com/')),
             'host_permissions must cover the relay API origin'
         )
     }
-    assert.equal(chrome.background.type, 'module')
+    assert.equal(safari.background.scripts[0], 'src/background.js')
+    // Chromium 系:service worker + module(ES import 生效前提)
+    for (const m of [chrome, edge]) {
+        assert.equal(m.background.service_worker, 'src/background.js')
+        assert.equal(m.background.type, 'module')
+    }
+    // Firefox:事件页 + module;AMO 上架需要的 gecko id 与最低版本
+    assert.equal(firefox.background.scripts[0], 'src/background.js')
+    assert.equal(firefox.background.type, 'module')
+    assert.ok(firefox.browser_specific_settings.gecko.id)
 })

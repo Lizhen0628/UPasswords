@@ -2,3 +2,5 @@ packages:
   - WebExtensions/shared
   - WebExtensions/safari
   - WebExtensions/chrome
+  - WebExtensions/edge
+  - WebExtensions/firefox

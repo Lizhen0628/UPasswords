@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "description": "UPasswords root workspace: shared web-extension code + per-browser packaging",
   "scripts": {
-    "build": "pnpm --filter @upasswords/extension-shared build && pnpm --filter @upasswords/extension-safari build && pnpm --filter @upasswords/extension-chrome build",
-    "clean": "rm -rf WebExtensions/shared/dist WebExtensions/safari/src/shared WebExtensions/chrome/src/shared",
+    "build": "pnpm --filter @upasswords/extension-shared build && pnpm --filter @upasswords/extension-safari build && pnpm --filter @upasswords/extension-chrome build && pnpm --filter @upasswords/extension-edge build && pnpm --filter @upasswords/extension-firefox build",
+    "clean": "rm -rf WebExtensions/shared/dist WebExtensions/safari/src/shared WebExtensions/chrome/src/shared WebExtensions/edge/src/shared WebExtensions/firefox/src/shared",
     "test": "pnpm --filter @upasswords/extension-shared test"
   },
   "engines": {

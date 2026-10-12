@@ -82,10 +82,14 @@ UPasswords/
 │  │  ├─ src/platform/              adapter(平台接口) + safari/chrome 双适配器
 │  │  ├─ src/index.ts               汇总导出
 │  │  └─ test/                      node:test：host 匹配矩阵、SHA-256 向量、
-│  │                                 Contracts Schema 校验、双 manifest 一致性
+│  │                                 Contracts Schema 校验、四端 manifest 一致性
 │  ├─ safari/                        manifest.json(MV3) + src/{background,content,popup.*}；
 │  │                                 src/shared/ 为构建拷贝产物（pnpm build 生成，不入库）
-│  └─ chrome/                        MV3 同构壳（service_worker 版 manifest + 同套 JS）
+│  ├─ chrome/                        MV3 完整同构（module service_worker + browser.* shim，
+│  │                                 relay 登录/解锁/填充与 Safari 逐字对齐）
+│  ├─ edge/                          Chromium 系：复用 chrome 构建形态（仅 manifest 描述差异）
+│  └─ firefox/                       MV3 事件页 + browser.*；host_permissions 为可选授予，
+│                                   popup 在登录/解锁手势内经 permissions.request 请求
 ├─ SwiftPackages/
 │  ├─ Core/  (UPasswordsCore)        领域核心，无 UI 依赖（macOS 14+ / iOS 17+）
 │  │  ├─ Sources/UPasswordsCore/     CoreModels(Card/Field/CardLabel/Attachment 等值类型)、
