@@ -988,9 +988,12 @@ final class Vault: ObservableObject {
     // MARK: 标签
 
     /// 更新标签(重命名/改色);同名去重由调用方保证。
+    /// 刷新时间戳驱动 merge LWW:否则改名永远无法同步到对端(与 macOS 一致)。
     func updateLabel(_ label: CardLabel) {
         guard let idx = database.labels.firstIndex(where: { $0.id == label.id }) else { return }
-        database.labels[idx] = label
+        var updated = label
+        updated.timeStamp = Date().millis
+        database.labels[idx] = updated
         persist()
         Log.info("app", "ios updateLabel id=\(label.id)")
     }

@@ -146,4 +146,41 @@ final class DatabaseXMLTests: XCTestCase {
         XCTAssertFalse(db.isUsedItemId(nid), "ids must skip used ids")
         XCTAssertTrue(![1, 2, 4].contains(nid), "label ids are taken")
     }
+    /// 标签时间戳必须随 XML 往返存活(否则 merge LWW 退化为本地恒胜,
+    /// 标签改名永远无法同步到对端)。
+    func testLabelTimestampRoundTripAndByteStability() throws {
+        var db = PasswordDatabase()
+        var edited = CardLabel(id: 5, name: "Work", timeStamp: 1_700_000_123_456)
+        edited.color = "#FF0000"
+        db.labels = [edited, CardLabel(id: 6, name: "Legacy", timeStamp: 0)]
+
+        let xml = String(data: db.xmlData(), encoding: .utf8) ?? ""
+        XCTAssertTrue(xml.contains("time=\"1700000123456\""), "编辑过的标签必须落盘 time 属性")
+        XCTAssertFalse(xml.contains("Legacy\" color"), "时间戳为 0(存量未编辑)不写属性,XML 字节与历史版本一致")
+
+        let parsed = try PasswordDatabase.parse(db.xmlData())
+        XCTAssertEqual(parsed.label(id: 5)?.timeStamp, 1_700_000_123_456, "往返无损")
+        XCTAssertEqual(parsed.label(id: 6)?.timeStamp, 0, "缺属性归 0")
+    }
+
+    /// 标签合并 LWW:对端时间戳更新则采纳,平局保留本地。
+    func testLabelMergeConvergenceByTimestamp() {
+        var local = PasswordDatabase()
+        local.labels = [CardLabel(id: 5, name: "Old", timeStamp: 1_000)]
+
+        var remoteNewer = PasswordDatabase()
+        remoteNewer.labels = [CardLabel(id: 5, name: "Renamed", timeStamp: 2_000)]
+        local.merge(with: remoteNewer)
+        XCTAssertEqual(local.label(id: 5)?.name, "Renamed", "对端更新的改名必须收敛进来")
+
+        var remoteOlder = PasswordDatabase()
+        remoteOlder.labels = [CardLabel(id: 5, name: "Stale", timeStamp: 500)]
+        local.merge(with: remoteOlder)
+        XCTAssertEqual(local.label(id: 5)?.name, "Renamed", "对端更旧不得回退")
+
+        var remoteTie = PasswordDatabase()
+        remoteTie.labels = [CardLabel(id: 5, name: "Tie", timeStamp: 2_000)]
+        local.merge(with: remoteTie)
+        XCTAssertEqual(local.label(id: 5)?.name, "Renamed", "平局保留本地")
+    }
 }

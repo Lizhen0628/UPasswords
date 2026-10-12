@@ -118,6 +118,11 @@ extension PasswordDatabase {
             if let t = l.type, !t.isEmpty { s += " type=\"\(XMLEscape(t))\"" }
             if let c = l.color { s += " color=\"\(XMLEscape(c))\"" }
             if l.pinToTop { s += " pin_to_top=\"true\"" }
+            // 条件落盘 time(毫秒):0(存量库未编辑过)不写属性,XML 字节与
+            // 历史版本一致,不扰动 xmlSha256 同步基线;>0(编辑/新建)才写,
+            // 令对端 merge 的 LWW 判定有真实时间可比。
+            // 毫秒按 Int64 整数输出:Double 直接插值大数会变科学计数法(1.7e+12)
+            if l.timeStamp > 0 { s += " time=\"\(Int64(l.timeStamp))\"" }
             s += " />\n"
         }
         for c in cards {
