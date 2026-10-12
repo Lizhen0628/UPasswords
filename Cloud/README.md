@@ -1,8 +1,9 @@
 # Cloud — UPasswords 云同步协调服务（api.upasswords.com）
 
-架构与安全模型详见 [DESIGN.md](DESIGN.md)。**密码库文件永不落本服务**——
-本体存用户自己的网盘（iCloud/WebDAV），本服务只做协调：
-账户（邮箱验证码）、库注册表（版本元数据/哈希）、信封（~100B 密钥包裹文件）中继。
+架构与安全模型详见 [DESIGN.md](DESIGN.md)（v6）。服务端对库内容零知识：
+账户（邮箱验证码）、库注册表（版本元数据/哈希/信封）与 R2 加密库体副本
+（库密钥密文，原网盘通道已移除——客户端仅存 relay 单通道，见仓库根
+FEATURES.md §6 与 `cloud-drive-legacy` 分支的历史实现）。
 
 ## 组成
 
@@ -34,9 +35,9 @@ POST /v1/vaults           {name}              登记 → {vaultId}
 GET  /v1/vaults                               库列表(元数据)
 GET  /v1/vaults/{id}                          单库(含信封 b64)
 PUT  /v1/vaults/{id}/envelope  {envelope, changedAt}  改密信封(changedAt 决胜+±300s 钳制)
-PUT  /v1/vaults/{id}/hashes    {cipherSha256, xmlSha256}  网盘上传成功后上报
+PUT  /v1/vaults/{id}/hashes    {cipherSha256, xmlSha256}  库体提交成功后上报
 PATCH /v1/vaults/{id}     {name}              改名
-DELETE /v1/vaults/{id}    {code=sensitive 码}  解绑注册(不动网盘文件)
+DELETE /v1/vaults/{id}    {code=sensitive 码}  解绑注册(本地库与备份不动)
 GET  /v1/admin/stats      X-Admin-Token       只读统计
 ```
 
@@ -56,7 +57,7 @@ npm test        # vitest + @cloudflare/vitest-plugin(miniflare 本地 D1,SMTP mo
 - `CLOUDFLARE_API_TOKEN`：最小权限 Token（Workers Editor / D1 Write / KV Write /
   Account Settings Read）；
 - Secrets（`npx wrangler secret put <NAME>`）：`APP_KEK`（64 hex，丢失则 API 信封
-  不可解、客户端回退网盘信封）、`ADMIN_TOKEN`、`SMTP_USER`、`SMTP_PASSWORD`；
+  不可解、客户端回退本地信封）、`ADMIN_TOKEN`、`SMTP_USER`、`SMTP_PASSWORD`；
 - 本机凭据备份：`~/.upasswords-cloud-secrets.txt`（chmod 600，勿提交）。
 
 ```bash
