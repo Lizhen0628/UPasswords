@@ -11,6 +11,7 @@ FEATURES.md §6 与 `cloud-drive-legacy` 分支的历史实现）。
 |---|---|
 | Cloudflare Worker（TypeScript，零依赖） | `worker/src/{index,auth,vaults,stats,smtp,db,util}.ts` |
 | D1（upasswords-sync） | users / email_codes / sessions / vaults / audit_log |
+| R2（桶 VAULTS） | 加密库体副本：`vaults/<id>` 生效件 + `vaults/staging/…` 暂存（commit 原子换入） |
 | SMTP（smtp.163.com:465） | 验证码邮件（`cloudflare:sockets` 直连，无第三方依赖） |
 | 每日 cron 04:00 UTC | 注销账户 30 天保留期到期的物理清除 |
 
@@ -30,14 +31,19 @@ POST /v1/auth/code        {email, purpose?}   发验证码(login|sensitive) 202 
 POST /v1/auth/verify      {email, code, deviceName?} → {token, expiresAt, userId}
 GET  /v1/auth/sessions    Bearer              设备列表
 DELETE /v1/auth/sessions/{id}                 撤销设备
+PATCH /v1/auth/session     {deviceName}        会话自命名(设备型号展示)
 DELETE /v1/account        {code=sensitive 码}  注销(立即清敏感列+撤全部会话)
 POST /v1/vaults           {name}              登记 → {vaultId}
 GET  /v1/vaults                               库列表(元数据)
 GET  /v1/vaults/{id}                          单库(含信封 b64)
 PUT  /v1/vaults/{id}/envelope  {envelope, changedAt}  改密信封(changedAt 决胜+±300s 钳制)
 PUT  /v1/vaults/{id}/hashes    {cipherSha256, xmlSha256}  库体提交成功后上报
+PUT  /v1/vaults/{id}/body?upload=UID           库体暂存(octet-stream,≤50MB,暂存≤4)
+POST /v1/vaults/{id}/body/commit {uploadId, sha256}  校验后原子换入生效副本
+GET  /v1/vaults/{id}/body                      拉取生效库体(无副本 404)
 PATCH /v1/vaults/{id}     {name}              改名
-DELETE /v1/vaults/{id}    {code=sensitive 码}  解绑注册(本地库与备份不动)
+POST /v1/vaults/{id}/transfer {email,code,currentCode}  换绑邮箱(注册表迁移,双敏感码门槛)
+DELETE /v1/vaults/{id}    {code=sensitive 码}  解绑注册(清 R2 副本;本地库与备份不动)
 GET  /v1/admin/stats      X-Admin-Token       只读统计
 ```
 

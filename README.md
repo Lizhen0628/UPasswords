@@ -3,7 +3,7 @@
 **一款独立开发的密码管理器**（macOS 优先：SwiftUI + AppKit；领域核心为跨平台 Swift 包，
 macOS 14+ / iOS 17+）。
 
-核心能力：v2 双密钥信封加密（主密码经 PBKDF2-SHA256 ×310,000 包裹永不变的库密钥，
+核心能力：v2 双密钥信封加密（主密码经 PBKDF2-SHA256 ×600,000（兼容下限 100,000）包裹永不变的库密钥，
 库密钥以 AES-256-GCM 加密数据库本体，改密只重写信封、零重写）、Touch ID 快速解锁、
 15 个内置模板、密码生成与强度评估、TOTP 一次性代码、账户云同步
 （服务端零知识加密副本，条目级合并 + 冲突裁决）、自动备份、18 种第三方密码管理器数据导入、XML/CSV/TXT 导出、
@@ -70,7 +70,7 @@ pnpm install && pnpm build
 |---|---|
 | 数据模型 | `SwiftPackages/Core/…/CoreModels.swift`（`Card / Field / CardLabel / Attachment / HistoryEntry` 等值类型） |
 | XML 解析/序列化 | `SwiftPackages/Core/…/DatabaseXML.swift`（逐属性往返 + 删除墓碑，支撑同步合并） |
-| 加密容器 | `SwiftPackages/Core/…/DatabaseCipher.swift` — v2 双密钥信封：`.upw` 本体（库密钥 AES-256-GCM）+ `.upwkey` 信封（主密码 PBKDF2-SHA256 ×310,000 包裹库密钥） |
+| 加密容器 | `SwiftPackages/Core/…/DatabaseCipher.swift` — v2 双密钥信封：`.upw` 本体（库密钥 AES-256-GCM）+ `.upwkey` 信封（主密码 PBKDF2-SHA256 ×600,000/下限 100,000 包裹库密钥） |
 | 数据库/会话 | `SwiftPackages/Persistence/…/DatabaseStore.swift` + `Apple/macOS/…/App/AppContext.swift` |
 | 内置模板 | `SwiftPackages/Core/…/Templates.swift`（15 个，`@string/…` 经字符串表解析） |
 | 密码生成器 | `SwiftPackages/Core/…/PasswordGenerator.swift`（随机/便于记忆/字母数字/纯数字 4 型 + 历史） |
@@ -107,7 +107,7 @@ pnpm install && pnpm build
 ## 实现说明
 
 1. **加密**：v2 双密钥信封——随机库密钥（永不变）以 AES-256-GCM 加密数据库本体
-   （`.upw`）；主密码经 PBKDF2-SHA256 ×310,000 派生密钥包裹库密钥成信封
+   （`.upw`）；主密码经 PBKDF2-SHA256 ×600,000（新信封；兼容下限 100,000）派生密钥包裹库密钥成信封
    （`.upwkey`）。改主密码只重写信封，本体不动，云端传播零重写。
 2. **图标/纹理**：全部使用 SF Symbol 与程序化渐变自绘，不含第三方素材。
 3. **云同步**：账户中继通道（邮箱验证码登录，服务端零知识：注册表信封 + R2 加密库体

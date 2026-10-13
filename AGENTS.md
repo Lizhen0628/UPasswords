@@ -47,7 +47,7 @@ UPasswords/
 │  │  │                             SortingSearch/AppResources 六组测试
 │  │  └─ Resources/                AppIcon.icns + AppIconMaster.png（make-app.sh 打包图标）
 │  ├─ iOS/                          iOS 完整应用（消费 Core/Persistence/Networking）：
-│  │  ├─ App/                      UPasswordsApp 入口 + RootView/MainTabView 四 Tab
+│  │  ├─ App/                      UPasswordsApp 入口 + MainTabView 三 Tab(密码/安全/设置)
 │  │  ├─ Services/Vault.swift      会话层：真实加密库上的建库/解锁/条目操作/泄露检查
 │  │  │                            （数据库经 SharedVaultStore 落 App Group 容器）
 │  │  ├─ Models/IOSModels.swift    SortOrder、Card 的 iOS 派生标记与 Hashable、
@@ -68,8 +68,7 @@ UPasswords/
 │                                   manifest 平铺到 appex Resources 根、src/ 以 folder reference 保结构）
 ├─ Cloud/                          云端协调服务（api.upasswords.com，远端唯一副本=
 │  │                               R2 加密库体，服务器零知识：账户/信封中继/
-│  │                               哈希注册表/只读统计；网盘通道已移除，
-│  │                               v4/v5 网盘架构存于 cloud-drive-legacy 分支）
+│  │                               哈希注册表/库体副本/只读统计）
 │  ├─ DESIGN.md                    设计文档（威胁模型/离线降级/拖库防御/同步协议）
 │  └─ worker/                      Cloudflare Worker + D1（TypeScript 零依赖）：
 │                                  src/{index,auth,vaults,stats,smtp,db,util}.ts

@@ -28,7 +28,8 @@ struct DatabaseInfoSheet: View {
                     if let size = try? FileManager.default.attributesOfItem(atPath: DatabaseStore.shared.url(for: ctx.databaseName).path)[.size] as? Int {
                         infoRow(L10n.t("size_prompt"), ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
                     }
-                    infoRow(L10n.t("security_title"), "PBKDF2-SHA256 ×310,000 + AES-256-GCM")
+                    infoRow(L10n.t("security_title"),
+                            "PBKDF2-SHA256 ×\(DatabaseCipher.iterations) + AES-256-GCM")
                 }
             }
         )

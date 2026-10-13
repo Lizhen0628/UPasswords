@@ -1,8 +1,7 @@
 # UPasswords 功能文档
 
-> 基线：`main` @ `229a4c0`（2026-10-13，v6 无网盘架构）。本文描述当前代码的实际功能面；
+> 基线：`main`（v6 无网盘架构）。本文描述当前代码的实际功能面；
 > 架构细节见 `Cloud/DESIGN.md`，仓库结构见 `README.md`，开发规范见 `AGENTS.md`。
-> 历史网盘（WebDAV/iCloud Drive）同步通道已移除，旧架构保存于 `cloud-drive-legacy` 分支。
 
 ## 1. 产品概览
 
@@ -11,7 +10,7 @@
 | 形态 | 位置 | 说明 |
 |---|---|---|
 | macOS 应用 | `Apple/macOS` | 功能完整的桌面端（SwiftUI + AppKit，macOS 14+） |
-| iOS 应用 | `Apple/iOS` | 移动端完整应用（iOS 17+），四 Tab 布局 |
+| iOS 应用 | `Apple/iOS` | 移动端完整应用（iOS 17+），三 Tab 布局（密码/安全/设置） |
 | iOS 自动填充扩展 | `Apple/iOS/AutoFill` | ASCredentialProvider：密码 + 通行密钥（WebAuthn） |
 | 浏览器扩展 ×4 | `WebExtensions` | Safari / Chrome / Edge / Firefox（MV3，共享 TS 核心） |
 
@@ -113,8 +112,8 @@
 - **敏感操作**：解绑库 / 注销账户 / 换绑邮箱均需 sensitive 验证码；
   注销立即吊销全部会话并清空 R2 敏感数据；换绑把注册表迁移到新邮箱
   （vaultId/信封/哈希不变）。
-- **管理后台**：只读统计（按状态分组用户计数等），无管理操作；
-  统计 30 天后物理清除。
+- **管理后台**：只读统计（按状态分组用户计数、活跃库等实时聚合），无管理操作；
+  注销账户立即清空敏感数据与 R2 库体，30 天保留期后由每日 cron 物理清除。
 - **离线与逃生**：断网时本地库照常使用；逃生通道 = 设备本地库 + 本地备份
   快照 + 导出 + `.upw`/`.upwkey` 文件对本地还原（文件可手动存任意网盘/硬盘，
   App 不内置网盘客户端）。
