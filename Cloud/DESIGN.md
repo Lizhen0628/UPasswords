@@ -44,7 +44,7 @@ macOS / iOS App
 
 - 注册/登录：邮箱验证码（6 位、TTL 10 分钟、**单活跃码**、≤5 次尝试、
   重发冷却 60s、每邮箱 10 封/h、每 IP 20 次/h；响应恒定防枚举）；
-- 会话令牌：32B 随机，D1 只存 SHA-256，90 天滑动（活动即续期），逐设备
+- 会话令牌：32B 随机，D1 只存 SHA-256，90 天滑动（活动即续期，写入按小时节流），逐设备
   可撤销；会话可自命名（设备型号展示）；
 - 用户状态：`normal（普通）| subscription（订阅）| permanent（永久）`，
   外加 `deregistered（注销）`；注销 = 用户发起（需新鲜敏感验证码）→
@@ -219,7 +219,7 @@ JSON 载荷（信封/哈希等）另受 64KB 读取上限约束。
 
 | 端点 | 说明 |
 |---|---|
-| `GET /v1/admin/stats` | 按状态/套餐计数、活跃 vault（近 365 天）、会话、SMTP 量等实时聚合 |
+| `GET /v1/admin/stats` | 按状态/套餐计数、活跃 vault（近 365 天）、会话、24h 验证码与信封上报量等实时聚合 |
 
 **只读**：无启停用户、无删库、无任何写操作。
 
@@ -243,7 +243,8 @@ CREATE TABLE email_codes (
   email_hmac TEXT NOT NULL, code_hash TEXT NOT NULL,   -- 键控哈希
   purpose TEXT NOT NULL DEFAULT 'login',     -- login|sensitive
   expires_at REAL NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
-  used_at REAL, created_at REAL NOT NULL
+  used_at REAL, created_at REAL NOT NULL,
+  ip TEXT NOT NULL DEFAULT ''                -- 每 IP 限速维度
 );
 
 CREATE TABLE sessions (

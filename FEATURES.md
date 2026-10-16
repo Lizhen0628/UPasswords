@@ -19,7 +19,7 @@
 
 ## 2. 数据与安全模型
 
-- **v2 双密钥信封**：主密码经 PBKDF2-SHA256 包裹永不变的库密钥（VEK）成信封
+- **v2 双密钥信封**：主密码经 PBKDF2-SHA256 包裹库密钥（VEK）成信封
   （`.upwkey`），库密钥以 AES-256-GCM 加密数据库本体（`.upw`）。改主密码只重写
   信封并轮换 VEK，本体重加密，旧密文（历史残留/备份/泄露副本）对旧密码永久作废。
 - **PBKDF2 迭代**：新信封 600,000 次，两端兼容下限 100,000 次。
@@ -73,8 +73,9 @@
 - **多库**：管理/新建/重命名/切换/从账户导入其他库/从文件导入
   （文档选择器，`.upw` + 同目录 `.upwkey` 成对校验）。
 - **自动填充扩展（AutoFill）**：
-  - 密码填充：钥匙串或主密码解锁数据源 + host 匹配（域规范化）；
-    静默填充路径需生物识别门控；
+  - 密码填充：钥匙串或主密码解锁数据源 + host 匹配（域规范化，
+    单标签/纯数字主机名禁止泛匹配）；静默路径需设备所有者认证门控
+    （密码锁或生物识别），无生物识别副本时不再免验证解库；
   - **通行密钥（Passkey）**：卡片字段内保存 WebAuthn 凭据（P-256 私钥不出库），
     扩展完成注册/断言，signCount 回写供 RP 克隆检测；
   - 写入走「合并到最新盘面」策略（replay signCount/注册信息到最新容器），
@@ -134,8 +135,8 @@
 - **构建**：Swift 包各自 `swift build && swift test`；Xcode 四 target 经
   `xcodegen generate`；Web 扩展 `pnpm build && pnpm test`；发行打包
   `./scripts/make-app.sh`（含 release 编译 + 签名 + Safari 容器同步）。
-- **测试面**：Core 56（含 L10n 双表齐平）、Persistence 47（Store/备份/导入导出/
-  冲突判定/Relay 客户端/钥匙串）、macOS 36、Web 扩展 17；跨端向量 fixture
+- **测试面**：Core 56（含 L10n 双表齐平）、Persistence 48（Store/备份/导入导出/
+  冲突判定/Relay 客户端/钥匙串，钥匙串用例在锁钥匙串环境下跳过）、macOS 36、Web 扩展 17；跨端向量 fixture
   （`vault-vector.json`）由 GenVectorTests 维持 Swift/WebCrypto 一致。
 - **CI**：四包测试 → xcodegen + xcodebuild 双平台 → pnpm → 打包上传产物。
 - **本地化**：中英双语，键集双表强制齐平；iOS 新键带 `ios_` 前缀。

@@ -3,8 +3,8 @@
 **一款独立开发的密码管理器**（macOS 优先：SwiftUI + AppKit；领域核心为跨平台 Swift 包，
 macOS 14+ / iOS 17+）。
 
-核心能力：v2 双密钥信封加密（主密码经 PBKDF2-SHA256 ×600,000（兼容下限 100,000）包裹永不变的库密钥，
-库密钥以 AES-256-GCM 加密数据库本体，改密只重写信封、零重写）、Touch ID 快速解锁、
+核心能力：v2 双密钥信封加密（主密码经 PBKDF2-SHA256 ×600,000（兼容下限 100,000）包裹库密钥，
+库密钥以 AES-256-GCM 加密数据库本体，改密轮换库密钥并重加密本体，旧密文对旧密码永久作废）、Touch ID 快速解锁、
 15 个内置模板、密码生成与强度评估、TOTP 一次性代码、账户云同步
 （服务端零知识加密副本，条目级合并 + 冲突裁决）、自动备份、18 种第三方密码管理器数据导入、XML/CSV/TXT 导出、
 泄露密码检查（haveibeenpwned k-匿名）、菜单栏常驻、中英双语界面。
@@ -28,9 +28,10 @@ UPasswords/
 │   └── Shared/                     iOS 主 App 与扩展共享：品牌组件、
 │                                   App Group 库容器（SharedVaultStore）、产品常量
 ├── WebExtensions/
-│   ├── shared/                     Safari + Chrome 共享 TS（core/storage/messaging/platform）
+│   ├── shared/                     Safari/Chrome/Firefox 共享 TS（core/storage/messaging/platform）
 │   ├── safari/                     Safari 扩展（manifest + background/content/popup）
-│   └── chrome/                     Chrome MV3 扩展（同构壳）
+│   ├── chrome/ + edge/             Chromium 系 MV3 同构壳
+│   └── firefox/                    Firefox MV3（host_permissions 可选授予）
 ├── SwiftPackages/
 │   ├── Core/                       UPasswordsCore — 模型、XML 编解码、加密、生成器、
 │   │                               强度、TOTP、日志、本地化字符串表
@@ -52,13 +53,13 @@ cd SwiftPackages/Persistence && swift build && swift test # 存储与同步
 cd SwiftPackages/Networking && swift build && swift test  # 泄露检查
 cd Apple/macOS && swift build && swift test               # macOS 应用
 
-# Xcode 工程（三 target：macOS App / iOS App / Safari 扩展）
+# Xcode 工程（四 target：macOS App / iOS App / iOS AutoFill 扩展 / Safari 扩展）
 cd Apple && xcodegen generate
 xcodebuild -workspace UPasswords.xcworkspace -scheme UPasswords-macOS build
 xcodebuild -workspace UPasswords.xcworkspace -scheme UPasswords-iOS \
   -destination 'generic/platform=iOS Simulator' build
 
-# Web 扩展（共享 TS 编译 + Safari/Chrome 打包）
+# Web 扩展（共享 TS 编译 + Safari/Chrome/Edge/Firefox 四端打包）
 pnpm install && pnpm build
 
 ./scripts/make-app.sh             # 打包 dist/UPasswords.app 并可直接运行
@@ -106,9 +107,10 @@ pnpm install && pnpm build
 
 ## 实现说明
 
-1. **加密**：v2 双密钥信封——随机库密钥（永不变）以 AES-256-GCM 加密数据库本体
+1. **加密**：v2 双密钥信封——库密钥以 AES-256-GCM 加密数据库本体
    （`.upw`）；主密码经 PBKDF2-SHA256 ×600,000（新信封；兼容下限 100,000）派生密钥包裹库密钥成信封
-   （`.upwkey`）。改主密码只重写信封，本体不动，云端传播零重写。
+   （`.upwkey`）。改主密码始终轮换库密钥：本体重加密 + 信封重写，
+   旧密文（历史残留/备份/泄露副本）对旧密码永久作废；改密前自动落一份备份。
 2. **图标/纹理**：全部使用 SF Symbol 与程序化渐变自绘，不含第三方素材。
 3. **云同步**：账户中继通道（邮箱验证码登录，服务端零知识：注册表信封 + R2 加密库体
    副本，条目级合并 + 冲突裁决）；离线迁移走 `.upw`/`.upwkey` 文件对本地还原与导出。

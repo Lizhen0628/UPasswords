@@ -4,10 +4,10 @@ import CommonCrypto
 
 /// Encrypted database vault: v2 envelope cipher (dual-key) only.
 ///
-/// 主密码(可改)只加密一个 32 字节随机「库密钥」(vault key);库密钥(永不变)
-/// 加密数据库本体。改主密码只重写 ~100 字节的信封文件(<名>.upwkey),
-/// 本体(<名>.upw)不动——改密传播零重写、零竞态窗口,其他端输一次新密码
-/// 解开信封即完成接管。
+/// 主密码(可改)只加密一个 32 字节随机「库密钥」(vault key);库密钥加密
+/// 数据库本体。改主密码由会话层编排:轮换库密钥并重加密本体 + 重写信封
+/// (<名>.upwkey),旧密文对旧密码永久作废;他端凭注册表信封决胜收敛,
+/// 输一次新密码解开信封即完成接管。
 public enum DatabaseCipher {
     /// 信封格式版本号
     public static let version: UInt32 = 1
@@ -86,7 +86,7 @@ extension DatabaseCipher {
     private static let envelopeChangedAtOffset = 92
     private static let envelopeMinLength = 100
 
-    /// 生成随机 256 位库密钥(每库一个,创建时生成,永不变)。
+    /// 生成随机 256 位库密钥(每库一个;改密时由会话层轮换)。
     public static func generateVaultKey() -> SymmetricKey { SymmetricKey(size: .bits256) }
 
     public static func isV2Container(_ data: Data) -> Bool {

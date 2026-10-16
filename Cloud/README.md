@@ -79,5 +79,5 @@ D1：`database_id` 已回填在 `wrangler.toml`；新迁移放入 `worker/migrat
 
 - SMTP 全链路验证：验证码邮件经 163 SMTP 真实送达，中英双语模板；
 - 信封 changedAt 决胜/偏斜钳制、敏感码删库、限速、跨用户隔离均有
-  vitest 覆盖（24 用例）并经线上 curl 验证；
+  vitest 覆盖（34 用例）并经线上 curl 验证；
 - 发到 `*@upasswords.com` 地址的邮件经 Cloudflare Email Routing 转发回 163 收件箱。
