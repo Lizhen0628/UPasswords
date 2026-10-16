@@ -310,7 +310,6 @@ extension Vault {
                 syncState = .failed(L10n.t("sync_error"))
                 return
             }
-            let out = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
             // 读-改-写护栏:提交前再取一次,窗口内有他机提交先并入
             if let seen = remoteData,
                let fresh = try? await relayClient.getBody(token: apiToken, vaultId: apiBinding.vaultId),
@@ -323,6 +322,9 @@ extension Vault {
                 persist()
                 Log.warn("sync", "ios relay body changed mid-sync — merged fresh remote (\(freshRemote.cards.count) cards) before commit")
             }
+            // 上传字节必须在护栏合并之后生成:先加密再合并会把合并前的旧快照
+            // 推上云端,基线(合并内容)与云端实际内容脱节,窗口内他机拿到丢改数据
+            let out = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
             try await relayClient.putBody(token: apiToken, vaultId: apiBinding.vaultId, cipher: out)
             await relayReportHashes(cipher: out)
             recordSyncBaseline()

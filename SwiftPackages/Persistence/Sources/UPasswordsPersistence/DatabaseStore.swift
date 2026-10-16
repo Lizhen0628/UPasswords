@@ -115,7 +115,10 @@ public final class DatabaseStore {
             try enc.write(to: url(for: name), options: .atomic)
             try envelope.write(to: keyURL(for: name), options: .atomic)
         } catch {
-            Log.error("db", "create \"\(name).upw\" write failed: \(error)")
+            // 回滚本体:残留无信封的本体会让 exists() 恒真且库永远解不开,
+            // 重试建同名库也会被"已存在"拒绝
+            try? fm.removeItem(at: url(for: name))
+            Log.error("db", "create \"\(name).upw\" write failed: \(error) — body rolled back")
             throw error
         }
         PasswordStore.savePassword(password, databaseName: name)

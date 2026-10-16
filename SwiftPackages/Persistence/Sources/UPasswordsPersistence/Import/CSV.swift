@@ -5,9 +5,13 @@ import Foundation
 /// RFC 4180 风格 CSV/TSV 引擎。
 public enum CSV {
     /// 解析文本为行×列;支持引号包裹、内嵌分隔符/换行,空行被跳过。
+    /// Windows 导出器常带的 UTF-8 BOM 在此剥离——不剥会让首列头名带
+    /// \u{FEFF},表头探测(精确/前缀)双双失配,首列(通常是 name)被静默丢弃。
     /// - Parameter text: 原始 CSV/TSV 文本
     /// - Returns: 行数组,每行为该行字段数组
     public static func rows(_ text: String) -> [[String]] {
+        var text = text
+        if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
         var rows: [[String]] = []
         var field = ""
         var row: [String] = []

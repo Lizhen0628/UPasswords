@@ -22,6 +22,14 @@ extension AppContext {
             throw DatabaseCipher.CipherError(message: L10n.t("sync_error"))
         }
         let effectiveKey = DatabaseCipher.generateVaultKey()
+        // 轮换的崩溃窗口防线:本体(新钥)与信封(新钥)两次写之间崩溃会让
+        // 新旧密码都解不开库;先落一份改前备份,备份失败即中止改密
+        do {
+            try store.backup(name: databaseName)
+        } catch {
+            Log.error("backup", "pre-rotation backup of \"\(databaseName)\" failed — aborting password change: \(error)")
+            throw error
+        }
         try store.save(database, name: databaseName, vaultKey: effectiveKey)
         try store.rewrap(name: databaseName, vaultKey: effectiveKey, newPassword: new)
         PasswordStore.savePassword(new, databaseName: databaseName)
@@ -529,7 +537,6 @@ extension AppContext {
                 syncState = .error(L10n.t("sync_error"))
                 return
             }
-            let out = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
             // 读-改-写护栏:提交前再取一次,窗口内有他机提交先并入
             if let seen = remoteData,
                let fresh = try? await relayClient.getBody(token: apiToken, vaultId: apiBinding.vaultId),
@@ -542,6 +549,9 @@ extension AppContext {
                 save()
                 Log.warn("sync", "relay body changed mid-sync — merged fresh remote (\(freshRemote.cards.count) cards) before commit")
             }
+            // 上传字节必须在护栏合并之后生成:先加密再合并会把合并前的旧快照
+            // 推上云端,基线(合并内容)与云端实际内容脱节,窗口内他机拿到丢改数据
+            let out = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
             try await relayClient.putBody(token: apiToken, vaultId: apiBinding.vaultId, cipher: out)
             await relayReportHashes(cipher: out)
             recordSyncBaseline()

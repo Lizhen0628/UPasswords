@@ -62,7 +62,7 @@ async function authenticate(ctx: RouteCtx): Promise<AuthContext> {
   const token = (ctx.request.headers.get("authorization") ?? "").replace(/^Bearer /i, "");
   if (!/^[0-9a-f]{64}$/.test(token)) throw new ApiError(401, "unauthorized");
   const row = await ctx.env.DB.prepare(
-    "SELECT s.id AS session_id, s.expires_at, s.revoked_at, " +
+    "SELECT s.id AS session_id, s.expires_at, s.revoked_at, s.last_seen_at, " +
       "u.id AS user_id, u.email_hmac, u.email_enc, u.state, u.plan, u.created_at, u.last_login_at " +
       "FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?",
   )
@@ -71,6 +71,7 @@ async function authenticate(ctx: RouteCtx): Promise<AuthContext> {
       session_id: string;
       expires_at: number;
       revoked_at: number | null;
+      last_seen_at: number | null;
       user_id: string;
       email_hmac: string;
       email_enc: string | null;
@@ -85,11 +86,15 @@ async function authenticate(ctx: RouteCtx): Promise<AuthContext> {
   }
   const now = nowSec();
   const ttlDays = numVar(ctx.env, "SESSION_TTL_DAYS", 90);
-  await ctx.env.DB.prepare(
-    "UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?",
-  )
-    .bind(now, now + ttlDays * 86400, row.session_id)
-    .run();
+  // 滑动续期节流:每次请求都 UPDATE 会放大 D1 写量;距上次记录不足 1 小时
+  // 跳过(会话有效期 90 天,1 小时的续期滞后无影响;过期校验仍按已加载行)
+  if (now - (row.last_seen_at ?? 0) >= 3600) {
+    await ctx.env.DB.prepare(
+      "UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?",
+    )
+      .bind(now, now + ttlDays * 86400, row.session_id)
+      .run();
+  }
   const user: UserRow = {
     id: row.user_id,
     email_hmac: row.email_hmac,

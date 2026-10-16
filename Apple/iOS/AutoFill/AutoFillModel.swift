@@ -108,7 +108,9 @@ final class AutoFillModel: ObservableObject {
         if canAutoUnlock, biometricEnabled {
             Task { await unlockWithBiometrics() }
         } else if canAutoUnlock {
-            unlock(withStoredPassword: main.name)
+            // 普通钥匙串副本存在但无生物识别副本:静默解锁前必须过设备所有者
+            // 认证(密码锁或生物识别)——否则持已解锁设备者可免验证浏览全库
+            Task { await unlockGatedByDeviceOwnerAuthentication() }
         } else if showBiometricButton {
             Task { await unlockWithBiometrics() }
         } else {
@@ -166,6 +168,35 @@ final class AutoFillModel: ObservableObject {
         }
         vaultKey = vek
         accept(database: db)
+    }
+
+    /// 无生物识别副本路径的门禁:.deviceOwnerAuthentication(密码锁或生物
+    /// 识别)通过后才用普通钥匙串副本静默解锁;取消/失败/未设密码锁一律
+    /// 退回手输主密码页,绝不免验证解库。
+    private func unlockGatedByDeviceOwnerAuthentication() async {
+        guard let name = vaultName else { return }
+        let context = LAContext()
+        var policyError: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &policyError) else {
+            Log.warn("keychain", "autofill: device owner auth unavailable (code \(policyError?.code ?? -1)) → manual password")
+            stage = .locked
+            return
+        }
+        do {
+            guard try await context.evaluatePolicy(
+                .deviceOwnerAuthentication,
+                localizedReason: L10n.t("ios_autofill_biometric_reason")) else {
+                Log.info("keychain", "autofill: device owner auth denied → manual password")
+                stage = .locked
+                return
+            }
+        } catch {
+            Log.warn("keychain", "autofill: device owner auth failed: \(error)")
+            stage = .locked
+            return
+        }
+        Log.info("keychain", "autofill: device owner auth ok → silent unlock with stored password")
+        unlock(withStoredPassword: name)
     }
 
     private func unlock(withStoredPassword name: String) {
@@ -237,8 +268,16 @@ final class AutoFillModel: ObservableObject {
     }
 
     static func hostMatches(_ cardHost: String, service serviceHost: String) -> Bool {
-        cardHost == serviceHost
-            || cardHost.hasSuffix("." + serviceHost)
+        guard !cardHost.isEmpty, !serviceHost.isEmpty else { return false }
+        if cardHost == serviceHost { return true }
+        // 守卫与 WebExtensions domain.ts / SafariWebExtensionHandler 对齐:
+        // 单标签 host(裸公共后缀 com/io)与纯数字标签(IP 尾段)禁止泛匹配,
+        // 只允许全等——否则存了裸后缀/IP 尾段的条目会在任意外部域名被候选
+        let labels = { (host: String) in host.split(separator: ".").filter { !$0.isEmpty } }
+        guard labels(cardHost).count >= 2, labels(serviceHost).count >= 2 else { return false }
+        let isNumericHost = { (host: String) in host.split(separator: ".").allSatisfy { UInt($0) != nil } }
+        if isNumericHost(cardHost) || isNumericHost(serviceHost) { return false }
+        return cardHost.hasSuffix("." + serviceHost)
             || serviceHost.hasSuffix("." + cardHost)
     }
 

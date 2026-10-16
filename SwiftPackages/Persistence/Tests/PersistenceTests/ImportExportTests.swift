@@ -11,6 +11,17 @@ final class CSVTests: XCTestCase {
     func testEscaping() {
         XCTAssertEqual(CSV.escape("he said \"hi\", ok"), "\"he said \"\"hi\"\", ok\"")
     }
+
+    func testBOMStrippedFromFirstHeader() throws {
+        // Windows 导出器带 UTF-8 BOM:剥离后首列头名才可被表头探测命中
+        XCTAssertEqual(CSV.rows("\u{FEFF}name,password\nsite,sec"),
+                     [["name", "password"], ["site", "sec"]])
+        var db = PasswordDatabase()
+        let count = try CommonCsvFormat().parse("\u{FEFF}name,password\n银行,x1",
+                                                into: &db, now: Date(timeIntervalSince1970: 0))
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(db.cards.first?.title, "银行")
+    }
 }
 
 final class ImportTests: XCTestCase {

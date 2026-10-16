@@ -296,6 +296,14 @@ final class Vault: ObservableObject {
         }
         do {
             let effectiveKey = DatabaseCipher.generateVaultKey()
+            // 轮换的崩溃窗口防线:本体(新钥)与信封(新钥)两次写之间崩溃会让
+            // 新旧密码都解不开库;先落一份改前备份,备份失败即中止改密
+            do {
+                try store.backup(name: databaseName)
+            } catch {
+                Log.error("backup", "ios pre-rotation backup of \"\(databaseName)\" failed — aborting password change: \(error)")
+                throw error
+            }
             try store.save(database, name: databaseName, vaultKey: effectiveKey)
             try store.rewrap(name: databaseName, vaultKey: effectiveKey, newPassword: new)
             password = new
