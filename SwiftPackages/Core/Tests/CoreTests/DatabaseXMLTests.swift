@@ -4,11 +4,10 @@ import XCTest
 final class DatabaseXMLTests: XCTestCase {
     private func sampleDB() -> PasswordDatabase {
         var db = PasswordDatabase()
-        db.labels = [
-            CardLabel(id: 1, name: "商务", timeStamp: 1000),
-            CardLabel(id: 2, name: "Private", color: "blue", timeStamp: 1001),
-        ]
-        var card = Card(id: 10)
+        let l1 = CardLabel(name: "商务", timeStamp: 1000)
+        let l2 = CardLabel(name: "Private", color: "blue", timeStamp: 1001)
+        db.labels = [l1, l2]
+        var card = Card()
         card.title = "Example Site"
         card.symbol = "web_site"
         card.color = "green"
@@ -26,11 +25,10 @@ final class DatabaseXMLTests: XCTestCase {
             Field(name: "一次性代码", type: .oneTimePassword, value: "JBSWY3DPEHPK3PXP", autofill: .oneTimeCode),
         ]
         card.notes = "多行\n笔记"
-        card.labelIds = [1, 2]
+        card.labelIds = [l1.id, l2.id]
         card.images = [Attachment(name: "shot.png", data: Data([0x89, 0x50, 0x4E, 0x47]))]
         card.files = [Attachment(name: "key.txt", data: Data("secret file".utf8))]
         db.cards = [card]
-        db.ghosts = [Ghost(id: 99, time: 1690000000000)]
         return db
     }
 
@@ -51,19 +49,19 @@ final class DatabaseXMLTests: XCTestCase {
         XCTAssertEqual(c.fields[1].history.first?.value, "old1")
         XCTAssertEqual(c.fields[2].type, .oneTimePassword)
         XCTAssertEqual(c.notes, "多行\n笔记")
-        XCTAssertEqual(c.labelIds, [1, 2])
+        XCTAssertEqual(c.labelIds, db.cards[0].labelIds)
         XCTAssertEqual(c.images.first?.data, Data([0x89, 0x50, 0x4E, 0x47]))
         XCTAssertEqual(c.files.first?.name, "key.txt")
-        XCTAssertEqual(parsed.ghosts, [Ghost(id: 99, time: 1690000000000)])
     }
 
     func testParseTemplateFormat() throws {
         // Template card shape: label + template card with typed, autofill-mapped fields.
+        let uuid = UUID()
         let xml = """
         <?xml version="1.0" encoding="UTF-8"?>
         <database>
-            <label name="Business" id="1" />
-            <card title="Credit card" id="101" symbol="credit_card" color="gray" template="true" autofill="on">
+            <label name="Business" id="\(UUID().uuidString)" />
+            <card title="Credit card" id="\(uuid.uuidString)" symbol="credit_card" color="gray" template="true" autofill="on">
                 <field name="Number" type="number" autofill="cc-number"/>
                 <field name="CVV" type="pin" autofill="cc-csc"/>
             </card>
@@ -72,6 +70,7 @@ final class DatabaseXMLTests: XCTestCase {
         let db = try PasswordDatabase.parse(Data(xml.utf8))
         XCTAssertEqual(db.labels.first?.name, "Business")
         let t = db.cards.first
+        XCTAssertEqual(t?.id, uuid)
         XCTAssertEqual(t?.isTemplate, true)
         XCTAssertEqual(t?.fields.map(\.type), [.number, .pin])
         XCTAssertEqual(t?.fields.map(\.autofill), [.ccNumber, .ccCsc])
@@ -79,7 +78,7 @@ final class DatabaseXMLTests: XCTestCase {
 
     func testUnknownFieldTypeSanitizedToText() throws {
         let xml = """
-        <database><card title="x" id="1"><field name="a" type="hyperdrive" autofill="off">v</field></card></database>
+        <database><card title="x" id="\(UUID().uuidString)"><field name="a" type="hyperdrive" autofill="off">v</field></card></database>
         """
         let db = try PasswordDatabase.parse(Data(xml.utf8))
         XCTAssertEqual(db.cards[0].fields[0].type, .text)
@@ -87,7 +86,7 @@ final class DatabaseXMLTests: XCTestCase {
 
     func testXMLEscaping() throws {
         var db = PasswordDatabase()
-        var c = Card(id: 1)
+        var c = Card()
         c.title = "a<b>&\"'\">"
         db.cards = [c]
         let parsed = try PasswordDatabase.parse(db.xmlData())
@@ -99,88 +98,79 @@ final class DatabaseXMLTests: XCTestCase {
     }
 
     func testMergeNewestWins() {
+        let shared = UUID()
         var a = PasswordDatabase()
-        var c1 = Card(id: 5); c1.title = "old"; c1.modified = 100
+        var c1 = Card(id: shared); c1.title = "old"; c1.modified = 100
         a.cards = [c1]
         var b = PasswordDatabase()
-        var c2 = Card(id: 5); c2.title = "new"; c2.modified = 200
-        var c3 = Card(id: 6); c3.title = "added remotely"; c3.modified = 300
+        var c2 = Card(id: shared); c2.title = "new"; c2.modified = 200
+        var c3 = Card(); c3.title = "added remotely"; c3.modified = 300
         b.cards = [c2, c3]
         a.merge(with: b)
         XCTAssertEqual(a.cards.count, 2)
-        XCTAssertEqual(a.card(id: 5)?.title, "new")
-        XCTAssertEqual(a.card(id: 6)?.title, "added remotely")
+        XCTAssertEqual(a.card(id: shared)?.title, "new")
+        XCTAssertEqual(a.card(id: c3.id)?.title, "added remotely")
     }
 
-    func testMergeGhostSuppressesResurrection() {
+    /// v7 无墓碑:被删条目不会从对端整库合并中复活——删除侧本地已移除,
+    /// 合并只会采纳对端仍持有的副本(缺席即删除的收敛由服务端行库保证,
+    /// 本地整库合并只用于导入/恢复场景)。
+    func testMergeDoesNotResurrectLocallyDeletedWhenRemoteLacksIt() {
         var a = PasswordDatabase()
-        a.ghosts = [Ghost(id: 7, time: 500)]
-        var b = PasswordDatabase()
-        var c = Card(id: 7); c.title = "zombie"; c.modified = 100
-        b.cards = [c]
-        a.merge(with: b)
-        XCTAssertNil(a.card(id: 7))
-    }
-
-    /// 标签删除必须登记墓碑:否则合并时会被仍持有该标签的远端副本复活
-    /// ("删掉的标签每次同步/重启后又回来"的回归)。
-    func testMergeGhostSuppressesLabelResurrection() {
-        var a = PasswordDatabase()
-        a.deleteLabelPermanently(id: 777)
-        XCTAssertTrue(a.ghosts.contains { $0.id == 777 }, "删除标签必须登记墓碑")
-        var b = PasswordDatabase()
-        b.labels = [CardLabel(id: 777, name: "xx")]
-        a.merge(with: b)
-        XCTAssertFalse(a.labels.contains { $0.id == 777 }, "墓碑必须抑制标签复活")
-        b.labels.append(CardLabel(id: 778, name: "kept"))
-        a.merge(with: b)
-        XCTAssertTrue(a.labels.contains { $0.id == 778 }, "未删除的标签照常合并")
+        var gone = Card()
+        gone.title = "deleted"
+        a.cards = [gone]
+        a.deleteCardPermanently(id: gone.id)
+        a.merge(with: PasswordDatabase())
+        XCTAssertNil(a.card(id: gone.id))
     }
 
     func testDefaultDatabaseContents() {
         var db = PasswordDatabase.createDefault(now: Date(timeIntervalSince1970: 0))
         XCTAssertEqual(db.labels.count, 3, "商务/私人/网络账号")
         XCTAssertEqual(db.templateCards.count, 16, "15 named templates + custom")
-        XCTAssertEqual(db.templateCards.first { $0.id == 102 }?.fields.count, 4)
-        let nid = db.nextItemId()
-        XCTAssertFalse(db.isUsedItemId(nid), "ids must skip used ids")
-        XCTAssertTrue(![1, 2, 4].contains(nid), "label ids are taken")
+        let loginSpec = Templates.spec(id: 102)!
+        XCTAssertEqual(db.templateCards.first { $0.title == L10n.db(loginSpec.titleKey) }?.fields.count, 4)
+        // 标签 id 为 UUID 且互不相同
+        XCTAssertEqual(Set(db.labels.map(\.id)).count, db.labels.count)
     }
+
     /// 标签时间戳必须随 XML 往返存活(否则 merge LWW 退化为本地恒胜,
     /// 标签改名永远无法同步到对端)。
     func testLabelTimestampRoundTripAndByteStability() throws {
         var db = PasswordDatabase()
-        var edited = CardLabel(id: 5, name: "Work", timeStamp: 1_700_000_123_456)
+        var edited = CardLabel(name: "Work", timeStamp: 1_700_000_123_456)
         edited.color = "#FF0000"
-        db.labels = [edited, CardLabel(id: 6, name: "Legacy", timeStamp: 0)]
+        db.labels = [edited, CardLabel(name: "Legacy", timeStamp: 0)]
 
         let xml = String(data: db.xmlData(), encoding: .utf8) ?? ""
         XCTAssertTrue(xml.contains("time=\"1700000123456\""), "编辑过的标签必须落盘 time 属性")
         XCTAssertFalse(xml.contains("Legacy\" color"), "时间戳为 0(存量未编辑)不写属性,XML 字节与历史版本一致")
 
         let parsed = try PasswordDatabase.parse(db.xmlData())
-        XCTAssertEqual(parsed.label(id: 5)?.timeStamp, 1_700_000_123_456, "往返无损")
-        XCTAssertEqual(parsed.label(id: 6)?.timeStamp, 0, "缺属性归 0")
+        XCTAssertEqual(parsed.label(id: edited.id)?.timeStamp, 1_700_000_123_456, "往返无损")
+        XCTAssertEqual(parsed.label(id: db.labels[1].id)?.timeStamp, 0, "缺属性归 0")
     }
 
     /// 标签合并 LWW:对端时间戳更新则采纳,平局保留本地。
     func testLabelMergeConvergenceByTimestamp() {
+        let shared = UUID()
         var local = PasswordDatabase()
-        local.labels = [CardLabel(id: 5, name: "Old", timeStamp: 1_000)]
+        local.labels = [CardLabel(id: shared, name: "Old", timeStamp: 1_000)]
 
         var remoteNewer = PasswordDatabase()
-        remoteNewer.labels = [CardLabel(id: 5, name: "Renamed", timeStamp: 2_000)]
+        remoteNewer.labels = [CardLabel(id: shared, name: "Renamed", timeStamp: 2_000)]
         local.merge(with: remoteNewer)
-        XCTAssertEqual(local.label(id: 5)?.name, "Renamed", "对端更新的改名必须收敛进来")
+        XCTAssertEqual(local.label(id: shared)?.name, "Renamed", "对端更新的改名必须收敛进来")
 
         var remoteOlder = PasswordDatabase()
-        remoteOlder.labels = [CardLabel(id: 5, name: "Stale", timeStamp: 500)]
+        remoteOlder.labels = [CardLabel(id: shared, name: "Stale", timeStamp: 500)]
         local.merge(with: remoteOlder)
-        XCTAssertEqual(local.label(id: 5)?.name, "Renamed", "对端更旧不得回退")
+        XCTAssertEqual(local.label(id: shared)?.name, "Renamed", "对端更旧不得回退")
 
         var remoteTie = PasswordDatabase()
-        remoteTie.labels = [CardLabel(id: 5, name: "Tie", timeStamp: 2_000)]
+        remoteTie.labels = [CardLabel(id: shared, name: "Tie", timeStamp: 2_000)]
         local.merge(with: remoteTie)
-        XCTAssertEqual(local.label(id: 5)?.name, "Renamed", "平局保留本地")
+        XCTAssertEqual(local.label(id: shared)?.name, "Renamed", "平局保留本地")
     }
 }

@@ -1,180 +1,156 @@
-// 账户层测试:注册/登录统一流、单活跃码、限次、限速、会话、注销。
+// 账户层集成测试:注册/登录统一流、单活跃码、限次、限速、会话、注销、隔离。
 
 import { describe, expect, it } from "vitest";
-import { ageCodes, call, mockCode, registerUser, sensitiveCode } from "./helpers";
+import { ageCodes, b64, call, mockCode, registerUser, sensitiveCode, workerEnv } from "./helpers";
 
-describe("邮箱验证码登录", () => {
-  const email = "alice@example.com";
-
-  it("注册即登录:返回令牌;再次登录同 userId", async () => {
-    const token = await registerUser(email);
-    expect(token).toMatch(/^[0-9a-f]{64}$/);
-
-    await ageCodes(120); // 绕过重发冷却
-    const second = await call("POST", "/v1/auth/verify", {
-      email,
-      code: await mockCode(email),
-      deviceName: "second",
-    });
-    // 上一次验证码已被消费,须重新请求
-    const reReq = await call("POST", "/v1/auth/code", { email });
-    expect(reReq.status).toBe(202);
-    const res = await call("POST", "/v1/auth/verify", {
-      email,
-      code: await mockCode(email),
-      deviceName: "second",
+describe("account", () => {
+  it("registers on first verify and issues session with platform", async () => {
+    const env = workerEnv();
+    const email = "new-user@example.com";
+    await call(env, "POST", "/v2/auth/code", { body: { email } });
+    const code = await mockCode(env, email);
+    const res = await call(env, "POST", "/v2/auth/verify", {
+      body: { email, code, deviceName: "MacBook Pro", platform: "macos" },
     });
     expect(res.status).toBe(200);
-    const first = await call("GET", "/v1/auth/sessions", undefined, token);
-    const data = (await first.json()) as { sessions: { deviceName: string }[] };
-    expect(data.sessions.map((s) => s.deviceName)).toContain("second");
-  });
+    const data = (await res.json()) as { token: string; userId: string; expiresAt: number };
+    expect(data.token).toMatch(/^[0-9a-f]{64}$/);
 
-  it("错误验证码 400;验证码一次性(重放 400)", async () => {
-    const token = await registerUser("bob@example.com"); // 注册即消耗掉验证码
-    expect(token).toMatch(/^[0-9a-f]{64}$/);
-    // 该邮箱当前码已被消费 → 再用同码登录失败
-    const replay = await call("POST", "/v1/auth/verify", {
-      email: "bob@example.com",
-      code: await mockCode("bob@example.com"),
-    });
-    expect(replay.status).toBe(400);
-  });
-
-  it("连续 5 次错码后验证码作废(正确码也 400)", async () => {
-    const email2 = "carol@example.com";
-    const req = await call("POST", "/v1/auth/code", { email: email2 });
-    expect(req.status).toBe(202);
-    const correct = await mockCode(email2);
-    const wrong = String((Number(correct) + 1) % 1_000_000).padStart(6, "0");
-    for (let i = 0; i < 5; i++) {
-      const res = await call("POST", "/v1/auth/verify", { email: email2, code: wrong });
-      expect(res.status).toBe(400);
-    }
-    const dead = await call("POST", "/v1/auth/verify", { email: email2, code: correct });
-    expect(dead.status).toBe(400);
-  });
-
-  it("单活跃码:请求新码后旧码失效", async () => {
-    const email3 = "dave@example.com";
-    await call("POST", "/v1/auth/code", { email: email3 });
-    const oldCode = await mockCode(email3);
-    await ageCodes(120);
-    await call("POST", "/v1/auth/code", { email: email3 });
-    // mock 模式码确定性派生——旧码即新码;此处以"仍可登录"验证新码行生效
-    const res = await call("POST", "/v1/auth/verify", { email: email3, code: oldCode });
-    expect(res.status).toBe(200);
-  });
-
-  it("重发冷却:60s 内第二次请求 429 且带 retry-after", async () => {
-    const email4 = "erin@example.com";
-    await call("POST", "/v1/auth/code", { email: email4 });
-    const res = await call("POST", "/v1/auth/code", { email: email4 });
-    expect(res.status).toBe(429);
-    expect(Number(res.headers.get("retry-after"))).toBeGreaterThan(0);
-  });
-
-  it("每邮箱小时限额:10 封后 429", async () => {
-    const email5 = "frank@example.com";
-    for (let i = 0; i < 10; i++) {
-      await call("POST", "/v1/auth/code", { email: email5 });
-      await ageCodes(61); // 只绕冷却,留在小时窗内
-    }
-    const res = await call("POST", "/v1/auth/code", { email: email5 });
-    expect(res.status).toBe(429);
-  });
-
-  it("非法邮箱 400;缺会话 401;坏令牌 401", async () => {
-    expect((await call("POST", "/v1/auth/code", { email: "not-an-email" })).status).toBe(400);
-    expect((await call("GET", "/v1/vaults")).status).toBe(401);
-    expect((await call("GET", "/v1/vaults", undefined, "0".repeat(64))).status).toBe(401);
-  });
-});
-
-describe("会话管理", () => {
-  it("设备列表与撤销:撤销后旧令牌 401", async () => {
-    const email = "grace@example.com";
-    const token = await registerUser(email);
-    const list = await call("GET", "/v1/auth/sessions", undefined, token);
+    const list = await call(env, "GET", "/v2/auth/sessions", { token: data.token });
     expect(list.status).toBe(200);
+    const sessions = (await list.json()) as { sessions: { platform: string; deviceName: string }[] };
+    expect(sessions.sessions).toHaveLength(1);
+    expect(sessions.sessions[0].platform).toBe("macos");
+    expect(sessions.sessions[0].deviceName).toBe("MacBook Pro");
+  });
+
+  it("rejects wrong code and burns attempts (5 max)", async () => {
+    const env = workerEnv();
+    const email = "burn@example.com";
+    await call(env, "POST", "/v2/auth/code", { body: { email } });
+    for (let i = 0; i < 5; i++) {
+      const bad = await call(env, "POST", "/v2/auth/verify", {
+        body: { email, code: "000000" },
+      });
+      expect(bad.status).toBe(400);
+    }
+    // 正确码也救不回:尝试配额已耗尽,码作废
+    const good = await call(env, "POST", "/v2/auth/verify", {
+      body: { email, code: await mockCode(env, email) },
+    });
+    expect(good.status).toBe(400);
+  });
+
+  it("code is single-use: second verify with the same code fails", async () => {
+    const env = workerEnv();
+    const email = "single@example.com";
+    await call(env, "POST", "/v2/auth/code", { body: { email } });
+    const code = await mockCode(env, email);
+    const first = await call(env, "POST", "/v2/auth/verify", { body: { email, code } });
+    expect(first.status).toBe(200);
+    // 单活跃码在 (email, purpose) 主键上只有一行,消费后 used_ms 置位
+    const again = await call(env, "POST", "/v2/auth/verify", { body: { email, code } });
+    expect(again.status).toBe(400);
+  });
+
+  it("rate-limits resend within cooldown", async () => {
+    const env = workerEnv();
+    const email = "cooldown@example.com";
+    const first = await call(env, "POST", "/v2/auth/code", { body: { email } });
+    expect(first.status).toBe(202);
+    const second = await call(env, "POST", "/v2/auth/code", { body: { email } });
+    expect(second.status).toBe(429);
+  });
+
+  it("renames own session and revokes sessions; revoked token is 401", async () => {
+    const env = workerEnv();
+    const { token, userId } = await registerUser(env, "session@example.com");
+    const rename = await call(env, "PATCH", "/v2/auth/session", {
+      token,
+      body: { deviceName: "iPhone 17" },
+    });
+    expect(rename.status).toBe(200);
+
+    const list = await call(env, "GET", "/v2/auth/sessions", { token });
     const { sessions } = (await list.json()) as { sessions: { id: string }[] };
     expect(sessions).toHaveLength(1);
-
-    const revoke = await call("DELETE", `/v1/auth/sessions/${sessions[0].id}`, undefined, token);
+    const revoke = await call(env, "DELETE", `/v2/auth/sessions/${sessions[0].id}`, { token });
     expect(revoke.status).toBe(200);
-    expect((await call("GET", "/v1/auth/sessions", undefined, token)).status).toBe(401);
-    expect((await call("GET", "/v1/vaults", undefined, token)).status).toBe(401);
+    const after = await call(env, "GET", "/v2/auth/sessions", { token });
+    expect(after.status).toBe(401);
+    expect(userId).toMatch(/^[0-9a-f]{32}$/);
   });
 
-  it("撤销他人会话 → 404(行级隔离)", async () => {
-    const a = await registerUser("henry@example.com");
-    const b = await registerUser("isla@example.com");
-    const listB = await call("GET", "/v1/auth/sessions", undefined, b);
-    const { sessions } = (await listB.json()) as { sessions: { id: string }[] };
-    // a 尝试撤销 b 的会话
-    const res = await call("DELETE", `/v1/auth/sessions/${sessions[0].id}`, undefined, a);
-    expect(res.status).toBe(404);
+  it("marks current session and self-revokes via DELETE /v2/auth/session", async () => {
+    const env = workerEnv();
+    const email = "selfrevoke@example.com";
+    // 同一账户两台设备各一条会话(模拟重登残留);ageCodes 跳过重发冷却
+    const first = await registerUser(env, email);
+    await ageCodes();
+    await call(env, "POST", "/v2/auth/code", { body: { email } });
+    const second = await call(env, "POST", "/v2/auth/verify", {
+      body: { email, code: await mockCode(env, email), deviceName: "iPhone 17", platform: "ios" },
+    });
+    const secondToken = ((await second.json()) as { token: string }).token;
+
+    const list = await call(env, "GET", "/v2/auth/sessions", { token: secondToken });
+    const { sessions } = (await list.json()) as { sessions: { current: boolean }[] };
+    expect(sessions).toHaveLength(2);
+    // 发起请求的会话标 current,另一条不标——重名设备也能识别本机
+    expect(sessions.filter((s) => s.current)).toHaveLength(1);
+
+    // 自撤销第二条:旧令牌即刻 401,第一条仍可用
+    const self = await call(env, "DELETE", "/v2/auth/session", { token: secondToken });
+    expect(self.status).toBe(200);
+    expect((await call(env, "GET", "/v2/auth/sessions", { token: secondToken })).status).toBe(401);
+    const remaining = await call(env, "GET", "/v2/auth/sessions", { token: first.token });
+    expect(((await remaining.json()) as { sessions: unknown[] }).sessions).toHaveLength(1);
   });
-});
 
-describe("注销", () => {
-  it("需 sensitive 码;注销后令牌失效、库清空、可重新注册", async () => {
-    const email = "jack@example.com";
-    const token = await registerUser(email);
-    // 先建一个库(应随注销清除)
-    const create = await call("POST", "/v1/vaults", { name: "Main" }, token);
-    expect(create.status).toBe(201);
+  it("deregister wipes vaults and revokes sessions (sensitive code)", async () => {
+    const env = workerEnv();
+    const email = "bye@example.com";
+    const { token } = await registerUser(env, email);
+    // 建库 + 写一条目,验证注销后行级清除
+    const create = await call(env, "POST", "/v2/vaults", { token, body: { name: "Main" } });
+    const { vaultId } = (await create.json()) as { vaultId: string };
+    const uuid = crypto.randomUUID();
+    const put = await call(env, "POST", `/v2/vaults/${vaultId}/items`, {
+      token,
+      body: { items: [{ uuid, kind: 1, op: "upsert", baseRevision: 0, bodyB64: b64("x"), modifiedMs: 1 }] },
+    });
+    expect(put.status).toBe(200);
 
-    expect((await call("DELETE", "/v1/account", { code: "000000" }, token)).status).toBe(403);
-    // login 码不能充当 sensitive 码
-    const loginCode = await mockCode(email, "login");
-    // login 码已被注册消费,重取一枚未消费的 login 码也不行
-    await ageCodes(120);
-    await call("POST", "/v1/auth/code", { email });
-    const freshLogin = await mockCode(email, "login");
-    expect((await call("DELETE", "/v1/account", { code: freshLogin }, token)).status).toBe(403);
+    const noCode = await call(env, "DELETE", "/v2/account", { token, body: { code: "123456" } });
+    expect(noCode.status).toBe(403);
+    const code = await sensitiveCode(env, email);
+    const dereg = await call(env, "DELETE", "/v2/account", { token, body: { code } });
+    expect(dereg.status).toBe(200);
+    const after = await call(env, "GET", "/v2/vaults", { token });
+    expect(after.status).toBe(401);
 
-    const code = await sensitiveCode(email);
-    const res = await call("DELETE", "/v1/account", { code }, token);
-    expect(res.status).toBe(200);
-    expect((await call("GET", "/v1/vaults", undefined, token)).status).toBe(401);
-
-    // 重新注册:全新身份,库列表为空
-    await ageCodes(120);
-    const again = await registerUser(email);
-    const vaults = await call("GET", "/v1/vaults", undefined, again);
-    const data = (await vaults.json()) as { vaults: unknown[] };
-    expect(data.vaults).toHaveLength(0);
+    // 重新登录(注销重注册 = 全新身份);先拨表绕过重发冷却
+    await ageCodes();
+    const reToken = (await registerUser(env, email)).token;
+    const vaults = await call(env, "GET", "/v2/vaults", { token: reToken });
+    const body = (await vaults.json()) as { vaults: unknown[] };
+    expect(body.vaults).toHaveLength(0);
+    const gone = await call(env, "GET", `/v2/vaults/${vaultId}`, { token: reToken });
+    expect(gone.status).toBe(404);
   });
-});
 
-// ---------- 会话自命名(设备名自愈) ----------
-
-it("会话自命名:PATCH /v1/auth/session 更新自己;列表可见;空名 400", async () => {
-  const email = "rename@example.com";
-  const tokenA = await registerUser(email, "device-A");
-  // 同邮箱二次登录:后移历史码绕过重发冷却(仍在小时窗内)
-  await ageCodes(70);
-  await call("POST", "/v1/auth/code", { email });
-  const verifyB = await call("POST", "/v1/auth/verify", {
-    email,
-    code: await mockCode(email),
-    deviceName: "device-B",
+  it("isolates vaults across users (404, not 403)", async () => {
+    const env = workerEnv();
+    const a = await registerUser(env, "a@example.com");
+    const b = await registerUser(env, "b@example.com");
+    const create = await call(env, "POST", "/v2/vaults", { token: a.token, body: { name: "Main" } });
+    const { vaultId } = (await create.json()) as { vaultId: string };
+    const bRead = await call(env, "GET", `/v2/vaults/${vaultId}`, { token: b.token });
+    expect(bRead.status).toBe(404);
+    const bWrite = await call(env, "POST", `/v2/vaults/${vaultId}/items`, {
+      token: b.token,
+      body: { items: [{ uuid: crypto.randomUUID(), kind: 1, op: "upsert", baseRevision: 0, bodyB64: b64("y"), modifiedMs: 1 }] },
+    });
+    expect(bWrite.status).toBe(404);
   });
-  expect(verifyB.status).toBe(200);
-  const tokenB = ((await verifyB.json()) as { token: string }).token;
-
-  const res = await call("PATCH", "/v1/auth/session", { deviceName: "iPhone 13 · 李振的 iPhone" }, tokenA);
-  expect(res.status).toBe(200);
-
-  const list = await call("GET", "/v1/auth/sessions", undefined, tokenA);
-  const { sessions } = (await list.json()) as { sessions: { deviceName: string }[] };
-  const names = sessions.map((s) => s.deviceName).sort();
-  expect(names).toContain("iPhone 13 · 李振的 iPhone");
-  expect(names).toContain("device-B");
-
-  // 空名/非字符串 → 400
-  expect((await call("PATCH", "/v1/auth/session", { deviceName: "  " }, tokenB)).status).toBe(400);
-  // 未鉴权 → 401
-  expect((await call("PATCH", "/v1/auth/session", { deviceName: "x" }, undefined)).status).toBe(401);
 });

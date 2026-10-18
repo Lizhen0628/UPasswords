@@ -21,10 +21,21 @@ struct SyncSettingsView: View {
     @State private var relayCodePrompt: RelayCodePrompt? = nil
     @State private var relayCodeInput = ""
     @State private var showRelayTransfer = false
+    @StateObject private var resend = ResendCountdown()
 
     /// 需要敏感验证码确认的操作(解绑库 / 注销账户)。
     enum RelayCodePrompt {
         case unbind, deregister
+    }
+
+    /// 管理设备行的平台图标(与会话表 platform 列对齐)。
+    private static func deviceIcon(for platform: String) -> String {
+        switch platform {
+        case "ios", "autofill": return "iphone"
+        case "macos": return "macbook"
+        case "ext-safari", "ext-chrome", "ext-edge", "ext-firefox": return "puzzlepiece.extension"
+        default: return "desktopcomputer.and.iphone"
+        }
     }
 
     /// 自动同步间隔档位(与 macOS ConfigureCloudSheet 一致)。
@@ -155,18 +166,40 @@ struct SyncSettingsView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         ForEach(relayDevices) { device in
                             HStack(spacing: 8) {
-                                Image(systemName: "iphone")
-                                Text(device.deviceName.isEmpty
-                                     ? String(device.id.prefix(8)) + "…" : device.deviceName)
-                                Spacer()
-                                Button(L10n.t("relay_revoke_button"), role: .destructive) {
-                                    Log.info("ui", "ios relay session revoke from settings")
-                                    Task {
-                                        await vault.relayRevokeSession(id: device.id)
-                                        relayDevices = await vault.relaySessions()
+                                Image(systemName: Self.deviceIcon(for: device.platform))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 6) {
+                                        Text(device.deviceName.isEmpty
+                                             ? String(device.id.prefix(8)) + "…" : device.deviceName)
+                                        if device.isCurrent {
+                                            Text(L10n.t("relay_device_current_badge"))
+                                                .font(.caption2.weight(.medium))
+                                                .foregroundStyle(Brand.accent)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 1)
+                                                .background(Brand.accent.opacity(0.16), in: Capsule())
+                                        }
+                                    }
+                                    if let seen = device.lastSeenAt {
+                                        Text(String(
+                                            format: L10n.t("relay_device_last_active_fmt"),
+                                            seen.formatted(date: .abbreviated, time: .shortened)))
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
                                     }
                                 }
-                                .buttonStyle(.borderless)
+                                Spacer()
+                                // 本机会话不提供「撤销」——登出按钮就是它的撤销
+                                if !device.isCurrent {
+                                    Button(L10n.t("relay_revoke_button"), role: .destructive) {
+                                        Log.info("ui", "ios relay session revoke from settings")
+                                        Task {
+                                            await vault.relayRevokeSession(id: device.id)
+                                            relayDevices = await vault.relaySessions()
+                                        }
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
                             }
                             .font(.footnote)
                         }
@@ -181,7 +214,7 @@ struct SyncSettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .textFieldStyle(.roundedBorder)
-                    Button(L10n.t("relay_send_code_button")) {
+                    Button(resend.buttonTitle(L10n.t("relay_send_code_button"))) {
                         let email = relayEmail.trimmingCharacters(in: .whitespaces)
                         guard email.contains("@"), email.contains(".") else {
                             vault.showToast(L10n.t("invalid_email_error"))
@@ -190,11 +223,11 @@ struct SyncSettingsView: View {
                         relayBusy = true
                         Log.info("ui", "ios relay code request from settings")
                         Task {
-                            await vault.relaySendCode(email: email)
+                            resend.start(await vault.relaySendCode(email: email))
                             relayBusy = false
                         }
                     }
-                    .disabled(relayBusy)
+                    .disabled(relayBusy || resend.isRunning)
                     if relayBusy { ProgressView().controlSize(.small) }
                 }
                 HStack(spacing: 8) {

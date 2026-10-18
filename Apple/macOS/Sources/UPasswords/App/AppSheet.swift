@@ -8,12 +8,12 @@ enum AppSheet: Identifiable, Hashable {
     case addCard            // 添加项目
     case addNote            // 添加笔记
     case addLabel
-    case editCardLabel(id: Int) // rename_label_title
-    case selectColorCardLabel(id: Int) // 标签颜色选择
+    case editCardLabel(id: UUID) // rename_label_title
+    case selectColorCardLabel(id: UUID) // 标签颜色选择
     case addTemplate        // save_as_template (存为模板)
     case sorting
     case generator
-    case labels(cardId: Int)
+    case labels(cardId: UUID)
     case addField
     case editField
     case selectSymbol
@@ -28,7 +28,6 @@ enum AppSheet: Identifiable, Hashable {
     case compromised
     case changePassword
     case configureCloud
-    case syncConflict       // 同步冲突:让用户选择本地覆盖云端 / 云端覆盖本地
     case eraseData          // 擦除数据 confirm
     case manageDatabases
     case selectDatabase
@@ -66,7 +65,6 @@ enum AppSheet: Identifiable, Hashable {
         case .compromised: return "compromised"
         case .changePassword: return "changePassword"
         case .configureCloud: return "configureCloud"
-        case .syncConflict: return "syncConflict"
         case .eraseData: return "eraseData"
         case .manageDatabases: return "manageDatabases"
         case .selectDatabase: return "selectDatabase"

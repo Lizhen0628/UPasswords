@@ -5,7 +5,7 @@ import UPasswordsCore
 final class SortingAndSearchTests: XCTestCase {
     private func cards(_ specs: [(String, Bool, TimeInterval)]) -> [Card] {
         specs.enumerated().map { i, s in
-            var c = Card(id: i)
+            var c = Card()
             c.title = s.0
             c.favorite = s.1
             c.created = s.2
@@ -28,7 +28,7 @@ final class SortingAndSearchTests: XCTestCase {
     }
 
     func testSearchSatisfiesAllWords() {
-        var card = Card(id: 1)
+        var card = Card()
         card.title = "GitHub"
         card.fields = [Field(name: "login", type: .login, value: "octocat")]
         card.notes = "work account"

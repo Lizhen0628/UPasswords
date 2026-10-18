@@ -76,7 +76,7 @@ import UPasswordsNetworking
 /// Sidebar selection: either a special label or a user label id.
 enum SidebarSelection: Hashable {
     case special(SpecialLabel)
-    case label(Int)
+    case label(UUID)
 
     static func == (l: SidebarSelection, r: SidebarSelection) -> Bool {
         switch (l, r) {

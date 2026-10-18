@@ -1,74 +1,95 @@
 import XCTest
 @testable import UPasswordsCore
 
-/// 回收站两段式语义锁定(见 Cloud/DESIGN.md §4.4):
-/// 从回收站删除 → 内容即刻硬清除,仅保留 (id, time) 墓碑标记且前端不可感知;
-/// 标记长期保留,抑制长期离线设备合并时复活已删项。
+/// 回收站两段式 + 无墓碑删除语义锁定(见 Cloud/DESIGN.md §6.6):
+/// 从回收站删除 = 本地直接移除,不留任何标记;删除事实由服务端条目表
+/// 缺席承载(行库即权威),本地无需也不能保留墓碑。
 final class TrashPurgeTests: XCTestCase {
 
-    func testTrashDeleteStripsContentAndRegistersMarker() {
+    func testTrashDeleteRemovesEntirelyWithoutMarker() {
         var db = PasswordDatabase()
-        var card = Card(id: 1)
+        var card = Card()
         card.title = "Secret"
         card.trashed = true
         db.cards.append(card)
+        let id = card.id
 
-        db.deleteCardPermanently(id: 1)
+        db.deleteCardPermanently(id: id)
 
-        // 内容即刻清除(密码数据不存在了),仅剩几字节墓碑标记
         XCTAssertTrue(db.cards.isEmpty, "content must be purged immediately")
-        XCTAssertEqual(db.ghosts.map(\.id), [1], "minimal (id,time) marker must remain")
-        XCTAssertNil(db.card(id: 1), "deleted item invisible to all lookups")
+        XCTAssertNil(db.card(id: id), "deleted item invisible to all lookups")
     }
 
-    func testMarkerSuppressesResurrectionFromOfflinePeer() {
-        var local = PasswordDatabase()
-        local.deleteCardPermanently(id: 7, now: Date())
-
-        // 对端(离线超过一年,从未见过删除)仍持有该条目的活动副本
-        var peer = PasswordDatabase()
-        var stale = Card(id: 7)
-        stale.title = "Old copy"
-        peer.cards.append(stale)
-
-        local.merge(with: peer)
-
-        XCTAssertNil(local.card(id: 7), "tombstone must suppress resurrection")
-        XCTAssertNotNil(local.ghosts.first { $0.id == 7 }, "marker must survive the merge")
-    }
-
-    func testMarkersAccumulateAcrossMerges() {
-        var a = PasswordDatabase()
-        a.deleteCardPermanently(id: 3, now: Date())
-        var b = PasswordDatabase()
-        b.deleteCardPermanently(id: 4, now: Date())
-
-        a.merge(with: b)
-
-        XCTAssertEqual(a.ghosts.map(\.id).sorted(), [3, 4], "markers are union-merged")
-    }
-
-    func testLabelDeletionRegistersMarker() {
+    func testLabelDeletionRemovesAndStripsReferences() {
         var db = PasswordDatabase()
-        db.labels.append(CardLabel(id: 11, name: "Work"))
+        let label = CardLabel(name: "Work")
+        db.labels.append(label)
+        var card = Card()
+        card.labelIds = [label.id]
+        db.cards.append(card)
 
-        db.deleteLabelPermanently(id: 11)
+        db.deleteLabelPermanently(id: label.id)
 
         XCTAssertTrue(db.labels.isEmpty)
-        XCTAssertEqual(db.ghosts.map(\.id), [11])
+        XCTAssertTrue(db.cards[0].labelIds.isEmpty, "条目上的标签引用必须一并清除")
     }
 
-    /// 时间戳由系统维护、秒级精度、XML 往返无损(用户不可手改的基线保证)。
+    /// 时间戳由系统维护、XML 往返无损(用户不可手改的基线保证)。
     func testTimestampsRoundTripExact() throws {
         var db = PasswordDatabase()
-        var card = Card(id: 9)
+        var card = Card()
         card.created = 1_700_000_000
         card.modified = 1_700_000_123
         db.cards.append(card)
+        let id = card.id
 
         let parsed = try PasswordDatabase.parse(db.xmlData())
 
-        XCTAssertEqual(parsed.card(id: 9)?.created, 1_700_000_000)
-        XCTAssertEqual(parsed.card(id: 9)?.modified, 1_700_000_123)
+        XCTAssertEqual(parsed.card(id: id)?.created, 1_700_000_000)
+        XCTAssertEqual(parsed.card(id: id)?.modified, 1_700_000_123)
+    }
+
+    /// 逐条冲突裁决:新者胜,平局保留本地(不刷新 nonce 防对端误判)。
+    func testItemCodecResolveNewestWins() {
+        var older = Card(); older.title = "old"; older.modified = 100
+        var newer = older; newer.title = "new"; newer.modified = 200
+        XCTAssertEqual(DatabaseItemCodec.resolve(local: .card(older), remote: .card(newer)).uuid, newer.id)
+        XCTAssertEqual(DatabaseItemCodec.resolve(local: .card(newer), remote: .card(older)).uuid, newer.id)
+        // 平局保留本地
+        var tie = older; tie.title = "local-tie"
+        XCTAssertEqual(DatabaseItemCodec.resolve(local: .card(tie), remote: .card(older)).uuid, tie.id)
+
+        let labelOld = CardLabel(name: "a", timeStamp: 10)
+        let labelNew = CardLabel(name: "b", timeStamp: 20)
+        XCTAssertEqual(DatabaseItemCodec.resolve(local: .label(labelOld), remote: .label(labelNew)).uuid, labelNew.id)
+    }
+
+    /// 条目级编解码往返:单元素字节 ↔ Card/Label,uuid 必须吻合。
+    func testItemCodecRoundTrip() throws {
+        var card = Card()
+        card.title = "Codec 卡"
+        card.fields = [Field(name: "密码", type: .password, value: "p@ss")]
+        card.notes = "备注"
+        card.modified = 1_700_000_000_123
+        let data = DatabaseItemCodec.xmlData(.card(card))
+        let item = try XCTUnwrap(DatabaseItemCodec.parse(kind: 1, uuid: card.id, data: data))
+        guard case .card(let decoded) = item else { return XCTFail("expected card") }
+        // Field.id 不随 XML 持久化(解析时重新生成),语义字段逐一比对
+        XCTAssertEqual(decoded.id, card.id)
+        XCTAssertEqual(decoded.title, card.title)
+        XCTAssertEqual(decoded.notes, card.notes)
+        XCTAssertEqual(decoded.modified, card.modified)
+        XCTAssertEqual(decoded.fields.map(\.name), card.fields.map(\.name))
+        XCTAssertEqual(decoded.fields.map(\.value), card.fields.map(\.value))
+
+        let label = CardLabel(name: "工作", timeStamp: 1_700_000_000_456)
+        let labelData = DatabaseItemCodec.xmlData(.label(label))
+        let labelItem = try XCTUnwrap(DatabaseItemCodec.parse(kind: 2, uuid: label.id, data: labelData))
+        guard case .label(let decodedLabel) = labelItem else { return XCTFail("expected label") }
+        XCTAssertEqual(decodedLabel, label)
+
+        // uuid 不匹配(搬运防护)与损坏数据都拒绝
+        XCTAssertNil(DatabaseItemCodec.parse(kind: 1, uuid: UUID(), data: data))
+        XCTAssertNil(DatabaseItemCodec.parse(kind: 1, uuid: card.id, data: Data("junk".utf8)))
     }
 }

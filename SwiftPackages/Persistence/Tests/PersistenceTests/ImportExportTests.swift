@@ -95,7 +95,7 @@ final class ImportTests: XCTestCase {
 
 final class ExportTests: XCTestCase {
     func testCSVExport() {
-        var card = Card(id: 1)
+        var card = Card()
         card.title = "T,\"q\""
         card.fields = [Field(name: "l", type: .login, value: "u", autofill: .username)]
         let out = ExportCardsTask.export([card], labels: [], format: .csv)
@@ -105,17 +105,17 @@ final class ExportTests: XCTestCase {
 
     func testXMLExportReimportable() throws {
         var db = PasswordDatabase.createDefault()
-        var card = Card(id: 500)
+        var card = Card()
         card.title = "Exported"
         card.fields = [Field(name: "Login", type: .login, value: "u", autofill: .username)]
         db.cards.append(card)
         let xml = ExportCardsTask.export(db.cards.filter { !$0.template }, labels: db.labels, format: .xml)
         let back = try PasswordDatabase.parse(Data(xml.utf8))
-        XCTAssertEqual(back.card(id: 500)?.login, "u")
+        XCTAssertEqual(back.card(id: card.id)?.login, "u")
     }
 
     func testTXTExport() {
-        var card = Card(id: 1)
+        var card = Card()
         card.title = "Note card"
         card.notes = "body"
         let out = ExportCardsTask.export([card], labels: [], format: .txt)

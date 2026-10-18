@@ -40,7 +40,7 @@ export interface ExtensionField {
 
 /** A vault entry handed to the extension for one origin. */
 export interface ExtensionItem {
-    id: number;
+    id: string; // UUID v4 (v7 row-sync item identity)
     title: string;
     symbol: string | null;
     fields: ExtensionField[];

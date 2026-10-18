@@ -54,6 +54,8 @@ enum DeviceIdentity {
         "iPhone17,5": "iPhone 16e",
         "iPhone18,1": "iPhone 17", "iPhone18,2": "iPhone 17 Pro",
         "iPhone18,3": "iPhone 17 Pro Max", "iPhone18,4": "iPhone Air",
+        "iPhone19,1": "iPhone 18", "iPhone19,2": "iPhone 18 Pro",
+        "iPhone19,3": "iPhone 18 Pro Max", "iPhone19,4": "iPhone 18 Air",
     ]
 
     private static let iPadModels: [String: String] = [

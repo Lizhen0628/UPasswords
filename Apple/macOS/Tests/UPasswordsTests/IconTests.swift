@@ -48,7 +48,7 @@ final class IconTests: XCTestCase {
     // MARK: - XML 持久化往返
 
     func testIconXMLRoundTrip() throws {
-        var card = Card(id: 7)
+        var card = Card()
         card.title = "GitHub"
         card.iconSource = IconService.sourceWebsite
         card.iconData = Data([0x89, 0x50, 0x4E, 0x47, 1, 2, 3])
@@ -62,7 +62,7 @@ final class IconTests: XCTestCase {
     }
 
     func testBuiltinIconXMLRoundTripWithoutData() throws {
-        var card = Card(id: 8)
+        var card = Card()
         card.iconSource = IconService.sourceBuiltinPrefix + "wechat"
         var db = PasswordDatabase()
         db.cards = [card]
@@ -203,7 +203,7 @@ final class IconTests: XCTestCase {
     // MARK: - iconSource 辅助
 
     func testIconSourceHelpers() {
-        var card = Card(id: 1)
+        var card = Card()
         XCTAssertFalse(card.iconIsFromWebsite)
         XCTAssertFalse(card.iconIsUserExplicit)
         XCTAssertNil(card.iconBuiltinKey)

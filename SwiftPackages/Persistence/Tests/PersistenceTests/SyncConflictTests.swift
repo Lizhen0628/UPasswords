@@ -78,7 +78,7 @@ final class SyncConflictTests: XCTestCase {
     func testXmlHashChangesAfterLocalEdit() {
         var db = PasswordDatabase()
         let before = SyncConflict.sha256Hex(db.xmlData())
-        db.cards.append(Card(id: 1, title: "Conflict Probe"))
+        db.cards.append(Card(title: "Conflict Probe"))
         let after = SyncConflict.sha256Hex(db.xmlData())
         XCTAssertNotEqual(before, after)
     }

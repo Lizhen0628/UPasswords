@@ -1,83 +1,104 @@
-# Cloud — UPasswords 云同步协调服务（api.upasswords.com）
+# Cloud — UPasswords 云同步协调服务(api.upasswords.com)
 
-架构与安全模型详见 [DESIGN.md](DESIGN.md)（v6）。服务端对库内容零知识：
-账户（邮箱验证码）、库注册表（版本元数据/哈希/信封）与 R2 加密库体副本
-（库密钥密文，原网盘通道已移除——客户端仅存 relay 单通道，见仓库根
-FEATURES.md §6 与 `cloud-drive-legacy` 分支的历史实现）。
+架构与安全模型详见 [DESIGN.md](DESIGN.md)(**v7 已实施**:MariaDB 行级密文
+条目 + R2 附件 + Hyperdrive;测试验收见 [TESTING.md](TESTING.md))。
+服务端对库内容零知识:密码项以**单条目 AES-GCM 密文行**存于自管 MariaDB,
+条目标识为 UUID,编辑只改行;附件密文 blob 在 R2;`/v2/breach/range` 代理
+HIBP(k-匿名,密码永不出设备)。
 
 ## 组成
 
 | 组件 | 说明 |
 |---|---|
-| Cloudflare Worker（TypeScript，零依赖） | `worker/src/{index,auth,vaults,stats,smtp,db,util}.ts` |
-| D1（upasswords-sync） | users / email_codes / sessions / vaults / audit_log |
-| R2（桶 VAULTS） | 加密库体副本：`vaults/<id>` 生效件 + `vaults/staging/…` 暂存（commit 原子换入） |
-| SMTP（smtp.163.com:465） | 验证码邮件（`cloudflare:sockets` 直连，无第三方依赖） |
-| 每日 cron 04:00 UTC | 注销账户 30 天保留期到期的物理清除 |
+| Cloudflare Worker(TypeScript,唯一运行时依赖 mysql2) | `worker/src/{index,auth,vaults,items,rekey,attachments,sites,breach,stats,maintenance,smtp,db,util}.ts` |
+| MariaDB 11.4(自管 `kvm-database`,库 `upasswords`) | users / email_codes / sessions / vaults / vault_items / item_changes / attachments / rekeys / rekey_staging / audit_log + websites / website_domains(`worker/sql/0001_init.sql`) |
+| R2(桶 `upasswords`) | 附件密文 `vaults/<id>/attachments/…` + 网站目录图标 `sites/icons/<sha256>` |
+| Hyperdrive | Worker → MariaDB 连接池(`[[hyperdrive.configs]]`,**待 `wrangler login` 后创建回填 id**) |
+| SMTP(smtp.163.com:465) | 验证码邮件(`cloudflare:sockets` 直连) |
+| 每日 cron 04:00 UTC | 注销到期清除、变更日志 90 天保留+地板推进、rekey 过期清理、附件孤儿清扫、staging 清扫、计数对账、审计 180 天 |
 
 ## 零知识要点
 
-- 库内容（主密码、库密钥、明文）绝不出设备；服务端只见密文与哈希；
-- `APP_KEK`（Worker secret）应用层加密：信封与邮箱 AES-GCM 入库、
-  邮箱以键控 HMAC 作查询键——D1 被拖库既不能爆破主密码、也拿不到用户名单；
-- 会话令牌 256bit 随机、只存 SHA-256；验证码键控哈希、单活跃、≤5 次、限速；
-- 管理面只读统计（注销/普通/订阅/永久计数），无任何写操作与解密能力。
+- 库内容(主密码、VEK、条目明文)绝不出设备;服务端只见行级密文与
+  哈希/元数据;条目体 AAD 绑定 uuid(行搬运防护);
+- `APP_KEK`(Worker secret)应用层加密:信封与邮箱 AES-GCM 入库、邮箱以
+  键控 HMAC 作查询键——拖库既不能爆破主密码、也拿不到用户名单;
+- 会话令牌 256bit 随机、只存 SHA-256;验证码键控哈希、单活跃、≤5 次、限速;
+- 泄漏检测经自有端点代理 HIBP(HIBP 不见用户 IP);站点查询域名/泄漏
+  查询前缀一律不进日志。
 
-## 接口（/v1）
+## 接口(/v2,整体取代 v1)
 
 ```
-GET  /v1/                                     能力协商
-POST /v1/auth/code        {email, purpose?}   发验证码(login|sensitive) 202 恒定
-POST /v1/auth/verify      {email, code, deviceName?} → {token, expiresAt, userId}
-GET  /v1/auth/sessions    Bearer              设备列表
-DELETE /v1/auth/sessions/{id}                 撤销设备
-PATCH /v1/auth/session     {deviceName}        会话自命名(设备型号展示)
-DELETE /v1/account        {code=sensitive 码}  注销(立即清敏感列+撤全部会话)
-POST /v1/vaults           {name}              登记 → {vaultId}
-GET  /v1/vaults                               库列表(元数据)
-GET  /v1/vaults/{id}                          单库(含信封 b64)
-PUT  /v1/vaults/{id}/envelope  {envelope, changedAt}  改密信封(changedAt 决胜+±300s 钳制)
-PUT  /v1/vaults/{id}/hashes    {cipherSha256, xmlSha256}  库体提交成功后上报
-PUT  /v1/vaults/{id}/body?upload=UID           库体暂存(octet-stream,≤50MB,暂存≤4)
-POST /v1/vaults/{id}/body/commit {uploadId, sha256}  校验后原子换入生效副本
-GET  /v1/vaults/{id}/body                      拉取生效库体(无副本 404)
-PATCH /v1/vaults/{id}     {name}              改名
-POST /v1/vaults/{id}/transfer {email,code,currentCode}  换绑邮箱(注册表迁移,双敏感码门槛)
-DELETE /v1/vaults/{id}    {code=sensitive 码}  解绑注册(清 R2 副本;本地库与备份不动)
-GET  /v1/admin/stats      X-Admin-Token       只读统计
+GET  /v2/                                      能力协商 {version:2, rowSync:true,…}
+POST /v2/auth/code        {email, purpose?}    发验证码(login|sensitive) 202 恒定
+POST /v2/auth/verify      {email, code, deviceName?, platform?} → {token, expiresAt, userId}
+GET  /v2/auth/sessions    Bearer               设备列表(含 platform;发起方会话标 current)
+DELETE /v2/auth/sessions/{id}                  撤销设备
+PATCH /v2/auth/session    {deviceName}         会话自命名
+DELETE /v2/auth/session   Bearer               自撤销(登出/重登收尾)
+DELETE /v2/account        {code=sensitive 码}  注销(级联清行+R2+撤会话)
+POST /v2/vaults           {name, envelope}     登记(创建即携带初始信封) → {vaultId}
+GET  /v2/vaults                                库列表(元数据)
+GET  /v2/vaults/{id}                           单库(含信封 b64)
+GET  /v2/vaults/{id}/seq                       {headSeq, passwordVersion}(便宜轮询)
+PATCH /v2/vaults/{id}     {name}               改名
+POST /v2/vaults/{id}/transfer {email,code,currentCode,deviceName?}  换绑邮箱
+DELETE /v2/vaults/{id}    {code}               解绑(清行+R2 前缀)
+POST /v2/vaults/{id}/items    {items:[{uuid,kind,op,baseRevision,bodyB64?,sha256?,modifiedMs}]}
+                                               批量 CAS 上行 → 逐条 ok|conflict|not_found
+GET  /v2/vaults/{id}/changes?since=&limit=     游标增量下行(410 cursor_expired)
+GET  /v2/vaults/{id}/items?cursorMs=&cursorUuid=&limit=   全量重建 keyset 分页
+PUT  /v2/vaults/{id}/attachments/{uuid}?upload=UID        附件密文暂存(octet-stream)
+POST /v2/vaults/{id}/attachments/{uuid}/commit {uploadId,sha256,cardUuid,dekWrapped}
+GET  /v2/vaults/{id}/attachments/{uuid}                    拉取密文流
+DELETE /v2/vaults/{id}/attachments/{uuid}                  删行+删 blob
+POST /v2/vaults/{id}/rekey/begin → /rekey/{rekeyId}/chunk → /commit(DELETE 放弃)
+                                               改密 VEK 轮换(全部行 revision+1)
+GET  /v2/sites/lookup?domain=                   网站目录(名称+图标 b64)
+GET  /v2/sites/icon/{sha256}                    图标字节流(ETag 强缓存)
+POST /v2/admin/sites        X-Admin-Token       目录批量 upsert
+GET  /v2/breach/range/{5位hex前缀}              泄漏检测代理(与 HIBP 同形)
+GET  /v2/admin/stats        X-Admin-Token       只读统计
 ```
 
-## 本地测试
+## 本地测试(直连真实 MariaDB)
 
 ```bash
 cd Cloud/worker
 npm install && npm install-scripts approve esbuild && npm install-scripts approve workerd
 npm run typecheck
-npm test        # vitest + @cloudflare/vitest-plugin(miniflare 本地 D1,SMTP mock)
+# 本地:开 ssh 隧道后直连服务器测试库(口令在 ~/.upasswords-cloud-secrets.txt)
+ssh -f -N -L 16033:127.0.0.1:6033 database-server
+UPW_TEST_DB_URL="mysql://upw_app:<口令>@127.0.0.1:16033/upasswords_test" \
+UPW_TEST_DB_SSL=1 npm test     # 19 用例:登录/限速/CAS/游标/rekey/附件/隔离/目录/代理
+# CI:ubuntu + mariadb:11.4 service 容器(UPW_TEST_DB_ADMIN_URL 现场建库建号,
+# 见 .github/workflows/ci.yml 与 test/apply-schema.ts)
 ```
 
-## 部署
-
-凭据与环境（**绝不入库**）：
-
-- `CLOUDFLARE_API_TOKEN`：最小权限 Token（Workers Editor / D1 Write / KV Write /
-  Account Settings Read）；
-- Secrets（`npx wrangler secret put <NAME>`）：`APP_KEK`（64 hex，丢失则 API 信封
-  不可解、客户端回退本地信封）、`ADMIN_TOKEN`、`SMTP_USER`、`SMTP_PASSWORD`；
-- 本机凭据备份：`~/.upasswords-cloud-secrets.txt`（chmod 600，勿提交）。
+## 部署(待完成:需先 `npx wrangler login`)
 
 ```bash
 cd Cloud/worker
-npx wrangler d1 migrations apply upasswords-sync --remote
-./scripts/deploy-cloud.sh   # 或 npx wrangler deploy(自定义域 api.upasswords.com)
+# 1) Hyperdrive 已创建(id 已回填 wrangler.toml),origin 已内网化:
+#    host=dbt.upasswords.com(Cloudflare Tunnel `upasswords-db` 经
+#    ipv6bridge 网桥直达容器 3306,Access Service Token 保护——凭据在
+#    ~/.upasswords-cloud-secrets.txt 的 ACCESS_CLIENT_* 条目)。
+#    **缓存必须保持关闭**(已设 caching.disabled=true;重新创建配置时
+#    须重申,否则 /seq 等同文本 SELECT 返回旧快照,见 DESIGN §8.4)。
+#    本地测试:ssh -L 16034:127.0.0.1:6033 database-server(mariadb compose
+#    的 127.0.0.1:6033 回环发布,docker-proxy 自动跟随容器,IP 漂移免疫)
+npx wrangler hyperdrive create upasswords-db \
+  --connection-string="mysql://upw_app:<口令>@24.233.2.194:6033/upasswords"
+#    → 把返回的 id 回填 wrangler.toml 的 [[hyperdrive.configs]]
+# 2) Secrets(沿用既有值,见 ~/.upasswords-cloud-secrets.txt)
+npx wrangler secret put APP_KEK && npx wrangler secret put ADMIN_TOKEN \
+  && npx wrangler secret put SMTP_USER && npx wrangler secret put SMTP_PASSWORD
+# 3) schema 已在服务器应用过(upasswords / upasswords_test 两库);
+#    变更 DDL 时:cat sql/0001_init.sql | ssh database-server '(经 docker exec 导入)'
+# 4) 部署
+npx wrangler deploy     # 自定义域 api.upasswords.com;旧 v6 端点随本次部署下线
 ```
 
-D1：`database_id` 已回填在 `wrangler.toml`；新迁移放入 `worker/migrations/` 后
-执行 `migrations apply`。
-
-## 已知事实（2026-10 部署验证）
-
-- SMTP 全链路验证：验证码邮件经 163 SMTP 真实送达，中英双语模板；
-- 信封 changedAt 决胜/偏斜钳制、敏感码删库、限速、跨用户隔离均有
-  vitest 覆盖（34 用例）并经线上 curl 验证；
-- 发到 `*@upasswords.com` 地址的邮件经 Cloudflare Email Routing 转发回 163 收件箱。
+D1 `upasswords-sync` 与 v6 库体端点(body/envelope/hashes)已随 v7 退役;
+R2 旧 `vaults/<id>` 单对象由每日 cron 清扫。

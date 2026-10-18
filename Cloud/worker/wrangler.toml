@@ -1,27 +1,26 @@
 name = "upasswords-sync"
 main = "src/index.ts"
 compatibility_date = "2026-01-01"
+# mysql2(Hyperdrive 官方 MySQL 驱动)依赖 Node API
+compatibility_flags = ["nodejs_compat"]
 
 # 绑定到 upasswords.com 的 Workers 自定义域(域名托管在 Cloudflare)
 routes = [{ pattern = "api.upasswords.com", custom_domain = true }]
 
-# D1:首次部署前 `npx wrangler d1 create upasswords-sync`,把返回的 database_id
-# 回填到下方(REPLACE_AFTER_D1_CREATE);迁移经 `npx wrangler d1 migrations apply upasswords-sync --remote`
-[[d1_databases]]
+# Hyperdrive:连接自管 MariaDB(kvm-database 24.233.2.194:6033,库 upasswords);
+# 配置 id=d6073cfc…(口令只存 CF 控制面);自签证书如握手校验失败,
+# 经控制台「Server certificates」上传启用 Verify,或改走 Tunnel(DESIGN §8.3)
+[[hyperdrive]]
 binding = "DB"
-database_name = "upasswords-sync"
-database_id = "3240f9c2-2b0c-454a-a198-567e3d405b63"
-migrations_dir = "migrations"
+id = "d6073cfc1e9e4066b5d983622ebd37ae"
 
-# R2:库体密文对象存储(standalone Safari 扩展数据通路)。首次部署前
-# `npx wrangler r2 bucket create upasswords`;存的是 VEK 加密密文,
-# 服务器零知识,对象不可解。键空间:vaults/{vaultId} 生效副本、
-# vaults/staging/{vaultId}/{uploadId} 上传暂存(日度 cron 清扫)。
+# R2:附件密文 blob(vaults/<id>/attachments/…)+ 网站目录图标(sites/icons/…)
 [[r2_buckets]]
 binding = "VAULTS"
 bucket_name = "upasswords"
 
-# 每日 04:00 UTC:注销账户 30 天保留期到期的物理清除 + staging 孤儿清扫
+# 每日 04:00 UTC:注销到期清除、变更日志保留+地板推进、rekey 过期清理、
+# 附件孤儿清扫、staging 清扫、计数对账、审计保留
 [triggers]
 crons = ["0 4 * * *"]
 
@@ -31,7 +30,16 @@ SMTP_PORT = "465"
 SMTP_FROM = "16621660628@163.com"
 SMTP_REPLY_TO = "register@upasswords.com"
 VAULT_LIMIT_PER_USER = "10"
-VAULT_BODY_MAX_BYTES = "52428800"
+ITEM_BODY_MAX_BYTES = "2097152"
+ITEMS_PER_VAULT_LIMIT = "50000"
+ITEMS_BATCH_MAX = "200"
+ATTACHMENT_MAX_BYTES = "20971520"
+ATTACH_QUOTA_PER_VAULT = "524288000"
+ATTACH_STAGING_MAX_OBJECTS = "8"
+CHANGE_RETENTION_DAYS = "90"
+REKEY_TTL_MS = "3600000"
+SITES_ICON_MAX_BYTES = "65536"
+BREACH_CACHE_TTL_SECONDS = "86400"
 CODE_TTL_SECONDS = "600"
 CODE_RESEND_COOLDOWN_SECONDS = "60"
 CODE_HOURLY_PER_EMAIL = "10"
@@ -39,10 +47,9 @@ CODE_HOURLY_PER_IP = "20"
 CODE_MAX_ATTEMPTS = "5"
 SESSION_TTL_DAYS = "90"
 DEREGISTER_PURGE_DAYS = "30"
-CHANGED_AT_MAX_SKEW_SECONDS = "300"
 
 # Secrets(绝不写入本文件):
-#   APP_KEK      64 hex — 应用层加密主键(信封/邮箱加密、键控哈希),丢失=信封不可解(客户端回退网盘信封)
-#   ADMIN_TOKEN  统计端点凭据
+#   APP_KEK      64 hex — 应用层加密主键(信封/邮箱加密、键控哈希)
+#   ADMIN_TOKEN  统计/目录管理面凭据
 #   SMTP_USER / SMTP_PASSWORD  163 发件账号与授权码
-# 经 `npx wrangler secret put <NAME>` 配置;测试环境经 vitest.config.ts 的 bindings 注入。
+# 经 `npx wrangler secret put <NAME>` 配置;测试环境经 env 对象注入。

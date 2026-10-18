@@ -5,7 +5,7 @@ import UPasswordsCore
 /// A working copy of the card being edited, plus sub-state for the
 /// symbol/color/template pickers.
 struct EditCardModel: Identifiable {
-    var id: Int { card.id }
+    var id: UUID { card.id }
     var card: Card
     var isNew: Bool = false
 }
@@ -237,7 +237,7 @@ private struct EditCardBody: View {
                 Button(L10n.t("save_as_template_button")) {
                     var t = draft.card
                     t.template = true
-                    t.id = ctx.newCardId()
+                    t.id = UUID()
                     ctx.database.cards.append(t)
                     AppToast.shared.show(L10n.t("template_saved_message"))
                     ctx.editDraft = nil

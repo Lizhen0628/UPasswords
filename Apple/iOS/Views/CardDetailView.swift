@@ -7,7 +7,7 @@ import UPasswordsCore
 
 struct CardDetailView: View {
     @EnvironmentObject var vault: Vault
-    let cardID: Int
+    let cardID: UUID
 
     @State private var revealed: Set<UUID> = []
     @State private var showEdit = false

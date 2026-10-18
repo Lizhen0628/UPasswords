@@ -24,7 +24,7 @@ struct AddCardSheet: View {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 132))], spacing: 10) {
                         ForEach(Templates.all) { spec in
                             Button {
-                                open(Templates.makeCard(from: spec, id: ctx.newCardId()))
+                                open(Templates.makeCard(from: spec))
                             } label: {
                                 VStack(spacing: 8) {
                                     CardIconView(symbol: spec.symbol, color: "gray", size: 40)
@@ -45,7 +45,7 @@ struct AddCardSheet: View {
     }
 
     private func instantiateCustom() -> Card {
-        var c = Card(id: ctx.newCardId())
+        var c = Card()
         c.created = Date().millis
         c.modified = c.created
         return c
@@ -73,7 +73,7 @@ struct AddNoteSheet: View {
             okDisabled: title.isEmpty && notes.isEmpty,
             onCancel: { dismiss() },
             onOk: {
-                var card = Card(id: ctx.newCardId())
+                var card = Card()
                 card.title = title.isEmpty ? L10n.db("notes_label") : title
                 card.notes = notes
                 card.color = "yellow"
@@ -131,7 +131,7 @@ struct AddLabelSheet: View {
 struct EditLabelSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
-    let labelId: Int
+    let labelId: UUID
     @State private var name = ""
     @State private var color: String = "blue"
 
@@ -168,7 +168,7 @@ struct EditLabelSheet: View {
 struct SelectColorLabelSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
-    let labelId: Int
+    let labelId: UUID
     @State private var color: String = "blue"
 
     var body: some View {
@@ -337,9 +337,9 @@ struct GeneratorSheet: View {
 struct SetLabelsSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
-    let cardId: Int
+    let cardId: UUID
 
-    @State private var selection: Set<Int> = []
+    @State private var selection: Set<UUID> = []
     @State private var newLabelName = ""
 
     var body: some View {
@@ -558,7 +558,8 @@ struct SelectTemplateSheet: View {
 
     private func apply(_ spec: Templates.Spec) {
         guard var draft = ctx.editDraft else { return }
-        let card = Templates.makeCard(from: spec, id: draft.card.id)
+        var card = Templates.makeCard(from: spec)
+        card.id = draft.card.id
         draft.card.title = L10n.db(spec.titleKey)
         draft.card.symbol = spec.symbol
         draft.card.autofillEnabled = spec.autofill

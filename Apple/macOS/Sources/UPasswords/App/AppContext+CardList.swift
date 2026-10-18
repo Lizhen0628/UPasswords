@@ -17,16 +17,16 @@ extension AppContext {
     /// 最近打开列表容量上限(超出淘汰最旧条目)
     private static let recentLimit = 20
 
-    var recentIds: [Int] {
-        UserDefaults.standard.array(forKey: Self.recentKey) as? [Int] ?? []
+    var recentIds: [UUID] {
+        (UserDefaults.standard.array(forKey: Self.recentKey) as? [String] ?? []).compactMap(UUID.init(uuidString:))
     }
 
-    func pushRecent(_ cardId: Int) {
-        var ids = UserDefaults.standard.array(forKey: Self.recentKey) as? [Int] ?? []
+    func pushRecent(_ cardId: UUID) {
+        var ids = (UserDefaults.standard.array(forKey: Self.recentKey) as? [String] ?? []).compactMap(UUID.init(uuidString:))
         ids.removeAll { $0 == cardId }
         ids.insert(cardId, at: 0)
         if ids.count > Self.recentLimit { ids.removeLast(ids.count - Self.recentLimit) }
-        UserDefaults.standard.set(ids, forKey: Self.recentKey)
+        UserDefaults.standard.set(ids.map(\.uuidString), forKey: Self.recentKey)
         Log.info("ui", "pushRecent cardId=\(cardId) total=\(ids.count)")
         objectWillChange.send()
     }

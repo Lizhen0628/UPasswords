@@ -1,7 +1,7 @@
 // SMTP 客户端:cloudflare:sockets 直连 smtp.163.com:465(SSL),仅发验证码邮件。
 // 授权码只经 Worker secret 注入;错误信息只含状态码,绝不含账号/命令内容。
+// cloudflare:sockets 懒加载:Node 测试环境(SMTP_MOCK)不会解析到该 workerd 模块。
 
-import { connect } from "cloudflare:sockets";
 import { bytesToB64, utf8, type Env } from "./util";
 
 const EHLO_NAME = "api.upasswords.com";
@@ -62,6 +62,7 @@ export async function sendVerificationMail(
 }
 
 async function smtpDeliver(env: Env, to: string, mail: string): Promise<void> {
+  const { connect } = await import("cloudflare:sockets");
   const socket = connect(
     { hostname: env.SMTP_HOST, port: Number(env.SMTP_PORT) || 465 },
     { secureTransport: "on", allowHalfOpen: false },

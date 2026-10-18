@@ -2,7 +2,8 @@ import XCTest
 @testable import UPasswordsCore
 @testable import UPasswordsPersistence
 
-/// RelayClient(api.upasswords.com 协调服务客户端)的传输与错误映射测试。
+/// RelayClient(/v2 行协议)的传输与错误映射 + RowSync 引擎端到端(脚本化
+/// mock 服务端)测试。
 final class RelayClientTests: XCTestCase {
 
     final class MockURLProtocol: URLProtocol {
@@ -47,31 +48,56 @@ final class RelayClientTests: XCTestCase {
     func testVerifyParsesSession() async throws {
         let token = String(repeating: "a", count: 64)
         MockURLProtocol.handler = { [token] request in
-            XCTAssertEqual(request.url?.path, "/v1/auth/verify")
+            XCTAssertEqual(request.url?.path, "/v2/auth/verify")
             XCTAssertEqual(request.httpMethod, "POST")
             let body = """
-            {"token":"\(token)","expiresAt":1900000000,"userId":"u1"}
+            {"token":"\(token)","expiresAt":1900000000000,"userId":"u1"}
             """
             return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
                     Data(body.utf8))
         }
-        let session = try await makeClient().verify(email: "a@b.c", code: "123456", deviceName: "test")
+        let session = try await makeClient().verify(email: "a@b.c", code: "123456",
+                                                    deviceName: "test", platform: .macos)
         XCTAssertEqual(session.token, token)
         XCTAssertEqual(session.userId, "u1")
-        XCTAssertEqual(session.expiresAt.timeIntervalSince1970, 1_900_000_000)
+        XCTAssertEqual(session.expiresAt.timeIntervalSince1970, 1_900_000_000, accuracy: 0.001)
     }
 
-    func testGetVaultParsesEnvelope() async throws {
+    func testListSessionsParsesCurrentFlagAndSelfRevoke() async throws {
+        MockURLProtocol.handler = { request in
+            if request.url?.path == "/v2/auth/session", request.httpMethod == "DELETE" {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                        Data(#"{"ok":true}"#.utf8))
+            }
+            XCTAssertEqual(request.url?.path, "/v2/auth/sessions")
+            let body = """
+            {"sessions":[
+              {"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","deviceName":"iPhone 18 Pro · iPhone","platform":"ios","current":true,"lastSeenAt":1000.0},
+              {"id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","deviceName":"Mac","platform":"macos","lastSeenAt":900.0}]}
+            """
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    Data(body.utf8))
+        }
+        let client = makeClient()
+        let sessions = try await client.listSessions(token: "t")
+        XCTAssertEqual(sessions.count, 2)
+        XCTAssertTrue(sessions[0].isCurrent)
+        XCTAssertEqual(sessions[0].platform, "ios")
+        XCTAssertEqual(sessions[0].lastSeenAt?.timeIntervalSince1970 ?? 0, 1, accuracy: 0.001)
+        XCTAssertFalse(sessions[1].isCurrent)
+        // 自撤销:DELETE /v2/auth/session(鉴权即身份,不带会话号)
+        try await client.revokeOwnSession(token: "t")
+    }
+
+    func testGetVaultParsesEnvelopeAndSeq() async throws {
         let envelope = Data([0x55, 0x50, 0x57, 0x4b, 0x45, 0x59, 0x31, 0x00] + Array(repeating: 7, count: 112))
         let b64 = envelope.base64EncodedString()
         MockURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/vaults/abc123")
+            XCTAssertEqual(request.url?.path, "/v2/vaults/abc123")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer t1")
             let body = """
             {"vaultId":"abc123","name":"Main","passwordVersion":3,"passwordChangedAt":100.0,
-             "envelopeChangedAt":200.0,"hasEnvelope":true,"envelope":"\(b64)",
-             "cipherSha256":"\(String(repeating: "c", count: 64))",
-             "xmlSha256":"\(String(repeating: "x", count: 64))"}
+             "envelopeChangedAt":200.0,"hasEnvelope":true,"envelope":"\(b64)","headSeq":42,"itemCount":7}
             """
             return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
                     Data(body.utf8))
@@ -79,70 +105,56 @@ final class RelayClientTests: XCTestCase {
         let record = try await makeClient().getVault(token: "t1", vaultId: "abc123")
         XCTAssertEqual(record.passwordVersion, 3)
         XCTAssertEqual(record.envelope, envelope)
-        XCTAssertEqual(record.envelopeChangedAt, Date(timeIntervalSince1970: 200))
+        XCTAssertEqual(record.headSeq, 42)
+        XCTAssertEqual(record.itemCount, 7)
         XCTAssertTrue(record.hasEnvelope)
     }
 
-    func testPutEnvelopeStaleOutcome() async throws {
+    func testVaultSeq() async throws {
         MockURLProtocol.handler = { request in
-            XCTAssertEqual(request.httpMethod, "PUT")
-            let body = """
-            {"stale":true,"changedAt":300.0}
-            """
+            XCTAssertEqual(request.url?.path, "/v2/vaults/vv/seq")
             return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-                    Data(body.utf8))
+                    Data(#"{"headSeq":99,"passwordVersion":1}"#.utf8))
         }
-        let outcome = try await makeClient().putEnvelope(
-            token: "t", vaultId: "v", envelope: Data(repeating: 1, count: 120),
-            changedAt: Date(timeIntervalSince1970: 100))
-        XCTAssertEqual(outcome, .stale(changedAt: Date(timeIntervalSince1970: 300)))
+        let seq = try await makeClient().vaultSeq(token: "t", vaultId: "vv")
+        XCTAssertEqual(seq.headSeq, 99)
+        XCTAssertEqual(seq.passwordVersion, 1)
     }
 
-    /// URLProtocol 层 httpBody 可能为空,须经 bodyStream 读取。
-    private static func bodyData(of request: URLRequest) -> Data {
-        if let body = request.httpBody { return body }
-        guard let stream = request.httpBodyStream else { return Data() }
-        stream.open()
-        defer { stream.close() }
-        var data = Data()
-        let bufferSize = 4096
-        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
-        defer { buffer.deallocate() }
-        while stream.hasBytesAvailable {
-            let read = stream.read(buffer, maxLength: bufferSize)
-            if read <= 0 { break }
-            data.append(buffer, count: read)
-        }
-        return data
-    }
-
-    func testListSessionsAndRename() async throws {
+    func testPostItemsAndChangesParse() async throws {
+        let uuid = UUID()
         MockURLProtocol.handler = { request in
-            if request.url?.path == "/v1/auth/sessions" {
+            if request.url?.path == "/v2/vaults/vv/items", request.httpMethod == "POST" {
                 let body = """
-                {"sessions":[{"id":"\(String(repeating: "b", count: 32))","deviceName":"iPhone"},
-                             {"id":"\(String(repeating: "c", count: 32))","deviceName":""}]}
+                {"results":[{"uuid":"\(uuid.uuidString)","status":"ok","revision":1}]}
                 """
                 return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
                         Data(body.utf8))
             }
-            XCTAssertEqual(request.url?.path, "/v1/vaults/v9")
-            XCTAssertEqual(request.httpMethod, "PATCH")
-            let body = String(data: Self.bodyData(of: request), encoding: .utf8) ?? ""
-            XCTAssertTrue(body.contains(#""name":"NewName""#), "rename body must carry new name")
+            XCTAssertEqual(request.url?.path, "/v2/vaults/vv/changes")
+            let body = """
+            {"headSeq":5,"changes":[{"seq":5,"uuid":"\(uuid.uuidString)","op":"upsert","revision":1,
+             "bodyB64":"AAAA","kind":1,"modifiedMs":123.0}]}
+            """
             return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-                    Data(#"{"ok":true}"#.utf8))
+                    Data(body.utf8))
         }
         let client = makeClient()
-        let sessions = try await client.listSessions(token: "t")
-        XCTAssertEqual(sessions.count, 2)
-        XCTAssertEqual(sessions.first?.deviceName, "iPhone")
-        try await client.renameVault(token: "t", vaultId: "v9", name: "NewName")
+        let results = try await client.postItems(token: "t", vaultId: "vv", items: [
+            .init(uuid: uuid, kind: 1, isDelete: false, baseRevision: 0,
+                  bodyB64: "AAAA", sha256: nil, modifiedMs: 123),
+        ])
+        XCTAssertEqual(results[uuid], .ok(revision: 1))
+        let (headSeq, changes) = try await client.getChanges(token: "t", vaultId: "vv", since: 0)
+        XCTAssertEqual(headSeq, 5)
+        XCTAssertEqual(changes.first?.uuid, uuid)
+        XCTAssertEqual(changes.first?.kind, 1)
     }
 
     func testRateLimitedMapsRetryAfter() async {
-        MockURLProtocol.handler = { request in
-            let response = HTTPURLResponse(url: request.url!, statusCode: 429, httpVersion: nil,
+        MockURLProtocol.handler = { _ in
+            let response = HTTPURLResponse(url: URL(string: "https://api.test")!,
+                                           statusCode: 429, httpVersion: nil,
                                            headerFields: ["retry-after": "77"])!
             return (response, Data(#"{"error":"rate_limited"}"#.utf8))
         }
@@ -163,6 +175,9 @@ final class RelayClientTests: XCTestCase {
             (409, "name_exists", .nameExists),
             (413, "quota_exceeded", .quotaExceeded),
             (404, "not_found", .notFound),
+            (410, "cursor_expired", .cursorExpired),
+            (409, "rekey_in_progress", .rekeyInProgress),
+            (413, "item_too_large", .itemTooLarge),
         ]
         for (status, code, expected) in cases {
             MockURLProtocol.handler = { request in
@@ -182,99 +197,217 @@ final class RelayClientTests: XCTestCase {
     }
 }
 
-/// RelayStore:绑定、版本高水位与令牌存取(注入 defaults + 内存令牌存储)。
-final class RelayStoreTests: XCTestCase {
+/// RowSync 引擎:上行 CAS、下行应用、删除胜、缺席即删除、对端改密信号。
+final class RowSyncTests: XCTestCase {
 
-    final class MemoryTokens: RelayTokenStoring {
-        var map: [String: String] = [:]
-        func saveToken(_ token: String, for email: String) { map[email] = token }
-        func token(for email: String) -> String? { map[email] }
-        func deleteToken(for email: String) { map.removeValue(forKey: email) }
-    }
+    final class MockURLProtocol: URLProtocol {
+        nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
 
-    private func makeStore() -> (RelayStore, UserDefaults, MemoryTokens) {
-        let defaults = UserDefaults(suiteName: "relay.tests.\(UUID().uuidString)")!
-        let tokens = MemoryTokens()
-        return (RelayStore(defaults: defaults, tokens: tokens), defaults, tokens)
-    }
+        override class func canInit(with request: URLRequest) -> Bool { true }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
-    func testBindingRoundTripAndClear() {
-        let (store, defaults, _) = makeStore()
-        XCTAssertNil(store.binding(database: "Main"))
-        store.setBinding(RelayBinding(email: "a@b.c", vaultId: "v1", vaultName: "Main"), database: "Main")
-        XCTAssertEqual(store.binding(database: "Main"),
-                       RelayBinding(email: "a@b.c", vaultId: "v1", vaultName: "Main"))
-        store.setBinding(nil, database: "Main")
-        XCTAssertNil(store.binding(database: "Main"))
-    }
-
-    func testVersionHighWaterOnlyAdvances() {
-        let (store, _, _) = makeStore()
-        XCTAssertNil(store.knownPasswordVersion(database: "Main"))
-        store.recordPasswordVersion(3, database: "Main")
-        XCTAssertEqual(store.knownPasswordVersion(database: "Main"), 3)
-        store.recordPasswordVersion(2, database: "Main")
-        XCTAssertEqual(store.knownPasswordVersion(database: "Main"), 3, "version must never regress")
-    }
-
-    final class CountingTokens: RelayTokenStoring {
-        var map: [String: String] = [:]
-        private(set) var reads = 0
-        func saveToken(_ token: String, for email: String) { map[email] = token }
-        func token(for email: String) -> String? {
-            reads += 1
-            return map[email]
+        override func startLoading() {
+            guard let handler = Self.handler else {
+                client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
+                return
+            }
+            do {
+                let (response, data) = try handler(request)
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: data)
+                client?.urlProtocolDidFinishLoading(self)
+            } catch {
+                client?.urlProtocol(self, didFailWithError: error)
+            }
         }
-        func deleteToken(for email: String) { map.removeValue(forKey: email) }
+
+        override func stopLoading() {}
     }
 
-    func testTokenFollowsBindingAndLogoutClears() {
-        let (store, _, tokens) = makeStore()
-        XCTAssertNil(store.token(database: "Main"))
-        store.storeSession(token: "tok1", email: "a@b.c")
-        store.setBinding(RelayBinding(email: "a@b.c", vaultId: "v1", vaultName: "Main"), database: "Main")
-        XCTAssertEqual(store.token(database: "Main"), "tok1")
-        store.logout(database: "Main")
-        XCTAssertNil(store.token(database: "Main"))
-        XCTAssertNil(tokens.map["a@b.c"])
-        XCTAssertNil(store.binding(database: "Main"))
+    private let key = RowSyncKey(raw: Data((0..<32).map { UInt8($0 & 0xff) }))
+
+    private func makeClient() -> RelayClient {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        return RelayClient(baseURL: URL(string: "https://api.test")!,
+                           session: URLSession(configuration: config))
     }
 
-    /// 令牌进程内缓存:自动同步每轮取令牌不再周期性触发钥匙串访问——
-    /// 热缓存(本进程登录过)零落盘;冷缓存(进程重启)只读底层一次。
-    func testTokenCachedAcrossReads() {
-        let defaults = UserDefaults(suiteName: "relay.tests.\(UUID().uuidString)")!
-        let tokens = CountingTokens()
-        let store = RelayStore(defaults: defaults, tokens: tokens)
-        store.storeSession(token: "tok1", email: "a@b.c")
-        store.setBinding(RelayBinding(email: "a@b.c", vaultId: "v1", vaultName: "Main"), database: "Main")
-        XCTAssertEqual(store.token(database: "Main"), "tok1")
-        XCTAssertEqual(store.token(database: "Main"), "tok1")
-        XCTAssertEqual(tokens.reads, 0, "warm cache must not touch storage")
-
-        // 冷缓存路径(重启后缓存为空,底层已有令牌)
-        let restarted = RelayStore(defaults: defaults, tokens: tokens)
-        XCTAssertEqual(restarted.token(database: "Main"), "tok1")
-        XCTAssertEqual(restarted.token(database: "Main"), "tok1")
-        XCTAssertEqual(tokens.reads, 1, "cold cache must read storage exactly once")
-
-        store.logout(database: "Main")
-        XCTAssertNil(store.token(database: "Main"))
+    private func respond(_ body: String, request: URLRequest) -> (HTTPURLResponse, Data) {
+        (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+         Data(body.utf8))
     }
 
-    /// 引导门槛状态:登录记住账户(必经门槛解除);首次绑定登记 everBound,
-    /// 解绑后不自动回绑。
-    func testOnboardingStateAndEverBound() {
-        let (store, _, _) = makeStore()
-        XCTAssertNil(store.lastAccountEmail)
+    private func sealedBody(_ item: DatabaseItem) throws -> String {
+        try RowSyncCipher.encrypt(DatabaseItemCodec.xmlData(item), key: key, uuid: item.uuid)
+            .base64EncodedString()
+    }
 
-        store.storeSession(token: "t", email: "a@b.c")
-        XCTAssertEqual(store.lastAccountEmail, "a@b.c")
+    private func sampleDatabase() -> (PasswordDatabase, Card, CardLabel) {
+        var db = PasswordDatabase()
+        var card = Card()
+        card.title = "GitHub"
+        card.modified = 1000
+        let label = CardLabel(name: "Work", timeStamp: 900)
+        db.cards = [card]
+        db.labels = [label]
+        return (db, card, label)
+    }
 
-        XCTAssertFalse(store.everBound(database: "Main"))
-        store.setBinding(RelayBinding(email: "a@b.c", vaultId: "v1", vaultName: "Main"), database: "Main")
-        XCTAssertTrue(store.everBound(database: "Main"))
-        store.setBinding(nil, database: "Main")
-        XCTAssertTrue(store.everBound(database: "Main"), "unbind must keep ever-bound (no silent rebind)")
+    func testPushUploadsDirtyAndClearsOnOk() async throws {
+        var (db, card, label) = sampleDatabase()
+        var state = RowSyncState()
+        state.markDirty(uuid: card.id, modifiedMs: 1000)
+        state.markDirty(uuid: label.id, modifiedMs: 900)
+
+        MockURLProtocol.handler = { [card, label] request in
+            XCTAssertEqual(request.url?.path, "/v2/vaults/v1/items")
+            let body = """
+            {"results":[{"uuid":"\(card.id.uuidString)","status":"ok","revision":1},
+                         {"uuid":"\(label.id.uuidString)","status":"ok","revision":1}]}
+            """
+            return self.respond(body, request: request)
+        }
+        let outcome = try await RowSync.push(client: makeClient(), token: "t", vaultId: "v1",
+                                             key: key, database: &db, state: &state)
+        XCTAssertEqual(outcome.pushedItems, 2)
+        XCTAssertFalse(state.hasPendingWork)
+        XCTAssertEqual(state.revisions[card.id], 1)
+        XCTAssertEqual(state.revisions[label.id], 1)
+    }
+
+    func testPullAppliesUpsertsAndAdvancesCursor() async throws {
+        var db = PasswordDatabase()
+        var state = RowSyncState()
+        var remote = Card()
+        remote.title = "From Peer"
+        remote.modified = 5000
+        let sealed = try sealedBody(.card(remote))
+
+        MockURLProtocol.handler = { [remote, sealed] request in
+            XCTAssertEqual(request.url?.path, "/v2/vaults/v1/changes")
+            let body = """
+            {"headSeq":7,"changes":[{"seq":7,"uuid":"\(remote.id.uuidString)","op":"upsert","revision":1,
+             "bodyB64":"\(sealed)","kind":1,"modifiedMs":5000.0}]}
+            """
+            return self.respond(body, request: request)
+        }
+        let outcome = try await RowSync.pull(client: makeClient(), token: "t", vaultId: "v1",
+                                             key: key, database: &db, state: &state)
+        XCTAssertEqual(outcome.pulledItems, 1)
+        XCTAssertEqual(state.cursor, 7)
+        XCTAssertEqual(db.card(id: remote.id)?.title, "From Peer")
+        XCTAssertEqual(state.revisions[remote.id], 1)
+    }
+
+    /// 自己上一轮上传的回声(revision 未超过本地已知)是空操作:
+    /// 游标前进但不计入"拉取 N 条"——否则用户删一条会看到"拉取 1 上传 1"。
+    func testPullEchoOfOwnPushIsNotCounted() async throws {
+        var (db, card, _) = sampleDatabase()
+        var state = RowSyncState()
+        state.revisions[card.id] = 3 // 本端已知 rev 3(自己刚推上去的)
+        let sealed = try sealedBody(.card(card))
+
+        MockURLProtocol.handler = { [card, sealed] request in
+            let body = """
+            {"headSeq":9,"changes":[{"seq":9,"uuid":"\(card.id.uuidString)","op":"upsert","revision":3,
+             "bodyB64":"\(sealed)","kind":1,"modifiedMs":1000.0}]}
+            """
+            return self.respond(body, request: request)
+        }
+        let outcome = try await RowSync.pull(client: makeClient(), token: "t", vaultId: "v1",
+                                             key: key, database: &db, state: &state)
+        XCTAssertEqual(outcome.pulledItems, 0, "回声空操作不计入拉取计数")
+        XCTAssertEqual(state.cursor, 9, "游标照常前进")
+    }
+
+    func testPullPurgeRemovesLocally() async throws {
+        var (db, card, _) = sampleDatabase()
+        var state = RowSyncState()
+        state.revisions[card.id] = 1
+        state.dirtyUpserts[card.id] = 2000 // 本地未上行的编辑也要一并丢弃(删除胜)
+
+        MockURLProtocol.handler = { [card] request in
+            let body = """
+            {"headSeq":9,"changes":[{"seq":9,"uuid":"\(card.id.uuidString)","op":"purge","revision":2,"deleted":true}]}
+            """
+            return self.respond(body, request: request)
+        }
+        _ = try await RowSync.pull(client: makeClient(), token: "t", vaultId: "v1",
+                                   key: key, database: &db, state: &state)
+        XCTAssertNil(db.card(id: card.id))
+        XCTAssertNil(state.dirtyUpserts[card.id], "删除胜:本地未上行修改一并丢弃")
+        XCTAssertNil(state.revisions[card.id])
+    }
+
+    func testPullRekeySignal() async throws {
+        var db = PasswordDatabase()
+        var state = RowSyncState()
+        MockURLProtocol.handler = { request in
+            let body = """
+            {"headSeq":11,"changes":[{"seq":11,"uuid":"","op":"rekey","revision":2}]}
+            """
+            return self.respond(body, request: request)
+        }
+        do {
+            _ = try await RowSync.pull(client: makeClient(), token: "t", vaultId: "v1",
+                                       key: key, database: &db, state: &state)
+            XCTFail("must throw rekey signal")
+        } catch let signal as RowSyncRekeySignal {
+            XCTAssertEqual(signal.passwordVersion, 2)
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+    }
+
+    func testPushNotFoundDropsLocalItem() async throws {
+        var (db, card, _) = sampleDatabase()
+        var state = RowSyncState()
+        state.markDirty(uuid: card.id, modifiedMs: 1000)
+
+        MockURLProtocol.handler = { [card] request in
+            let body = """
+            {"results":[{"uuid":"\(card.id.uuidString)","status":"not_found","deletedAt":123.0}]}
+            """
+            return self.respond(body, request: request)
+        }
+        _ = try await RowSync.push(client: makeClient(), token: "t", vaultId: "v1",
+                                   key: key, database: &db, state: &state)
+        XCTAssertNil(db.card(id: card.id), "缺席即删除:本地丢弃,绝不重插")
+        XCTAssertFalse(state.hasPendingWork)
+    }
+
+    func testPushConflictAdoptsNewerRemote() async throws {
+        var (db, card, _) = sampleDatabase()
+        var state = RowSyncState()
+        state.markDirty(uuid: card.id, modifiedMs: 1000) // 本地 modified=1000
+
+        var remote = card
+        remote.title = "Peer Wins"
+        remote.modified = 9000 // 对端更新 → 采纳
+        let sealed = try sealedBody(.card(remote))
+
+        MockURLProtocol.handler = { [card, sealed] request in
+            let body = """
+            {"results":[{"uuid":"\(card.id.uuidString)","status":"conflict",
+             "current":{"revision":4,"bodyB64":"\(sealed)"}}]}
+            """
+            return self.respond(body, request: request)
+        }
+        _ = try await RowSync.push(client: makeClient(), token: "t", vaultId: "v1",
+                                   key: key, database: &db, state: &state)
+        XCTAssertEqual(db.card(id: card.id)?.title, "Peer Wins")
+        XCTAssertNil(state.dirtyUpserts[card.id], "对端新 → 清脏收敛")
+        XCTAssertEqual(state.revisions[card.id], 4)
+    }
+
+    /// 条目体加密的 AAD 绑定:同一密文搬到别的 uuid 下解不开(行搬运防护)。
+    func testCipherAadBindsUuid() throws {
+        var card = Card()
+        card.title = "AAD"
+        let plaintext = DatabaseItemCodec.xmlData(.card(card))
+        let sealed = try RowSyncCipher.encrypt(plaintext, key: key, uuid: card.id)
+        XCTAssertNotNil(RowSyncCipher.decrypt(sealed, key: key, uuid: card.id))
+        XCTAssertNil(RowSyncCipher.decrypt(sealed, key: key, uuid: UUID()), "uuid 不匹配必须解密失败")
     }
 }

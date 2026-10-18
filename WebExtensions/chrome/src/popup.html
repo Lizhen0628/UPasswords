@@ -16,6 +16,18 @@
         li.item .title { font-weight: 600; }
         li.item .user { color: #666; font-size: 12px; }
         .panel { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+        /* .panel 的 display:flex 会盖过 UA 的 [hidden],必须显式压制——
+           否则邮箱验证与主密码两块永远同页堆叠 */
+        [hidden] { display: none !important; }
+        .step { font-weight: 600; font-size: 13px; }
+        button.vault-row {
+            display: flex; flex-direction: column; gap: 2px; text-align: left;
+            padding: 8px 10px; border: 1px solid rgba(128, 128, 128, 0.4);
+            border-radius: 8px; background: transparent; color: inherit;
+            font: inherit; cursor: pointer;
+        }
+        button.vault-row:hover { background: rgba(128, 128, 128, 0.15); }
+        button.vault-row .count { color: #888; font-size: 12px; font-weight: 400; }
         .panel input, .panel select {
             font: inherit; padding: 7px 10px; border-radius: 8px;
             border: 1px solid rgba(128, 128, 128, 0.4); background: transparent; color: inherit;
@@ -42,8 +54,9 @@
     <div class="host" id="host">…</div>
     <div id="status" class="muted"></div>
 
-    <!-- 邮箱验证码登录(独立数据通路,不依赖桌面 App) -->
+    <!-- 第 1 页:邮箱验证(独立数据通路,不依赖桌面 App) -->
     <div class="panel" id="loginBox" hidden>
+        <div class="step" id="loginStepTitle"></div>
         <input type="email" id="email" autocomplete="off" placeholder="邮箱">
         <div class="row">
             <input type="text" id="code" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="验证码">
@@ -52,8 +65,21 @@
         <button id="loginButton" type="button">登录</button>
     </div>
 
-    <!-- 主密码解锁(每次解锁都从云端拉最新信封+库体) -->
+    <!-- 第 2 页:选择密码库;新账户无库时转为创建表单 -->
+    <div class="panel" id="vaultBox" hidden>
+        <div class="step" id="vaultStepTitle"></div>
+        <div id="vaultList"></div>
+        <div id="createVaultForm" hidden>
+            <input type="text" id="newVaultName" autocomplete="off" placeholder="库名（如 Main）">
+            <input type="password" id="newVaultPassword" autocomplete="new-password" placeholder="主密码">
+            <input type="password" id="newVaultPasswordConfirm" autocomplete="new-password" placeholder="确认主密码">
+            <button id="createVaultButton" type="button">创建密码库</button>
+        </div>
+    </div>
+
+    <!-- 第 3 页:主密码解锁(每次解锁都从云端拉最新信封+条目) -->
     <div class="panel" id="unlockBox" hidden>
+        <div class="step" id="unlockStepTitle"></div>
         <input type="password" id="masterPassword" autocomplete="off" placeholder="主密码">
         <button id="unlockButton" type="button">解锁</button>
     </div>

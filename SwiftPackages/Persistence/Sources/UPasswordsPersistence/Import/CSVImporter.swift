@@ -51,7 +51,7 @@ public struct CSVImporter: ImportFormat {
         for row in rows {
             func col(_ i: Int?) -> String { i.map { $0 < row.count ? row[$0] : "" } ?? "" }
             if col(nameIdx).isEmpty && col(loginIdx).isEmpty && col(pwIdx).isEmpty { continue }
-            var card = Card(id: db.nextItemId())
+            var card = Card()
             card.title = col(nameIdx).isEmpty ? (col(loginIdx).isEmpty ? "—" : col(loginIdx)) : col(nameIdx)
             card.symbol = "key"
             card.color = "gray"

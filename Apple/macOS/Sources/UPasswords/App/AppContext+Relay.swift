@@ -28,15 +28,38 @@ extension AppContext {
 
     // MARK: - 登录与启用
 
+    /// 登录成功后的会话收尾:先自撤销本机旧令牌的会话(同一设备反复登录
+    /// 不再堆积多条同名会话),再保存新会话。撤销失败只留痕不阻塞——
+    /// 服务端旧会话 90 天自然过期。
+    private func relayAdoptSession(_ session: RelayClient.Session, email: String) async {
+        if let oldToken = relay.token(email: email), oldToken != session.token {
+            do {
+                try await relayClient.revokeOwnSession(token: oldToken)
+                Log.info("sync", "relay stale session self-revoked (email length \(email.count))")
+            } catch {
+                Log.debug("sync", "relay stale session revoke failed (ignored): \(error)")
+            }
+        }
+        relay.storeSession(token: session.token, email: email)
+    }
+
     /// 发送登录验证码(设置页「发送验证码」)。
-    func relaySendCode(email: String) async {
+    /// - Returns: 重发冷却秒数(成功=60;429=服务端 Retry-After;其他失败=0 不倒计时)
+    @discardableResult
+    func relaySendCode(email: String) async -> Int {
         do {
             try await relayClient.requestCode(email: email)
             Log.info("sync", "relay code requested (email length \(email.count))")
             AppToast.shared.show(L10n.t("relay_code_sent_toast"))
+            return 60
+        } catch RelayClient.RelayError.rateLimited(let wait) {
+            Log.warn("sync", "relay code rate limited (retry after \(wait)s)")
+            AppToast.shared.show(RelayClient.RelayError.rateLimited(retryAfter: wait).localizedDescription)
+            return max(wait, 1)
         } catch {
             Log.warn("sync", "relay code request failed: \(error)")
             AppToast.shared.show(error.localizedDescription)
+            return 0
         }
     }
 
@@ -52,8 +75,9 @@ extension AppContext {
                 return
             }
             let device = Host.current().localizedName ?? "Mac"
-            let session = try await relayClient.verify(email: email, code: code, deviceName: device)
-            relay.storeSession(token: session.token, email: email)
+            let session = try await relayClient.verify(email: email, code: code,
+                                                       deviceName: device, platform: .macos)
+            await relayAdoptSession(session, email: email)
             Log.info("sync", "relay login ok userId=\(session.userId.prefix(8))… expires=\(session.expiresAt)")
             try await relayEnableForCurrentVault(token: session.token, email: email)
         } catch {
@@ -62,7 +86,9 @@ extension AppContext {
         }
     }
 
-    /// 登记当前库并上报信封(登录后自动调用;也可为已登录账户的其他库单独启用)。
+    /// 登记当前库并绑定(登录后自动调用;也可为已登录账户的其他库单独启用)。
+    /// v7:创建即携带初始信封;绑定即全量上行由随后的一轮 sync 完成
+    /// (快照基线为空 → 全部条目进脏集合),失败不回滚——下轮自愈。
     private func relayEnableForCurrentVault(token: String, email: String) async throws {
         guard phase == .unlocked else {
             throw SyncError.notConfigured
@@ -76,36 +102,55 @@ extension AppContext {
         let vaultId: String
         if let registered {
             vaultId = registered.vaultId
+            // 认领须验密:本地主密码必须能解开该库信封且与会话库密钥一致。
+            // 不验密的认领会让两端在同一座库里各持各的 VEK——互相拉不开
+            // 对方条目还被静默丢弃/撞冲突,"都在同步却互不相通"且无任何报错
+            // (真实事故)。验不开不静默绑定:亮出接管/覆盖修复入口收敛。
+            if let detail = try? await relayClient.getVault(token: token, vaultId: vaultId),
+               let remoteEnvelope = detail.envelope {
+                let claimedVek = try? DatabaseCipher.unwrapVaultKey(remoteEnvelope, password: password)
+                if claimedVek != vaultKey {
+                    Log.warn("sync", "relay claim \(databaseName): master password mismatch with vault envelope — takeover required")
+                    relay.setBinding(RelayBinding(email: email, vaultId: vaultId, vaultName: databaseName),
+                                     database: databaseName)
+                    relay.recordPasswordVersion(registered.passwordVersion, database: databaseName)
+                    relayStateChanged()
+                    syncRemoteUnreadable = true
+                    promptAdoptRemotePassword()
+                    AppToast.shared.show(L10n.t("relay_claim_password_mismatch"))
+                    return
+                }
+            }
+            // 无信封(极旧库)或详情拉取失败(网络抖动):无从校验,按原行为
+            // 认领,下轮同步自愈
         } else {
-            vaultId = try await relayClient.createVault(token: token, name: databaseName)
+            vaultId = try await relayClient.createVault(token: token, name: databaseName, envelope: envelope)
         }
         relay.setBinding(RelayBinding(email: email, vaultId: vaultId, vaultName: databaseName),
                          database: databaseName)
-        let changedAt = DatabaseCipher.envelopeChangedAt(envelope) ?? Date()
-        _ = try await relayClient.putEnvelope(token: token, vaultId: vaultId,
-                                              envelope: envelope, changedAt: changedAt)
         // 绑定即记录版本基准(认领旧登记用其现值),避免下一轮被误判为"密码已被他机修改"
         relay.recordPasswordVersion(registered?.passwordVersion ?? 1, database: databaseName)
+        relayStateChanged()
         AppToast.shared.show(L10n.t("relay_login_ok_toast"))
         Log.info("sync", "relay enabled for \"\(databaseName)\" vault=\(vaultId.prefix(8))…")
-        // 绑定即推库体镜像与双哈希:服务端自此持有独立副本,新设备凭账户即可
-        // 在线恢复(不依赖任何网盘配置)。失败不回滚绑定——下轮同步自愈。
-        if let vaultKey {
-            do {
-                let cipher = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
-                await relayPushBody(cipher: cipher)
-                await relayReportHashes(cipher: cipher)
-            } catch {
-                Log.warn("sync", "relay enable body push failed: \(error)")
-            }
-        } else {
-            Log.warn("sync", "relay enable body push skipped: no vault key in session")
-        }
+        // 绑定即全量上行:重置行同步状态(快照基线清空 → 全部条目视为脏)
+        resetRowSyncForFreshBinding()
+        Task { await sync(auto: true) }
     }
 
-    /// 登出:清本机令牌与当前库绑定(账户与网盘文件不动)。
+    /// 登出:先在服务端吊销本机会话(令牌即刻作废),再清本机令牌与当前库绑定
+    /// (账户与网盘文件不动)。服务端撤销失败仍继续本地登出——令牌已在本地销毁。
     func relayLogout() async {
+        if let token = relay.token(database: databaseName) {
+            do {
+                try await relayClient.revokeOwnSession(token: token)
+                Log.info("sync", "relay logout: session self-revoked")
+            } catch {
+                Log.warn("sync", "relay logout: session revoke failed (continuing): \(error)")
+            }
+        }
         relay.logout(database: databaseName)
+        relayStateChanged()
         AppToast.shared.show(L10n.t("relay_logout_ok_toast"))
     }
 
@@ -116,8 +161,10 @@ extension AppContext {
     func relayLoginOnly(email: String, code: String) async -> Bool {
         do {
             let device = Host.current().localizedName ?? "Mac"
-            let session = try await relayClient.verify(email: email, code: code, deviceName: device)
-            relay.storeSession(token: session.token, email: email)
+            let session = try await relayClient.verify(email: email, code: code,
+                                                       deviceName: device, platform: .macos)
+            await relayAdoptSession(session, email: email)
+            relayStateChanged()
             Log.info("sync", "relay login (onboarding) ok userId=\(session.userId.prefix(8))…")
             return true
         } catch {
@@ -170,27 +217,12 @@ extension AppContext {
             let record = try await relayClient.getVault(token: token, vaultId: binding.vaultId)
             relay.recordPasswordVersion(record.passwordVersion, database: databaseName)
             return record
+        } catch RelayClient.RelayError.unauthorized {
+            handleSessionExpired()
+            return nil
         } catch {
             Log.warn("sync", "relay registry fetch failed: \(error)")
             return nil
-        }
-    }
-
-    /// 推送本地信封到注册表(改密/自愈;失败仅记日志,网盘副本仍在)。
-    func relayPushEnvelope() async {
-        guard let binding = relay.binding(database: databaseName),
-              let token = relay.token(database: databaseName),
-              let envelope = store.envelopeData(for: databaseName) else { return }
-        let changedAt = DatabaseCipher.envelopeChangedAt(envelope) ?? Date()
-        do {
-            let outcome = try await relayClient.putEnvelope(
-                token: token, vaultId: binding.vaultId, envelope: envelope, changedAt: changedAt)
-            if case .accepted(let version, _) = outcome {
-                relay.recordPasswordVersion(version, database: databaseName)
-            }
-            Log.info("sync", "relay envelope pushed (\(envelope.count)B, outcome=\(outcome))")
-        } catch {
-            Log.warn("sync", "relay envelope push failed: \(error)")
         }
     }
 
@@ -204,34 +236,6 @@ extension AppContext {
         } catch {
             // 自愈性改名,失败不影响功能;留痕即可
             Log.debug("sync", "relay session rename failed: \(error)")
-        }
-    }
-
-    func relayReportHashes(cipher: Data) async {
-        guard let binding = relay.binding(database: databaseName),
-              let token = relay.token(database: databaseName) else { return }
-        do {
-            try await relayClient.putHashes(
-                token: token, vaultId: binding.vaultId,
-                cipherSha256: SyncConflict.sha256Hex(cipher),
-                xmlSha256: SyncConflict.sha256Hex(database.xmlData()))
-            Log.debug("sync", "relay hashes reported")
-        } catch {
-            Log.warn("sync", "relay hash report failed: \(error)")
-        }
-    }
-
-    /// 库体密文副本推送(standalone Safari 扩展数据通路):网盘上传成功后
-    /// 镜像到服务端 R2。失败不阻塞同步(副本缺失只影响扩展,下轮自愈)。
-    func relayPushBody(cipher: Data) async {
-        guard let binding = relay.binding(database: databaseName),
-              let token = relay.token(database: databaseName) else { return }
-        do {
-            try await relayClient.putBody(token: token, vaultId: binding.vaultId, cipher: cipher)
-        } catch RelayClient.RelayError.quotaExceeded {
-            Log.warn("sync", "relay body push skipped: quota exceeded (vault=\(databaseName) size=\(cipher.count))")
-        } catch {
-            Log.warn("sync", "relay body push failed: \(error)")
         }
     }
 
@@ -292,6 +296,7 @@ extension AppContext {
         do {
             try await relayClient.deleteVault(token: token, vaultId: binding.vaultId, code: code)
             relay.setBinding(nil, database: databaseName)
+            relayStateChanged()
             Log.info("sync", "relay vault unbound \"\(databaseName)\"")
             AppToast.shared.show(L10n.t("relay_unbind_ok_toast"))
         } catch {
@@ -307,6 +312,7 @@ extension AppContext {
         do {
             try await relayClient.deregister(token: token, code: code)
             relay.setBinding(nil, database: databaseName)
+            relayStateChanged()
             Log.warn("sync", "relay account deregistered (email length \(binding.email.count))")
             AppToast.shared.show(L10n.t("relay_deregister_ok_toast"))
         } catch {
@@ -335,11 +341,12 @@ extension AppContext {
             let device = Host.current().localizedName ?? "Mac"
             let session = try await relayClient.transferVault(
                 token: token, vaultId: binding.vaultId, email: newEmail, code: code,
-                currentCode: currentCode, deviceName: device)
-            relay.storeSession(token: session.token, email: newEmail)
+                currentCode: currentCode, deviceName: device, platform: .macos)
+            await relayAdoptSession(session, email: newEmail)
             relay.setBinding(
                 RelayBinding(email: newEmail, vaultId: binding.vaultId, vaultName: binding.vaultName),
                 database: databaseName)
+            relayStateChanged()
             Log.info("sync", "relay vault transferred to new email (vault=\(binding.vaultId.prefix(8))…)")
             AppToast.shared.show(L10n.t("relay_transfer_ok_toast"))
             return true
@@ -367,17 +374,36 @@ extension AppContext {
 
     // MARK: - 解锁版本检查(信封先行)
 
+    /// 会话失效(401):令牌过期/被其他设备撤销/账户已注销。此时绑定已是
+    /// 本地残影(服务端可能连库都不存在了)——原地登出并提示重新登录,
+    /// 否则客户端会永远拿着死令牌静默失败,用户以为还登录着。
+    func handleSessionExpired() {
+        guard relay.binding(database: databaseName) != nil else { return }
+        Log.warn("sync", "relay session expired/revoked — clearing binding, re-login required")
+        relay.logout(database: databaseName)
+        syncState = .disabled
+        relayStateChanged()
+        AppToast.shared.show(L10n.t("relay_session_expired_toast"))
+    }
+
     /// 解锁后异步检查注册表密码版本:版本前进且会话密码解不开远端新信封 →
     /// 他机改密,本机强制锁定并换入新信封,用户须以新密码解锁
     /// (本机即改密端时会话密码可解新信封,仅追平本地副本,不锁)。
     func checkRelayPasswordVersion() async {
         guard phase == .unlocked, let binding = relay.binding(database: databaseName),
               let token = relay.token(database: databaseName) else { return }
-        guard let record = try? await relayClient.getVault(token: token, vaultId: binding.vaultId) else {
+        let record: RelayClient.VaultRecord?
+        do {
+            record = try await relayClient.getVault(token: token, vaultId: binding.vaultId)
+        } catch RelayClient.RelayError.unauthorized {
+            handleSessionExpired()
+            return
+        } catch {
             // 改密检测入口:网络失败留痕,否则「他机改密为何没触发锁定」无从排查
             Log.debug("sync", "relay password-version check fetch failed (network/offline)")
             return
         }
+        guard let record else { return }
         let known = relay.knownPasswordVersion(database: databaseName) ?? record.passwordVersion
         relay.recordPasswordVersion(record.passwordVersion, database: databaseName)
         guard record.passwordVersion > known, let envelope = record.envelope else { return }

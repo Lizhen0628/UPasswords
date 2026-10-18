@@ -268,7 +268,7 @@ struct AddMenuButton: View {
     /// 按模板实例化新卡并进入编辑表单(与模板选择器的行为一致)。
     private func addTemplate(_ id: Int) {
         guard let spec = Templates.spec(id: id) else { return }
-        var m = EditCardModel(card: Templates.makeCard(from: spec, id: ctx.newCardId()))
+        var m = EditCardModel(card: Templates.makeCard(from: spec))
         m.isNew = true
         Log.info("ui", "add draft template=\(id) cardId=\(m.card.id)")
         ctx.editDraft = m

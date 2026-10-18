@@ -8,6 +8,20 @@ on:
 jobs:
   worker-test:
     runs-on: ubuntu-latest
+    services:
+      # v7 集成测试直连真实 MariaDB(vitest workers-pool 不支持 mysql2)
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: root-test-pw
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      UPW_TEST_DB_ADMIN_URL: mysql://root:root-test-pw@127.0.0.1:3306/mysql
+      UPW_TEST_DB_URL: mysql://upw_app:ci-test-pw@127.0.0.1:3306/upasswords_test
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
@@ -26,7 +40,7 @@ jobs:
       - name: Typecheck
         working-directory: Cloud/worker
         run: npm run typecheck
-      - name: Test (vitest + miniflare D1)
+      - name: Test (vitest + MariaDB service)
         working-directory: Cloud/worker
         run: npm test
 

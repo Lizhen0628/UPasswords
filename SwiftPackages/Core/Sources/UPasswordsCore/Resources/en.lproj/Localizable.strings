@@ -96,7 +96,6 @@
 "cloud_database_not_found" = "Database not found in the cloud";
 "cloud_prompt" = "Cloud:";
 "cloud_restore_password_hint" = "The cloud database is encrypted with the master password set on the device that created it.";
-"cloud_restore_no_mirror_suffix" = " (no server copy yet)";
 "cloud_restore_empty_hint" = "No vaults under this account yet. Create a new one below, or import a .upw file pair from another device.";
 "cloud_restore_loading_hint" = "Loading vaults from your account…";
 "cloud_restore_server_list_hint" = "Vaults under your account are listed automatically. Restore needs the master password set on the device that created the vault.";
@@ -152,7 +151,7 @@
 "database_restored_message" = "Database restored";
 "database_saved_message" = "Database saved to:";
 "database_setup_item_1" = "Create a new database and set a password for it";
-"database_setup_item_2" = "Restore database from your account";
+"database_setup_item_2" = "Restore from the cloud";
 "database_setup_item_3" = "Restore database from a local file";
 "database_setup_title" = "Database Setup";
 "database_title" = "Database";
@@ -756,7 +755,6 @@
 "ios_label_color_section" = "Color";
 "ios_label_name_prompt" = "Label name";
 "ios_labels_section_title" = "Labels";
-"ios_local_only_hint" = "Your data stays on this device";
 "ios_lock_setup_hint" = "Create a master password to get started";
 "ios_lock_unlock_hint" = "Enter your master password to unlock the vault";
 "ios_mask_passwords_toggle" = "Mask passwords by default";
@@ -891,9 +889,19 @@
 
 /* iOS setup: restore from iCloud */
 "ios_cloud_checking_text" = "Checking iCloud Drive…";
-"ios_cloud_restore_hint_fmt" = "Found %d encrypted vault(s) in iCloud Drive";
+"ios_cloud_restore_hint_fmt" = "Found %d encrypted vault(s) in the cloud";
 "ios_cloud_db_picker" = "Cloud vault";
-"ios_cloud_restore_button" = "Restore from iCloud";
+"ios_cloud_restore_button" = "Restore from cloud";
+"ios_setup_choose_title" = "Set up your vault";
+"ios_setup_choose_hint" = "Choose how to get started";
+"ios_setup_create_title" = "Create new vault";
+"ios_setup_create_hint" = "Create a brand-new encrypted vault on this device";
+"ios_setup_import_title" = "Import from file";
+"ios_setup_import_hint" = "Restore from a .upw/.upwkey file pair exported elsewhere";
+"ios_setup_restore_title" = "Restore from cloud";
+"ios_setup_restore_hint" = "Download a vault from this account";
+"ios_setup_back_button" = "Back";
+"ios_setup_vault_name_placeholder" = "Vault name";
 "ios_cloud_restoring_text" = "Restoring…";
 "ios_or_create_new_hint" = "Or create a new vault below";
 "ios_syncing_text" = "Syncing…";
@@ -994,8 +1002,16 @@
 "relay_logout_button" = "Sign Out";
 "relay_enabled_label" = "Cloud sync enabled for this vault";
 "relay_code_sent_toast" = "Verification code sent — check your inbox";
+"relay_resend_fmt" = "Resend (%ds)";
 "relay_login_ok_toast" = "Signed in — cloud sync enabled";
 "relay_logout_ok_toast" = "Signed out of cloud sync";
+"relay_session_expired_toast" = "Cloud sync session expired — please sign in again";
+"relay_claim_password_mismatch" = "This device master password does not match the cloud vault — take over with the vault password, or overwrite the cloud with this device";
+"sync_result_latest" = "Already up to date";
+"sync_result_fmt" = "Synced — %d pulled · %d pushed";
+"sync_in_progress_toast" = "Sync already in progress";
+"relay_device_current_badge" = "This device";
+"relay_device_last_active_fmt" = "Last active %@";
 "relay_error_rate_limited" = "Too many attempts, please try later";
 "relay_error_session_expired" = "Session expired, please sign in again";
 "relay_error_quota" = "Vault count limit reached";

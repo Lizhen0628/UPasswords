@@ -118,8 +118,14 @@ public enum PasswordStore {
             localizedReason: L10n.t("touch_id_unlock_reason")
         ) { ok, error in
             if ok {
-                Log.debug("keychain", "Touch ID ok → reading biometric item")
-                // 复用已评估的 context 读取 ACL 项:钥匙串不再二次弹窗
+                Log.debug("keychain", "Touch ID ok → reading password copy")
+                // 门禁已过,优先读普通副本:部分系统版本上读 ACL 项会再同步
+                // 触发一次生物识别(双弹窗,极端时主线程卡死被看门狗杀),
+                // 普通副本可静默读取,保证全程只弹一次。无副本再回退 ACL 项。
+                if let plain = loadPassword(databaseName: databaseName) {
+                    completion(plain)
+                    return
+                }
                 completion(loadPassword(databaseName: databaseName, biometric: true, context: ctx))
             } else {
                 Log.warn("keychain", "Touch ID denied: \(error?.localizedDescription ?? "unknown")")

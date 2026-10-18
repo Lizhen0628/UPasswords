@@ -15,42 +15,33 @@ import Foundation
 ///     <file name>base64</file>
 ///     <icon source>base64</icon>        ← 本项目扩展:卡片图标(website/custom/url/builtin)
 ///   </card>
-///   <ghost id time/>
 /// </database>
 /// ```
+///
+/// v7:`id` 属性为 UUID 字符串(客户端生成,行级同步条目身份);
+/// 无 `<ghost>` 元素——本地删除即移除,删除事实由服务端条目表缺席承载
+/// (Cloud/DESIGN.md §6.6)。
 public struct PasswordDatabase: Codable, Equatable {
     public init() {}
 
     public var labels: [CardLabel] = []
     public var cards: [Card] = []
-    public var ghosts: [Ghost] = []
 
     // MARK: - Item accessors
 
-    public func card(id: Int) -> Card? { cards.first { $0.id == id } }
-    public func label(id: Int) -> CardLabel? { labels.first { $0.id == id } }
+    public func card(id: UUID) -> Card? { cards.first { $0.id == id } }
+    public func label(id: UUID) -> CardLabel? { labels.first { $0.id == id } }
 
     public var activeCards: [Card] { cards.filter { !$0.template && !$0.trashed } }
     public var templateCards: [Card] { cards.filter { $0.template } }
-
-    public func isUsedItemId(_ id: Int) -> Bool {
-        cards.contains { $0.id == id } || labels.contains { $0.id == id } || ghosts.contains { $0.id == id }
-    }
-
-    /// Fresh item id (max + 1, skipping used ids).
-    public mutating func nextItemId() -> Int {
-        var id = 1
-        while isUsedItemId(id) { id += 1 }
-        return id
-    }
 
     // MARK: - Factory
 
     /// New database with the default labels and 15 built-in templates.
     public static func createDefault(now: Date = Date()) -> PasswordDatabase {
         var db = PasswordDatabase()
-        for (key, id, type) in Templates.defaultLabelKeys {
-            var l = CardLabel(id: id, name: L10n.db(key))
+        for (key, type) in Templates.defaultLabelKeys {
+            var l = CardLabel(name: L10n.db(key))
             l.type = type
             l.timeStamp = now.millis
             db.labels.append(l)
@@ -59,52 +50,37 @@ public struct PasswordDatabase: Codable, Equatable {
         return db
     }
 
-    // MARK: - Merge (XDatabase.mergeWithDatabase:)
+    // MARK: - Merge(整库 LWW 合并:导入恢复等场景;同步收敛走 DatabaseItemCodec 逐条裁决)
 
-    /// Item-level merge for sync convergence: newest `modified` wins; tombstone
-    /// (ghost) suppresses resurrection of items deleted on the other peer.
+    /// Item-level merge: newest `modified`/`timeStamp` wins(本地不早于对端则保留本地)。
     public mutating func merge(with other: PasswordDatabase) {
-        let ghostIds = Set(other.ghosts.map(\.id)).union(ghosts.map(\.id))
-
         var byLabel = Dictionary(uniqueKeysWithValues: labels.map { ($0.id, $0) })
-        for l in other.labels where !ghostIds.contains(l.id) {
+        for l in other.labels {
             if let mine = byLabel[l.id], mine.timeStamp >= l.timeStamp { continue }
             byLabel[l.id] = l
         }
-        labels = byLabel.values.sorted { $0.id < $1.id }
+        labels = byLabel.values.sorted { $0.id.uuidString < $1.id.uuidString }
 
         var byCard = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0) })
-        for c in other.cards where !ghostIds.contains(c.id) {
+        for c in other.cards {
             if let mine = byCard[c.id], mine.modified >= c.modified { continue }
             byCard[c.id] = c
         }
-        cards = byCard.values.sorted { $0.id < $1.id }
-
-        var byGhost = Dictionary(uniqueKeysWithValues: ghosts.map { ($0.id, $0) })
-        for g in other.ghosts { byGhost[g.id] = g }
-        ghosts = byGhost.values.sorted { $0.id < $1.id }
+        cards = byCard.values.sorted { $0.id.uuidString < $1.id.uuidString }
     }
 
-    /// Registers a tombstone and removes the item (deleteCardWithId:).
-    public mutating func deleteCardPermanently(id: Int, now: Date = Date()) {
+    /// 永久删除条目(回收站二段式的第二段):本地直接移除,不留标记;
+    /// 行级同步的删除事实由服务端条目表缺席承载(§6.6)。
+    public mutating func deleteCardPermanently(id: UUID) {
         cards.removeAll { $0.id == id }
-        var g = byIdGhost(id) ?? Ghost(id: id, time: now.millis)
-        g.time = now.millis
-        upsertGhost(g)
     }
 
-    /// Registers a tombstone and removes the label (deleteCardLabel:).
-    /// 不登记墓碑的话,合并时会被仍持有该标签的远端副本复活(删了又回来)。
-    public mutating func deleteLabelPermanently(id: Int, now: Date = Date()) {
+    /// 永久删除标签(同上,无墓碑)。
+    public mutating func deleteLabelPermanently(id: UUID) {
         labels.removeAll { $0.id == id }
-        var g = byIdGhost(id) ?? Ghost(id: id, time: now.millis)
-        g.time = now.millis
-        upsertGhost(g)
-    }
-
-    private func byIdGhost(_ id: Int) -> Ghost? { ghosts.first { $0.id == id } }
-    private mutating func upsertGhost(_ g: Ghost) {
-        if let i = ghosts.firstIndex(where: { $0.id == g.id }) { ghosts[i] = g } else { ghosts.append(g) }
+        for i in cards.indices {
+            cards[i].labelIds.removeAll { $0 == id }
+        }
     }
 }
 
@@ -114,65 +90,72 @@ extension PasswordDatabase {
     public func xmlData() -> Data {
         var s = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<database>\n"
         for l in labels {
-            s += "    <label name=\"\(XMLEscape(l.name))\" id=\"\(l.id)\""
-            if let t = l.type, !t.isEmpty { s += " type=\"\(XMLEscape(t))\"" }
-            if let c = l.color { s += " color=\"\(XMLEscape(c))\"" }
-            if l.pinToTop { s += " pin_to_top=\"true\"" }
-            // 条件落盘 time(毫秒):0(存量库未编辑过)不写属性,XML 字节与
-            // 历史版本一致,不扰动 xmlSha256 同步基线;>0(编辑/新建)才写,
-            // 令对端 merge 的 LWW 判定有真实时间可比。
-            // 毫秒按 Int64 整数输出:Double 直接插值大数会变科学计数法(1.7e+12)
-            if l.timeStamp > 0 { s += " time=\"\(Int64(l.timeStamp))\"" }
-            s += " />\n"
+            s += Self.labelElement(l) + "\n"
         }
+        let labelNames = Dictionary(uniqueKeysWithValues: labels.map { ($0.id, $0.name) })
         for c in cards {
-            s += "    <card title=\"\(XMLEscape(c.title))\" id=\"\(c.id)\""
-            if let sym = c.symbol, !sym.isEmpty { s += " symbol=\"\(XMLEscape(sym))\"" }
-            if let col = c.color { s += " color=\"\(XMLEscape(col))\"" }
-            if c.template { s += " template=\"true\"" }
-            s += " autofill=\"\(c.autofillEnabled ? "on" : "off")\""
-            if c.favorite { s += " favorite=\"true\"" }
-            if c.archived { s += " archived=\"true\"" }
-            if c.trashed { s += " trashed=\"true\"" }
-            if let e = c.expiration { s += " expiration=\"\(Int(e))\"" }
-            if let r = c.reminder { s += " reminder=\"\(Int(r))\"" }
-            s += " created=\"\(Int(c.created))\" modified=\"\(Int(c.modified))\">\n"
-            for f in c.fields {
-                s += "        <field name=\"\(XMLEscape(f.name))\" type=\"\(f.type.rawValue)\" autofill=\"\(f.autofill.rawValue)\""
-                if !f.history.isEmpty {
-                    let json = Self.historyJSON(f.history)
-                    s += " history=\"\(XMLEscape(json))\""
-                }
-                s += ">\(XMLEscape(f.value))</field>\n"
-            }
-            if !c.notes.isEmpty {
-                s += "        <note>\(XMLEscape(c.notes))</note>\n"
-            }
-            for lid in c.labelIds {
-                if let l = label(id: lid) {
-                    s += "        <label name=\"\(XMLEscape(l.name))\" id=\"\(l.id)\" />\n"
-                }
-            }
-            for img in c.images {
-                s += "        <image name=\"\(XMLEscape(img.name))\">\(img.data.base64EncodedString())</image>\n"
-            }
-            for file in c.files {
-                s += "        <file name=\"\(XMLEscape(file.name))\">\(file.data.base64EncodedString())</file>\n"
-            }
-            if let src = c.iconSource, !src.isEmpty {
-                if let d = c.iconData, !d.isEmpty {
-                    s += "        <icon source=\"\(XMLEscape(src))\">\(d.base64EncodedString())</icon>\n"
-                } else {
-                    s += "        <icon source=\"\(XMLEscape(src))\" />\n"
-                }
-            }
-            s += "    </card>\n"
-        }
-        for g in ghosts {
-            s += "    <ghost id=\"\(g.id)\" time=\"\(Int(g.time))\" />\n"
+            s += Self.cardElement(c, labelNames: labelNames) + "\n"
         }
         s += "</database>\n"
         return Data(s.utf8)
+    }
+
+    /// 单个标签的 XML 元素行(条目级编解码与整库序列化共用)。
+    public static func labelElement(_ l: CardLabel) -> String {
+        var s = "    <label name=\"\(XMLEscape(l.name))\" id=\"\(l.id.uuidString)\""
+        if let t = l.type, !t.isEmpty { s += " type=\"\(XMLEscape(t))\"" }
+        if let c = l.color { s += " color=\"\(XMLEscape(c))\"" }
+        if l.pinToTop { s += " pin_to_top=\"true\"" }
+        // 条件落盘 time(毫秒):0(存量库未编辑过)不写属性;>0(编辑/新建)才写,
+        // 令对端 LWW 判定有真实时间可比。毫秒按 Int64 整数输出:
+        // Double 直接插值大数会变科学计数法(1.7e+12)
+        if l.timeStamp > 0 { s += " time=\"\(Int64(l.timeStamp))\"" }
+        return s + " />"
+    }
+
+    /// 单个卡片的完整 XML 元素(多行,条目级编解码与整库序列化共用)。
+    /// `labelNames` 供卡内标签引用写出名称(名称仅展示用,同步按 id)。
+    public static func cardElement(_ c: Card, labelNames: [UUID: String] = [:]) -> String {
+        var s = "    <card title=\"\(XMLEscape(c.title))\" id=\"\(c.id.uuidString)\""
+        if let sym = c.symbol, !sym.isEmpty { s += " symbol=\"\(XMLEscape(sym))\"" }
+        if let col = c.color { s += " color=\"\(XMLEscape(col))\"" }
+        if c.template { s += " template=\"true\"" }
+        s += " autofill=\"\(c.autofillEnabled ? "on" : "off")\""
+        if c.favorite { s += " favorite=\"true\"" }
+        if c.archived { s += " archived=\"true\"" }
+        if c.trashed { s += " trashed=\"true\"" }
+        if let e = c.expiration { s += " expiration=\"\(Int(e))\"" }
+        if let r = c.reminder { s += " reminder=\"\(Int(r))\"" }
+        s += " created=\"\(Int(c.created))\" modified=\"\(Int(c.modified))\">\n"
+        for f in c.fields {
+            s += "        <field name=\"\(XMLEscape(f.name))\" type=\"\(f.type.rawValue)\" autofill=\"\(f.autofill.rawValue)\""
+            if !f.history.isEmpty {
+                let json = Self.historyJSON(f.history)
+                s += " history=\"\(XMLEscape(json))\""
+            }
+            s += ">\(XMLEscape(f.value))</field>\n"
+        }
+        if !c.notes.isEmpty {
+            s += "        <note>\(XMLEscape(c.notes))</note>\n"
+        }
+        for lid in c.labelIds {
+            let name = labelNames[lid] ?? ""
+            s += "        <label name=\"\(XMLEscape(name))\" id=\"\(lid.uuidString)\" />\n"
+        }
+        for img in c.images {
+            s += "        <image name=\"\(XMLEscape(img.name))\">\(img.data.base64EncodedString())</image>\n"
+        }
+        for file in c.files {
+            s += "        <file name=\"\(XMLEscape(file.name))\">\(file.data.base64EncodedString())</file>\n"
+        }
+        if let src = c.iconSource, !src.isEmpty {
+            if let d = c.iconData, !d.isEmpty {
+                s += "        <icon source=\"\(XMLEscape(src))\">\(d.base64EncodedString())</icon>\n"
+            } else {
+                s += "        <icon source=\"\(XMLEscape(src))\" />\n"
+            }
+        }
+        return s + "    </card>"
     }
 
     public static func historyJSON(_ entries: [HistoryEntry]) -> String {
@@ -202,7 +185,7 @@ public enum DatabaseXMLError: LocalizedError {
 
 extension PasswordDatabase {
     /// Parses the XML exchange format (also used for the encrypted payload
-    /// inside the database container); also accepts SafeInCloud XML for import.
+    /// inside the database container); also accepts SafeInCloud XML for import。
     public static func parse(_ data: Data) throws -> PasswordDatabase {
         let parser = DBXMLParser()
         let pp = XMLParser(data: data)
@@ -214,7 +197,6 @@ extension PasswordDatabase {
         var db = PasswordDatabase()
         db.labels = parser.labels
         db.cards = parser.cards
-        db.ghosts = parser.ghosts
         return db
     }
 }
@@ -222,10 +204,9 @@ extension PasswordDatabase {
 private let knownFieldTypes = Set(FieldType.allCases.map(\.rawValue))
 private let knownAutofills = Set(Autofill.allCases.map(\.rawValue))
 
-private final class DBXMLParser: NSObject, XMLParserDelegate {
+final class DBXMLParser: NSObject, XMLParserDelegate {
     public var labels: [CardLabel] = []
     public var cards: [Card] = []
-    public var ghosts: [Ghost] = []
     public var failed = false
 
     private var currentCard: Card? = nil
@@ -240,10 +221,10 @@ private final class DBXMLParser: NSObject, XMLParserDelegate {
         case "label":
             if currentCard != nil {
                 // card-level label reference
-                if let idStr = attrs["id"], let id = Int(idStr) {
+                if let idStr = attrs["id"], let id = UUID(uuidString: idStr) {
                     currentCard?.labelIds.append(id)
                 }
-            } else if let idStr = attrs["id"], let id = Int(idStr), let n = attrs["name"] {
+            } else if let idStr = attrs["id"], let id = UUID(uuidString: idStr), let n = attrs["name"] {
                 var l = CardLabel(id: id, name: L10n.resolve(n))
                 l.type = attrs["type"].flatMap { $0.isEmpty ? nil : $0 }
                 l.color = attrs["color"]
@@ -252,7 +233,7 @@ private final class DBXMLParser: NSObject, XMLParserDelegate {
                 labels.append(l)
             }
         case "card":
-            var c = Card(id: Int(attrs["id"] ?? "") ?? 0)
+            var c = Card(id: UUID(uuidString: attrs["id"] ?? "") ?? UUID())
             c.title = L10n.resolve(attrs["title"] ?? "")
             c.symbol = attrs["symbol"]
             c.color = attrs["color"]
@@ -291,10 +272,6 @@ private final class DBXMLParser: NSObject, XMLParserDelegate {
             pendingAttachmentKind = .file
         case "icon":
             pendingIconSource = attrs["source"] ?? ""
-        case "ghost":
-            if let idStr = attrs["id"], let id = Int(idStr) {
-                ghosts.append(Ghost(id: id, time: TimeInterval(attrs["time"].flatMap(Double.init) ?? 0)))
-            }
         default:
             break
         }

@@ -97,7 +97,7 @@ final class PasskeyTests: XCTestCase {
     // MARK: 凭据 JSON 与卡片字段
 
     func testPasskeyCardRoundTrip() {
-        var card = Card(id: 1)
+        var card = Card()
         XCTAssertNil(card.passkey)
         let passkey = Passkey(credentialID: Data([1, 2, 3]), relyingParty: "example.com",
                               userHandle: Data([4, 5]), userName: "liz",

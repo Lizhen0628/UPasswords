@@ -1,4 +1,4 @@
-// 入口:路由、鉴权中间件、能力协商、统一错误/日志、cron 清理。
+// 入口:/v2 路由、Bearer 会话鉴权、能力协商、统一错误/日志、cron 维护。
 // 日志只含方法/路径/状态/耗时/用户 ID 前缀,不含任何请求体与凭据。
 
 import {
@@ -7,28 +7,38 @@ import {
   handleSessionList,
   handleSessionRename,
   handleSessionRevoke,
+  handleSessionSelfRevoke,
   handleVerify,
-  purgeDeregistered,
   type AuthContext,
   type UserRow,
 } from "./auth";
-import { logRequest } from "./db";
+import { exec, logRequest, q1, runWithRequestDb } from "./db";
 import {
-  handleBodyCommit,
-  handleBodyGet,
-  handleBodyPut,
+  handleAttachmentCommit,
+  handleAttachmentDelete,
+  handleAttachmentGet,
+  handleAttachmentPut,
+} from "./attachments";
+import { handleBreachRange } from "./breach";
+import { runMaintenance } from "./maintenance";
+import { handleRekeyAbort, handleRekeyBegin, handleRekeyChunk, handleRekeyCommit } from "./rekey";
+import { handleAdminSitesPut, handleSiteIcon, handleSiteLookup } from "./sites";
+import { handleStats } from "./stats";
+import { ApiError, json, nowMs, numVar, sha256Hex, type Env } from "./util";
+import {
+  handleChangesGet,
+  handleItemsList,
+  handleItemsPost,
+} from "./items";
+import {
   handleCreateVault,
   handleDeleteVault,
-  handleEnvelopePut,
   handleGetVault,
-  handleHashesPut,
   handleListVaults,
   handleRenameVault,
   handleTransferVault,
-  sweepStaleStaging,
+  handleVaultSeq,
 } from "./vaults";
-import { handleStats } from "./stats";
-import { ApiError, json, nowSec, numVar, sha256Hex, type Env } from "./util";
 
 interface RouteCtx {
   env: Env;
@@ -40,14 +50,16 @@ interface RouteCtx {
 function capabilities(): Response {
   return json({
     name: "upasswords-sync",
-    version: 1,
+    version: 2,
     capabilities: [
       "auth.email_code",
       "auth.sessions",
       "vaults.registry",
-      "vaults.envelope",
-      "vaults.hashes",
-      "vaults.body",
+      "vaults.row_sync",
+      "vaults.attachments",
+      "vaults.rekey",
+      "sites.catalog",
+      "breach.range",
       "stats.readonly",
     ],
   });
@@ -61,48 +73,48 @@ function methodNotAllowed(): ApiError {
 async function authenticate(ctx: RouteCtx): Promise<AuthContext> {
   const token = (ctx.request.headers.get("authorization") ?? "").replace(/^Bearer /i, "");
   if (!/^[0-9a-f]{64}$/.test(token)) throw new ApiError(401, "unauthorized");
-  const row = await ctx.env.DB.prepare(
-    "SELECT s.id AS session_id, s.expires_at, s.revoked_at, s.last_seen_at, " +
-      "u.id AS user_id, u.email_hmac, u.email_enc, u.state, u.plan, u.created_at, u.last_login_at " +
+  const row = await q1<{
+    session_id: string;
+    expires_ms: number;
+    revoked_ms: number | null;
+    last_seen_ms: number | null;
+    user_id: string;
+    email_hmc: string;
+    email_enc: string | null;
+    state: string;
+    plan: string;
+    created_ms: number;
+    last_login_ms: number | null;
+  }>(
+    ctx.env,
+    "SELECT s.id AS session_id, s.expires_ms, s.revoked_ms, s.last_seen_ms, " +
+      "u.id AS user_id, u.email_hmc, u.email_enc, u.state, u.plan, u.created_ms, u.last_login_ms " +
       "FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?",
-  )
-    .bind(await sha256Hex(token))
-    .first<{
-      session_id: string;
-      expires_at: number;
-      revoked_at: number | null;
-      last_seen_at: number | null;
-      user_id: string;
-      email_hmac: string;
-      email_enc: string | null;
-      state: string;
-      plan: string;
-      created_at: number;
-      last_login_at: number | null;
-    }>();
+    [await sha256Hex(token)],
+  );
   // 吊销/过期/注销统一 401,不泄露具体原因
-  if (!row || row.revoked_at !== null || row.expires_at <= nowSec() || row.state !== "active") {
+  if (!row || row.revoked_ms !== null || row.expires_ms <= nowMs() || row.state !== "active") {
     throw new ApiError(401, "unauthorized");
   }
-  const now = nowSec();
+  const now = nowMs();
   const ttlDays = numVar(ctx.env, "SESSION_TTL_DAYS", 90);
-  // 滑动续期节流:每次请求都 UPDATE 会放大 D1 写量;距上次记录不足 1 小时
-  // 跳过(会话有效期 90 天,1 小时的续期滞后无影响;过期校验仍按已加载行)
-  if (now - (row.last_seen_at ?? 0) >= 3600) {
-    await ctx.env.DB.prepare(
-      "UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?",
-    )
-      .bind(now, now + ttlDays * 86400, row.session_id)
-      .run();
+  // 滑动续期节流:每次请求都 UPDATE 会放大写量;距上次记录不足 1 小时
+  // 跳过(会话有效期 90 天,1 小时的续期滞后无影响)
+  if (now - (row.last_seen_ms ?? 0) >= 3_600_000) {
+    await exec(ctx.env, "UPDATE sessions SET last_seen_ms = ?, expires_ms = ? WHERE id = ?", [
+      now,
+      now + ttlDays * 86_400_000,
+      row.session_id,
+    ]);
   }
   const user: UserRow = {
     id: row.user_id,
-    email_hmac: row.email_hmac,
+    email_hmc: row.email_hmc,
     email_enc: row.email_enc,
     state: row.state,
     plan: row.plan,
-    created_at: row.created_at,
-    last_login_at: row.last_login_at,
+    created_ms: row.created_ms,
+    last_login_ms: row.last_login_ms,
   };
   ctx.uid = user.id;
   return { user, sessionId: row.session_id };
@@ -113,12 +125,12 @@ async function route(ctx: RouteCtx): Promise<Response> {
   const method = ctx.request.method;
   const auth = () => authenticate(ctx);
 
-  // "/" 与 "/v1" → 能力协商
-  if (segments.length === 0 || (segments.length === 1 && segments[0] === "v1")) {
+  // "/" 与 "/v2" → 能力协商
+  if (segments.length === 0 || (segments.length === 1 && segments[0] === "v2")) {
     if (method !== "GET") throw methodNotAllowed();
     return capabilities();
   }
-  const rest = segments[0] === "v1" ? segments.slice(1) : null;
+  const rest = segments[0] === "v2" ? segments.slice(1) : null;
   if (!rest) throw new ApiError(404, "not_found");
 
   if (rest[0] === "auth") {
@@ -131,6 +143,8 @@ async function route(ctx: RouteCtx): Promise<Response> {
       return handleVerify(ctx.env, ctx.request);
     }
     if (rest[1] === "session" && rest.length === 2) {
+      // PATCH=自命名;DELETE=自撤销(登出/重登收尾,鉴权即身份)
+      if (method === "DELETE") return handleSessionSelfRevoke(ctx.env, await auth());
       if (method !== "PATCH") throw methodNotAllowed();
       return handleSessionRename(ctx.env, ctx.request, await auth());
     }
@@ -148,6 +162,36 @@ async function route(ctx: RouteCtx): Promise<Response> {
     if (method !== "DELETE") throw methodNotAllowed();
     return handleDeregister(ctx.env, ctx.request, await auth());
   }
+  if (rest[0] === "breach" && rest[1] === "range" && rest.length === 3) {
+    if (method !== "GET") throw methodNotAllowed();
+    const startedAt = Date.now();
+    await auth();
+    return handleBreachRange(ctx.env, rest[2], startedAt);
+  }
+  if (rest[0] === "sites") {
+    if (rest[1] === "lookup" && rest.length === 2) {
+      if (method !== "GET") throw methodNotAllowed();
+      await auth();
+      return handleSiteLookup(ctx.env, ctx.request);
+    }
+    if (rest[1] === "icon" && rest.length === 3) {
+      if (method !== "GET") throw methodNotAllowed();
+      await auth();
+      return handleSiteIcon(ctx.env, rest[2]);
+    }
+    throw new ApiError(404, "not_found");
+  }
+  if (rest[0] === "admin") {
+    if (rest[1] === "sites" && rest.length === 2) {
+      if (method !== "POST") throw methodNotAllowed();
+      return handleAdminSitesPut(ctx.env, ctx.request);
+    }
+    if (rest[1] === "stats" && rest.length === 2) {
+      if (method !== "GET") throw methodNotAllowed();
+      return handleStats(ctx.env, ctx.request);
+    }
+    throw new ApiError(404, "not_found");
+  }
   if (rest[0] === "vaults") {
     if (rest.length === 1) {
       if (method === "POST") return handleCreateVault(ctx.env, ctx.request, await auth());
@@ -162,40 +206,63 @@ async function route(ctx: RouteCtx): Promise<Response> {
       if (method === "DELETE") return handleDeleteVault(ctx.env, ctx.request, await auth(), vaultId);
       throw methodNotAllowed();
     }
-    if (rest.length === 3 && rest[2] === "envelope") {
-      if (method !== "PUT") throw methodNotAllowed();
-      return handleEnvelopePut(ctx.env, ctx.request, await auth(), vaultId);
+    if (rest.length === 3 && rest[2] === "seq") {
+      if (method !== "GET") throw methodNotAllowed();
+      return handleVaultSeq(ctx.env, await auth(), vaultId);
     }
-    if (rest.length === 3 && rest[2] === "hashes") {
-      if (method !== "PUT") throw methodNotAllowed();
-      return handleHashesPut(ctx.env, ctx.request, await auth(), vaultId);
+    if (rest.length === 3 && rest[2] === "items") {
+      if (method === "POST") return handleItemsPost(ctx.env, ctx.request, await auth(), vaultId);
+      if (method === "GET") return handleItemsList(ctx.env, ctx.request, await auth(), vaultId);
+      throw methodNotAllowed();
+    }
+    if (rest.length === 3 && rest[2] === "changes") {
+      if (method !== "GET") throw methodNotAllowed();
+      return handleChangesGet(ctx.env, ctx.request, await auth(), vaultId);
     }
     if (rest.length === 3 && rest[2] === "transfer") {
       if (method !== "POST") throw methodNotAllowed();
       return handleTransferVault(ctx.env, ctx.request, await auth(), vaultId);
     }
-    if (rest.length === 3 && rest[2] === "body") {
-      if (method === "GET") return handleBodyGet(ctx.env, await auth(), vaultId);
+    if (rest[2] === "attachments" && rest.length === 4) {
+      const attachUuid = rest[3];
+      if (method === "GET") return handleAttachmentGet(ctx.env, await auth(), vaultId, attachUuid);
+      if (method === "DELETE") return handleAttachmentDelete(ctx.env, await auth(), vaultId, attachUuid);
       if (method === "PUT") {
-        return handleBodyPut(
+        return handleAttachmentPut(
           ctx.env,
           ctx.request,
           await auth(),
           vaultId,
+          attachUuid,
           new URL(ctx.request.url),
         );
       }
       throw methodNotAllowed();
     }
-    if (rest.length === 4 && rest[2] === "body" && rest[3] === "commit") {
+    if (rest[2] === "attachments" && rest.length === 5 && rest[4] === "commit") {
       if (method !== "POST") throw methodNotAllowed();
-      return handleBodyCommit(ctx.env, ctx.request, await auth(), vaultId);
+      return handleAttachmentCommit(ctx.env, ctx.request, await auth(), vaultId, rest[3]);
+    }
+    if (rest[2] === "rekey") {
+      if (rest.length === 4 && rest[3] === "begin") {
+        if (method !== "POST") throw methodNotAllowed();
+        return handleRekeyBegin(ctx.env, ctx.request, await auth(), vaultId);
+      }
+      if (rest.length === 5 && rest[4] === "chunk") {
+        if (method !== "POST") throw methodNotAllowed();
+        return handleRekeyChunk(ctx.env, ctx.request, await auth(), vaultId, rest[3]);
+      }
+      if (rest.length === 5 && rest[4] === "commit") {
+        if (method !== "POST") throw methodNotAllowed();
+        return handleRekeyCommit(ctx.env, ctx.request, await auth(), vaultId, rest[3]);
+      }
+      if (rest.length === 4) {
+        if (method !== "DELETE") throw methodNotAllowed();
+        return handleRekeyAbort(ctx.env, await auth(), vaultId, rest[3]);
+      }
+      throw new ApiError(404, "not_found");
     }
     throw new ApiError(404, "not_found");
-  }
-  if (rest[0] === "admin" && rest[1] === "stats" && rest.length === 2) {
-    if (method !== "GET") throw methodNotAllowed();
-    return handleStats(ctx.env, ctx.request);
   }
   throw new ApiError(404, "not_found");
 }
@@ -210,7 +277,7 @@ export default {
     };
     let status = 500;
     try {
-      const response = await route(ctx);
+      const response = await runWithRequestDb(() => route(ctx));
       status = response.status;
       return response;
     } catch (error) {
@@ -237,7 +304,6 @@ export default {
   },
 
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
-    await purgeDeregistered(env);
-    await sweepStaleStaging(env);
+    await runWithRequestDb(() => runMaintenance(env));
   },
 } satisfies ExportedHandler<Env>;

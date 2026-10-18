@@ -8,8 +8,6 @@ extension AppContext {
 
     // MARK: - Card CRUD (DatabaseManager actions)
 
-    func newCardId() -> Int { database.nextItemId() }
-
     func upsertCard(_ card: Card) {
         var c = card
         c.modified = Date().millis
@@ -76,7 +74,7 @@ extension AppContext {
         }
     }
 
-    func trashCard(_ id: Int) {
+    func trashCard(_ id: UUID) {
         guard let i = database.cards.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "trashCard id=\(id) skipped: card not found")
             return
@@ -88,14 +86,14 @@ extension AppContext {
         saveDebounced()
     }
 
-    func deleteCardPermanently(_ id: Int) {
+    func deleteCardPermanently(_ id: UUID) {
         Log.info("ui", "deleteCardPermanently id=\(id)")
         database.deleteCardPermanently(id: id)
         if selectedCardId == id { selectedCardId = nil }
         saveDebounced()
     }
 
-    func restoreCard(_ id: Int) {
+    func restoreCard(_ id: UUID) {
         guard let i = database.cards.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "restoreCard id=\(id) skipped: card not found")
             return
@@ -107,7 +105,7 @@ extension AppContext {
         saveDebounced()
     }
 
-    func archiveCard(_ id: Int) {
+    func archiveCard(_ id: UUID) {
         guard let i = database.cards.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "archiveCard id=\(id) skipped: card not found")
             return
@@ -118,7 +116,7 @@ extension AppContext {
         saveDebounced()
     }
 
-    func unarchiveCard(_ id: Int) {
+    func unarchiveCard(_ id: UUID) {
         guard let i = database.cards.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "unarchiveCard id=\(id) skipped: card not found")
             return
@@ -129,7 +127,7 @@ extension AppContext {
         saveDebounced()
     }
 
-    func toggleFavorite(_ id: Int) {
+    func toggleFavorite(_ id: UUID) {
         guard let i = database.cards.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "toggleFavorite id=\(id) skipped: card not found")
             return
@@ -140,7 +138,7 @@ extension AppContext {
     }
 
     /// Sets the card-level `autofill="on|off"` XML attribute.
-    func setCardAutofill(_ id: Int, on: Bool) {
+    func setCardAutofill(_ id: UUID, on: Bool) {
         guard let i = database.cards.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "setCardAutofill id=\(id) skipped: card not found")
             return
@@ -150,13 +148,13 @@ extension AppContext {
         saveDebounced()
     }
 
-    func duplicateCard(_ id: Int) {
+    func duplicateCard(_ id: UUID) {
         guard let card = database.card(id: id) else {
             Log.warn("ui", "duplicateCard id=\(id) skipped: card not found")
             return
         }
         var copy = card
-        copy.id = newCardId()
+        copy.id = UUID()
         copy.title = card.title
         copy.created = Date().millis
         copy.modified = copy.created
@@ -177,13 +175,13 @@ extension AppContext {
     // MARK: - Label CRUD
 
     func addLabel(name: String, color: String?) {
-        let id = database.nextItemId()
+        let id = UUID()
         database.labels.append(CardLabel(id: id, name: name, color: color, timeStamp: Date().millis))
         Log.info("ui", "addLabel id=\(id) name.len=\(name.count)")
         saveDebounced()
     }
 
-    func renameCardLabel(id: Int, to name: String) {
+    func renameCardLabel(id: UUID, to name: String) {
         guard let i = database.labels.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "renameCardLabel id=\(id) skipped: label not found")
             return
@@ -194,7 +192,7 @@ extension AppContext {
         saveDebounced()
     }
 
-    func setLabelColor(id: Int, color: String?) {
+    func setLabelColor(id: UUID, color: String?) {
         guard let i = database.labels.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "setLabelColor id=\(id) skipped: label not found")
             return
@@ -204,7 +202,7 @@ extension AppContext {
         saveDebounced()
     }
 
-    func toggleLabelPinned(id: Int) {
+    func toggleLabelPinned(id: UUID) {
         guard let i = database.labels.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "toggleLabelPinned id=\(id) skipped: label not found")
             return
@@ -214,7 +212,7 @@ extension AppContext {
         saveDebounced()
     }
 
-    func deleteCardLabel(id: Int) {
+    func deleteCardLabel(id: UUID) {
         Log.info("ui", "deleteCardLabel id=\(id)")
         database.deleteLabelPermanently(id: id)
         for i in database.cards.indices {
@@ -225,7 +223,7 @@ extension AppContext {
     }
 
     /// Sets the labels attached to a card.
-    func setLabels(cardId: Int, labelIds: [Int]) {
+    func setLabels(cardId: UUID, labelIds: [UUID]) {
         guard let i = database.cards.firstIndex(where: { $0.id == cardId }) else {
             Log.warn("ui", "setLabels cardId=\(cardId) skipped: card not found")
             return
@@ -237,8 +235,8 @@ extension AppContext {
     }
 
     /// Creates a label on the fly and assigns it to the card.
-    func addLabelAndAssign(name: String, color: String?, to cardId: Int) {
-        let id = database.nextItemId()
+    func addLabelAndAssign(name: String, color: String?, to cardId: UUID) {
+        let id = UUID()
         database.labels.append(CardLabel(id: id, name: name, color: color, timeStamp: Date().millis))
         guard let i = database.cards.firstIndex(where: { $0.id == cardId }) else {
             Log.warn("ui", "addLabelAndAssign cardId=\(cardId) skipped: card not found (label id=\(id) kept)")

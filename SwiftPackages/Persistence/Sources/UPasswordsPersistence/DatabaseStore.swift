@@ -70,6 +70,24 @@ public final class DatabaseStore {
     /// v2 信封文件路径:库密钥由主密码包裹存放在此(<名>.upwkey)。
     public func keyURL(for name: String) -> URL { databasesDir.appendingPathComponent("\(name).upwkey") }
 
+    /// v7 行级同步游标 sidecar 路径(<名>.upwsync;纯元数据,无敏感值)。
+    public func syncStateURL(for name: String) -> URL { databasesDir.appendingPathComponent("\(name).upwsync") }
+
+    /// 读行级同步状态;无文件/损坏返回全新状态(全量对账自愈)。
+    public func loadSyncState(for name: String) -> RowSyncState {
+        guard let data = try? Data(contentsOf: syncStateURL(for: name)),
+              let state = try? JSONDecoder().decode(RowSyncState.self, from: data) else {
+            return RowSyncState()
+        }
+        return state
+    }
+
+    /// 落盘行级同步状态(游标/revision 映射/脏集合/快照基线)。
+    public func saveSyncState(_ state: RowSyncState, for name: String) {
+        guard let data = try? JSONEncoder().encode(state) else { return }
+        try? data.write(to: syncStateURL(for: name), options: .atomic)
+    }
+
     public var mainDatabaseName: String {
         get { UserDefaults.standard.string(forKey: "db.main") ?? "Main" }
         set { UserDefaults.standard.set(newValue, forKey: "db.main") }

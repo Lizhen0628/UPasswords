@@ -19,7 +19,7 @@ struct TemplatePickerView: View {
                         ForEach(vault.customTemplates) { t in
                             templateRow(title: t.title, symbol: t.symbol, color: t.color) {
                                 var c = t
-                                c.id = vault.nextId
+                                c.id = UUID()
                                 c.template = false
                                 c.created = Date().millis
                                 c.modified = Date().millis
@@ -33,7 +33,7 @@ struct TemplatePickerView: View {
                     Section(group.name) {
                         ForEach(group.items) { item in
                             templateRow(title: item.title, symbol: item.symbol, color: item.color) {
-                                onSelect(Templates.makeCard(from: item.spec, id: vault.nextId))
+                                onSelect(Templates.makeCard(from: item.spec))
                             }
                         }
                     }

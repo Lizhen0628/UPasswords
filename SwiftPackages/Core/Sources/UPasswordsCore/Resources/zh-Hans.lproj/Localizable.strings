@@ -96,7 +96,6 @@
 "cloud_database_not_found" = "云端未找到该密码库";
 "cloud_prompt" = "云端：";
 "cloud_restore_password_hint" = "云端密码库用它加密——请输入创建该密码库时设置的主密码。";
-"cloud_restore_no_mirror_suffix" = "（暂无服务端副本）";
 "cloud_restore_empty_hint" = "账户下还没有密码库。可在下方新建，或从其他设备导入 .upw 文件。";
 "cloud_restore_loading_hint" = "正在从账户获取密码库…";
 "cloud_restore_server_list_hint" = "已自动列出账户下的密码库；输入创建该库时设置的主密码即可还原。";
@@ -152,7 +151,7 @@
 "database_restored_message" = "密码库已还原";
 "database_saved_message" = "密码库保存到：";
 "database_setup_item_1" = "创建新密码库并设置密码";
-"database_setup_item_2" = "从账户在线还原密码库";
+"database_setup_item_2" = "从云端恢复";
 "database_setup_item_3" = "从本地文件还原密码库";
 "database_setup_title" = "初始化密码库";
 "database_title" = "密码库";
@@ -417,9 +416,9 @@
 "restore_button" = "还原";
 "restore_card_command" = "还原";
 "restore_command" = "还原…";
-"restore_from_cloud_button" = "在线恢复";
+"restore_from_cloud_button" = "云端恢复";
 "restore_ok_button" = "恢复并打开";
-"restore_from_cloud_title" = "在线恢复密码库";
+"restore_from_cloud_title" = "云端恢复密码库";
 "restore_from_local_button" = "本地还原";
 "restore_from_local_title" = "从本地文件还原密码库";
 "restore_location_text" = "要复恢复密码库，请选择与之前相同的位置。";
@@ -756,7 +755,6 @@
 "ios_label_color_section" = "颜色";
 "ios_label_name_prompt" = "标签名称";
 "ios_labels_section_title" = "标签";
-"ios_local_only_hint" = "你的数据仅保存在本机";
 "ios_lock_setup_hint" = "创建主密码以开始使用";
 "ios_lock_unlock_hint" = "输入主密码解锁密码库";
 "ios_mask_passwords_toggle" = "默认遮蔽密码";
@@ -891,9 +889,19 @@
 
 /* iOS setup: restore from iCloud */
 "ios_cloud_checking_text" = "正在检查 iCloud 云盘…";
-"ios_cloud_restore_hint_fmt" = "在 iCloud 云盘中发现 %d 个加密密码库";
+"ios_cloud_restore_hint_fmt" = "云端发现 %d 个加密密码库";
 "ios_cloud_db_picker" = "云端密码库";
-"ios_cloud_restore_button" = "从 iCloud 恢复";
+"ios_cloud_restore_button" = "从云端恢复";
+"ios_setup_choose_title" = "设置密码库";
+"ios_setup_choose_hint" = "选择一种方式开始使用";
+"ios_setup_create_title" = "新建密码库";
+"ios_setup_create_hint" = "在这台设备上创建全新的加密密码库";
+"ios_setup_import_title" = "从文件导入";
+"ios_setup_import_hint" = "用其他设备导出的 .upw/.upwkey 文件对恢复";
+"ios_setup_restore_title" = "从云端恢复";
+"ios_setup_restore_hint" = "下载该账户名下的云端密码库";
+"ios_setup_back_button" = "返回";
+"ios_setup_vault_name_placeholder" = "密码库名称";
 "ios_cloud_restoring_text" = "正在恢复…";
 "ios_or_create_new_hint" = "或在下方新建密码库";
 "ios_syncing_text" = "正在同步…";
@@ -994,8 +1002,16 @@
 "relay_logout_button" = "登出";
 "relay_enabled_label" = "此库已启用云同步";
 "relay_code_sent_toast" = "验证码已发送，请查收邮箱";
+"relay_resend_fmt" = "重发 (%ds)";
 "relay_login_ok_toast" = "登录成功，云同步已启用";
 "relay_logout_ok_toast" = "已退出云同步";
+"relay_session_expired_toast" = "云同步登录已失效，请重新登录";
+"relay_claim_password_mismatch" = "本机主密码与该云端密码库不一致——请输入该库主密码接管，或以本机数据覆盖云端";
+"sync_result_latest" = "已是最新";
+"sync_result_fmt" = "同步完成：拉取 %d 条 · 上传 %d 条";
+"sync_in_progress_toast" = "同步进行中，请稍候";
+"relay_device_current_badge" = "本机";
+"relay_device_last_active_fmt" = "最近活跃 %@";
 "relay_error_rate_limited" = "操作过于频繁，请稍后再试";
 "relay_error_session_expired" = "会话已过期，请重新登录";
 "relay_error_quota" = "库数量已达上限";

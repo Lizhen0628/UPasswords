@@ -28,7 +28,7 @@ final class AutoFillModel: ObservableObject {
     @Published var masterInput = ""
     @Published var showUnlockError = false
     @Published private(set) var biometricWorking = false
-    @Published private(set) var pickedID: Int? = nil
+    @Published private(set) var pickedID: UUID? = nil
 
     private var context: ASCredentialProviderExtensionContext?
     private var serviceHosts: [String] = []
@@ -392,7 +392,7 @@ final class AutoFillModel: ObservableObject {
     }
 
     /// 断言后的计数器写回(失败不阻塞本次登录,仅记日志)。
-    private func persistSignCount(_ passkey: Passkey, on cardID: Int) {
+    private func persistSignCount(_ passkey: Passkey, on cardID: UUID) {
         saveMerged(reason: "signCount") { db in
             guard let i = db.cards.firstIndex(where: { $0.id == cardID }) else { return false }
             db.cards[i].setPasskey(passkey)
@@ -422,7 +422,7 @@ final class AutoFillModel: ObservableObject {
                                   userName: identity.userName,
                                   privateKey: pair.privateKey,
                                   signCount: 0, created: Date().millis)
-            var card = Card(id: 0)  // id 在合并闭包内按最新库分配
+            var card = Card()  // id 在合并闭包内按最新库分配
             card.title = identity.relyingPartyIdentifier
             card.symbol = "person.badge.key.fill"
             card.autofillEnabled = true
@@ -435,7 +435,6 @@ final class AutoFillModel: ObservableObject {
             ]
             card.setPasskey(passkey)
             let register: (inout PasswordDatabase) -> Bool = { db in
-                card.id = db.nextItemId()
                 db.cards.append(card)
                 return true
             }

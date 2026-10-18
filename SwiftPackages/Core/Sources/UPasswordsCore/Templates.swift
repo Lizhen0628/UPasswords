@@ -110,15 +110,16 @@ public enum Templates {
 
     public static func spec(id: Int) -> Spec? { all.first { $0.id == id } }
 
-    public static var defaultLabelKeys: [(nameKey: String, id: Int, type: String?)] = [
-        ("busines_label", 1, nil),
-        ("private_label", 2, nil),
-        ("web_accounts_label", 4, "web_accounts"),
+    /// 默认标签(键名 + 类型);v7 标签 id 为 UUID,创建时现场生成。
+    public static var defaultLabelKeys: [(nameKey: String, type: String?)] = [
+        ("busines_label", nil),
+        ("private_label", nil),
+        ("web_accounts_label", "web_accounts"),
     ]
 
     /// Instantiates a card from a template spec (template=false — a real card).
-    public static func makeCard(from spec: Spec, id: Int, now: Date = Date()) -> Card {
-        var card = Card(id: id)
+    public static func makeCard(from spec: Spec, now: Date = Date()) -> Card {
+        var card = Card()
         card.title = L10n.db(spec.titleKey)
         card.symbol = spec.symbol
         card.color = "gray"
@@ -133,7 +134,7 @@ public enum Templates {
 
     /// A template card instance (template=true) stored inside the database.
     public static func makeTemplateCard(_ spec: Spec) -> Card {
-        var c = makeCard(from: spec, id: spec.id)
+        var c = makeCard(from: spec)
         c.template = true
         return c
     }

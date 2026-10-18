@@ -11,7 +11,7 @@ extension AppContext {
     // MARK: - 触发入口
 
     /// upsertCard 后调用:卡片有网址、且没有用户自定义图标时后台抓取。
-    func scheduleIconFetchAfterSave(cardId: Int) {
+    func scheduleIconFetchAfterSave(cardId: UUID) {
         guard let card = database.card(id: cardId) else { return }
         guard !card.website.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard card.iconData == nil, card.iconSource == nil || card.iconIsFromWebsite else { return }
@@ -20,12 +20,12 @@ extension AppContext {
 
     /// 用户动作（图标选择器「获取网站图标」/右键开启网站图标）:立即抓取,
     /// 不受会话级防抖限制,但不覆盖用户上传/URL 图标。
-    func fetchWebsiteIconNow(cardId: Int) {
+    func fetchWebsiteIconNow(cardId: UUID) {
         Task { [weak self] in await self?.fetchWebsiteIcon(cardId: cardId, force: true) }
     }
 
     /// 右键「使用网站图标」开关;开启时顺带触发一次抓取。
-    func toggleUseWebsiteIcon(cardId: Int) {
+    func toggleUseWebsiteIcon(cardId: UUID) {
         guard let i = database.cards.firstIndex(where: { $0.id == cardId }) else {
             Log.warn("ui", "toggleUseWebsiteIcon cardId=\(cardId) skipped: card not found")
             return
@@ -68,7 +68,7 @@ extension AppContext {
     /// 都失败 → 保留默认符号（只记会话防抖,不重试至下次解锁）。
     ///
     /// - Parameter force: 用户显式触发时 true,绕过会话防抖;仍不覆盖上传/URL 图标。
-    private func fetchWebsiteIcon(cardId: Int, force: Bool) async {
+    private func fetchWebsiteIcon(cardId: UUID, force: Bool) async {
         guard let i = database.cards.firstIndex(where: { $0.id == cardId }) else { return }
         let card = database.cards[i]
         guard let host = IconService.host(fromWebsite: card.website) else {

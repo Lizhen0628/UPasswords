@@ -42,29 +42,6 @@ struct RootView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: vault.locked)
         .overlay(alignment: .bottom) { toastOverlay }
-        .confirmationDialog(
-            L10n.t("sync_conflict_title"),
-            isPresented: Binding(
-                get: { vault.pendingSyncConflict != nil },
-                set: { if !$0 { vault.postponeSyncConflict() } }
-            ),
-            titleVisibility: .visible,
-            presenting: vault.pendingSyncConflict
-        ) { _ in
-            Button(L10n.t("sync_conflict_use_local")) {
-                Task { await vault.resolveSyncConflict(useLocal: true) }
-            }
-            Button(L10n.t("sync_conflict_use_remote"), role: .destructive) {
-                Task { await vault.resolveSyncConflict(useLocal: false) }
-            }
-            Button(L10n.t("sync_conflict_postpone"), role: .cancel) { vault.postponeSyncConflict() }
-        } message: { conflict in
-            VStack {
-                Text(L10n.t("sync_conflict_text"))
-                Text(String(format: L10n.t("sync_conflict_local_state"), conflict.localCards, conflict.localLabels))
-                Text(String(format: L10n.t("sync_conflict_remote_state"), conflict.remoteCards, conflict.remoteLabels))
-            }
-        }
     }
 
     @ViewBuilder

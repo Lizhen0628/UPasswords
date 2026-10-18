@@ -6,7 +6,7 @@ import UPasswordsCore
 
 enum CardFilter: Hashable {
     case all, passkeys, otp, wifi, trash, favorites, finance, notes, expiring, archived
-    case label(Int, String)
+    case label(UUID, String)
 
     var title: String {
         switch self {

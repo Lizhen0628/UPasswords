@@ -10,7 +10,7 @@ final class TemplatesTests: XCTestCase {
 
     func testMakeCardInstantiatesFields() {
         let spec = Templates.spec(id: 102)!
-        let card = Templates.makeCard(from: spec, id: 500)
+        let card = Templates.makeCard(from: spec)
         XCTAssertFalse(card.template)
         XCTAssertFalse(card.title.isEmpty)
         XCTAssertEqual(card.fields.count, 4)

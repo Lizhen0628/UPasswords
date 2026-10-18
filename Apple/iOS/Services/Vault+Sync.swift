@@ -4,16 +4,15 @@ import CryptoKit
 import UPasswordsCore
 import UPasswordsPersistence
 
-// MARK: - iOS 云同步:手动与自动同步/冲突裁决(与 macOS 同一套判定语义)
+// MARK: - iOS 行级云同步(v7,与 macOS AppContext+Sync 同语义)
 //
-// 同步通道为账户中继(注册表信封决胜 + 服务端库体副本);冲突判定复用
-// Persistence 的 SyncConflict 基线比较与 PasswordDatabase.merge 收敛合并;
-// 本体经库密钥加解密(v2 信封),基线哈希存共享 defaults。
+// 拉取(游标增量) → 上行(脏集合 CAS);冲突逐条 LWW 自动收敛,无整库弹窗。
+// 本体仍经库密钥整库加密落盘(.upw),行级密文只在同步链路上存在。
 
 extension Vault {
     // MARK: 同步进行态
 
-    /// 同步状态(仅驱动 UI 呈现;conflict 以 pendingSyncConflict 单独承载)。
+    /// 同步状态(仅驱动 UI 呈现)。
     enum SyncPhase: Equatable {
         case idle
         case syncing
@@ -23,9 +22,18 @@ extension Vault {
     /// 最小自动同步间隔(秒),防止高频误触发。
     static let minAutoSyncSeconds = 30
 
-    /// 信封 changedAt 的时钟偏差容差(秒):差值不超过它视为同一时刻,
-    /// 不触发信封决胜(两端时钟不可能完全同步)。
-    private static let envelopeClockSkewTolerance: TimeInterval = 1
+    // MARK: 行级同步状态
+
+    /// RowSyncKey 形态的会话 VEK(无密钥返回 nil,同步前置检查兜底)。
+    private var rowSyncKey: RowSyncKey? {
+        vaultKey.map { RowSyncKey(raw: $0.withUnsafeBytes { Data($0) }) }
+    }
+
+    /// 绑定新库时重置行同步状态:快照基线清空 → 下轮 sync 把全部条目当脏上行。
+    func resetRowSyncForFreshBinding() {
+        rowSync = RowSyncState()
+        store.saveSyncState(rowSync, for: databaseName)
+    }
 
     // MARK: 接管远端
 
@@ -34,26 +42,8 @@ extension Vault {
         case success, wrongPassword
     }
 
-    /// 双端各自独立建库会产生不同库密钥;以云端信封为准收敛库身份
-    /// (本地本体换密钥重写 + 信封重裹,此后双端同身份,不再分歧)。
-    private func joinRemoteVaultIdentity(_ remoteVEK: SymmetricKey) {
-        let differs = vaultKey.map {
-            $0.withUnsafeBytes { Data($0) } != remoteVEK.withUnsafeBytes { Data($0) }
-        } ?? true
-        guard differs else { return }
-        do {
-            vaultKey = remoteVEK
-            try store.save(database, name: databaseName, vaultKey: remoteVEK)
-            try store.rewrap(name: databaseName, vaultKey: remoteVEK, newPassword: password)
-            Log.warn("sync", "ios vault identity converged to remote envelope (local body re-keyed)")
-        } catch {
-            Log.error("sync", "ios vault identity convergence failed: \(error)")
-        }
-    }
-
     /// 远端用「其他设备改后的新主密码」加密时的接管流程:
-    /// 输入新密码 → 解注册表信封收敛库身份 → 合并服务端库体 → 本地以新密码
-    /// 重加密落盘并更新钥匙串 → 上传合并结果。
+    /// 输入新密码 → 解注册表信封收敛库身份 → 行级全量重建 → 本地以新密码落盘。
     @discardableResult
     func adoptRemotePassword(_ newPassword: String) async -> AdoptResult {
         guard let binding = relay.binding(database: databaseName),
@@ -75,21 +65,16 @@ extension Vault {
             if PasswordStore.hasBiometricItem(databaseName: databaseName) {
                 PasswordStore.savePasswordForBiometric(newPassword, databaseName: databaseName)
             }
-            if let body = try? await relayClient.getBody(token: token, vaultId: binding.vaultId),
-               DatabaseCipher.isV2Container(body),
-               let plain = try? DatabaseCipher.decryptBody(body, vaultKey: remoteVEK),
-               let remote = try? PasswordDatabase.parse(plain) {
-                var merged = database
-                merged.merge(with: remote)
-                database = merged
-                try store.save(merged, name: databaseName, vaultKey: remoteVEK)
-                let out = try DatabaseCipher.encryptBody(merged.xmlData(), vaultKey: remoteVEK)
-                try await relayClient.putBody(token: token, vaultId: binding.vaultId, cipher: out)
-                await relayReportHashes(cipher: out)
-                recordSyncBaseline()
-            }
+            var state = rowSync
+            let rebuilt = try await RowSync.fullRebuild(
+                client: relayClient, token: token, vaultId: binding.vaultId,
+                key: RowSyncKey(raw: remoteVEK.withUnsafeBytes { Data($0) }), state: &state)
+            database = rebuilt
+            try store.save(rebuilt, name: databaseName, vaultKey: remoteVEK)
+            rowSync = state
+            store.saveSyncState(state, for: databaseName)
             syncRemoteUnreadable = false
-            Log.info("sync", "ios adopted new password via envelope (identity converged, body merged)")
+            Log.info("sync", "ios adopted new password via envelope (rows rebuilt: \(rebuilt.cards.count) cards)")
             return .success
         } catch {
             Log.warn("sync", "ios adopt remote password failed: \(error)")
@@ -97,21 +82,25 @@ extension Vault {
         }
     }
 
-    /// 远端不可解密(旧主密码加密/数据损坏)时的修复:以当前密码重传本地库并重设基线。
-    /// 会丢弃云端现有内容,UI 层须先经用户确认。
+    /// 远端不可解密(旧主密码加密/数据损坏)时的修复:以本地 VEK + 本地信封
+    /// 跑一轮 rekey(原子替换服务端全部条目)。会丢弃云端现有内容,UI 层须先经用户确认。
     func overwriteUnreadableRemote() async {
         guard let binding = relay.binding(database: databaseName),
-              let token = relay.token(database: databaseName), let vaultKey else { return }
+              let token = relay.token(database: databaseName),
+              let key = vaultKey,
+              let envelope = store.envelopeData(for: databaseName) else { return }
         syncState = .syncing
         do {
-            let out = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
-            try await relayClient.putBody(token: token, vaultId: binding.vaultId, cipher: out)
-            await relayReportHashes(cipher: out)
-            await relayPushEnvelope()
-            recordSyncBaseline()
+            var state = rowSync
+            try await RowSync.rekey(
+                client: relayClient, token: token, vaultId: binding.vaultId,
+                database: database, newKey: RowSyncKey(raw: key.withUnsafeBytes { Data($0) }),
+                newEnvelope: envelope, state: &state)
+            rowSync = state
+            store.saveSyncState(state, for: databaseName)
             syncRemoteUnreadable = false
             syncState = .idle
-            Log.info("sync", "ios sync \"\(databaseName)\": overwrote unreadable remote (\(out.count)B)")
+            Log.info("sync", "ios sync \"\(databaseName)\": overwrote unreadable remote (rows re-keyed)")
             showToast(L10n.t("last_sync_completed_prompt") + " "
                 + (lastSync?.formatted(date: .abbreviated, time: .shortened) ?? ""))
         } catch {
@@ -121,17 +110,30 @@ extension Vault {
         }
     }
 
-    // MARK: 基线
+    // MARK: 改密的云端接力
 
-    /// 记录本次成功同步的基线哈希与完成时间,供下次同步做冲突判定。
-    /// 调用前提:此刻 `database` 即为刚上传(或确认与远端一致)的内容。
-    private func recordSyncBaseline() {
-        let contentHash = SyncConflict.sha256Hex(database.xmlData())
-        d.set(contentHash, forKey: DefaultsKey.baselineLocalXML(database: databaseName))
-        d.set(contentHash, forKey: DefaultsKey.baselineRemoteXML(database: databaseName))
-        d.set(Date().timeIntervalSince1970, forKey: DefaultsKey.lastSync(database: databaseName))
-        lastSync = Date()
-        Log.debug("sync", "ios baseline recorded for \"\(databaseName)\"")
+    /// rekey 全量换入(§6.5)。本端即改密端,成功后清游标全量对账,失败下轮自愈。
+    func relayRekeyUpload(newKey: SymmetricKey, new newPassword: String) async {
+        guard let binding = relay.binding(database: databaseName),
+              let token = relay.token(database: databaseName) else { return }
+        do {
+            guard let envelope = try? DatabaseCipher.wrapVaultKey(newKey, password: newPassword) else {
+                throw DatabaseCipher.CipherError(message: L10n.t("sync_error"))
+            }
+            try store.saveEnvelope(envelope, for: databaseName)
+            var state = rowSync
+            try await RowSync.rekey(
+                client: relayClient, token: token, vaultId: binding.vaultId,
+                database: database, newKey: RowSyncKey(raw: newKey.withUnsafeBytes { Data($0) }),
+                newEnvelope: envelope, state: &state)
+            rowSync = state
+            store.saveSyncState(state, for: databaseName)
+            relay.recordPasswordVersion(relay.knownPasswordVersion(database: databaseName).map { $0 + 1 } ?? 2,
+                                        database: databaseName)
+            Log.info("sync", "ios rekey uploaded for \"\(databaseName)\"")
+        } catch {
+            Log.warn("sync", "ios rekey upload deferred (will retry via next sync): \(error)")
+        }
     }
 
     // MARK: 自动同步 ticker
@@ -147,14 +149,12 @@ extension Vault {
         Log.debug("sync", "ios auto-sync ticker installed")
     }
 
-    /// 到期检查:启用自动同步、relay 已绑定、非同步中才发起;
-    /// 有未决冲突时不再发起新同步(冲突弹窗由 RootView 常驻呈现,裁决后恢复)。
+    /// 到期检查:启用自动同步、relay 已绑定、非同步中才发起。
     func autoSyncTick() {
         guard !locked, autoSyncEnabled,
               relay.binding(database: databaseName) != nil,
               relay.token(database: databaseName) != nil,
               syncState != .syncing else { return }
-        if pendingSyncConflict != nil { return }
         let interval = TimeInterval(max(autoSyncSeconds, Self.minAutoSyncSeconds))
         if let last = lastSync, Date().timeIntervalSince(last) < interval { return }
         // 失败退避:距上次尝试(无论成败)不足间隔时不重试,
@@ -166,240 +166,121 @@ extension Vault {
 
     // MARK: 同步主流程
 
-    /// sync: — 注册表信封决胜/冲突判定/merge/库体提交(账户中继通道)。
-    /// auto = true 为自动同步:静默执行(成功不打 toast,失败只记日志与状态)。
-    func sync(auto: Bool = false) async {
+    /// sync: — 拉取(游标增量) → 上行(脏集合 CAS),§6.2/§6.3。
+    /// auto = true 为自动同步:静默执行;手动同步(下拉刷新/立即同步)反馈
+    /// 结果:已是最新 / 拉取·上传条数 / 失败原因。
+    /// - Returns: 本次结果;未执行(锁屏/未绑定/已在同步中)返回 nil
+    @discardableResult
+    func sync(auto: Bool = false) async -> RowSyncOutcome? {
         // 锁屏状态下禁止同步:库已清空、密码已抹,继续走会以空密码加密空库
         // 覆盖云端(真实事故:锁屏态同步把空库传上了服务端)
         guard !locked else {
             Log.warn("sync", "ios sync skipped: vault locked")
-            return
+            return nil
         }
-        // 通道唯一:账户中继(注册表信封 + 服务端库体副本)
-        guard let apiBinding = relay.binding(database: databaseName),
-              let apiToken = relay.token(database: databaseName) else {
+        guard let binding = relay.binding(database: databaseName),
+              let token = relay.token(database: databaseName) else {
             syncState = .idle
-            Log.debug("sync", "ios sync skipped: relay not bound (account not logged in or vault not bound)")
+            Log.debug("sync", "ios sync skipped: relay not bound")
             if !auto { showToast(L10n.t("sync_disabled_state")) }
-            return
+            return nil
         }
         guard !syncInFlight else {
             Log.debug("sync", "ios sync skipped: already in flight")
-            return
+            if !auto { showToast(L10n.t("sync_in_progress_toast")) }
+            return nil
+        }
+        guard let key = rowSyncKey else {
+            syncState = .failed(L10n.t("sync_error"))
+            Log.error("sync", "ios sync aborted: no vault key in session")
+            return nil
         }
         syncInFlight = true
         syncState = .syncing
         lastSyncAttempt = Date()
         defer { syncInFlight = false }
-        Log.info("sync", "ios sync \"\(databaseName)\" started (relay\(auto ? ", auto" : ""))")
+        Log.info("sync", "ios sync \"\(databaseName)\" started (rows\(auto ? ", auto" : ""))")
         persist()
         do {
-            // 注册表(强一致):信封决胜 + 密码版本高水位 + 内容短路
-            var sessionKey = vaultKey
-            let knownVersionBeforeFetch = relay.knownPasswordVersion(database: databaseName) ?? 0
+            // 改密版本检查(信封唯一入口 = 建库/rekey,版本前进即他端改密)
             if let record = await relayRegistryRecord() {
-                let localChangedAt = store.envelopeData(for: databaseName)
-                    .flatMap { DatabaseCipher.envelopeChangedAt($0) } ?? .distantPast
-                let remoteChangedAt = record.envelopeChangedAt ?? .distantPast
-                if let remoteEnvelope = record.envelope,
-                   remoteChangedAt.timeIntervalSince(localChangedAt) > Self.envelopeClockSkewTolerance {
-                    if let remoteVEK = try? DatabaseCipher.unwrapVaultKey(remoteEnvelope, password: password) {
-                        joinRemoteVaultIdentity(remoteVEK)
-                        sessionKey = remoteVEK
-                        Log.info("sync", "ios relay envelope adopted (remote changedAt newer)")
-                    } else if record.passwordVersion > knownVersionBeforeFetch {
-                        // 版本前进 + 会话密码解不开新信封 = 他机改密 → 强制锁定换新密码
-                        Log.warn("sync", "ios sync detected remote password change (version → \(record.passwordVersion))")
-                        forceLockForRemotePasswordChange(remoteEnvelope)
-                        return
+                let known = relay.knownPasswordVersion(database: databaseName) ?? record.passwordVersion
+                if record.passwordVersion > known, let envelope = record.envelope {
+                    if (try? DatabaseCipher.unwrapVaultKey(envelope, password: password)) != nil {
+                        try? store.saveEnvelope(envelope, for: databaseName)
+                        Log.info("sync", "ios relay envelope adopted (password version advanced by this device)")
                     } else {
-                        syncRemoteUnreadable = true
-                        syncState = .failed(L10n.t("sync_remote_unreadable_error"))
-                        Log.error("sync", "ios relay envelope unwrap failed")
-                        if !auto { showToast(L10n.t("sync_remote_unreadable_error")) }
-                        return
+                        Log.warn("sync", "ios sync detected remote password change (version → \(record.passwordVersion))")
+                        forceLockForRemotePasswordChange(envelope)
+                        return nil
                     }
-                } else if localChangedAt.timeIntervalSince(remoteChangedAt) > Self.envelopeClockSkewTolerance,
-                          store.envelopeData(for: databaseName) != nil {
-                    // 本地信封更新(含注册表尚无信封的首次接入):自愈推送
-                    Task { await relayPushEnvelope() }
-                }
-                // 内容短路:本地明文 XML == 注册表内容 → 本轮零库体往返
-                if let remoteXml = record.xmlSha256,
-                   remoteXml == SyncConflict.sha256Hex(database.xmlData()) {
-                    lastSync = Date()
-                    syncState = .idle
-                    Log.info("sync", "ios relay short-circuit: content unchanged — skipping body round-trip")
-                    if !auto { showToast(L10n.t("last_sync_completed_prompt")) }
-                    return
                 }
             }
-            // 库体拉取(服务端副本);无副本 = 该库首次接入,本轮直接上传本地
-            var remoteData: Data?
+            var state = rowSync
+            state.recomputeDirty(database: database)
+            var db = database
+            var outcome = RowSyncOutcome()
             do {
-                remoteData = try await relayClient.getBody(token: apiToken, vaultId: apiBinding.vaultId)
-            } catch RelayClient.RelayError.notFound {
-                remoteData = nil
-                Log.info("sync", "ios relay body absent — uploading local as first copy")
-            }
-            var local = database
-            if let remoteData {
-                let plain: Data
-                do {
-                    // 无库密钥说明信封环节已失败
-                    guard let sessionKey else { throw SyncError.wrongPassword }
-                    plain = try DatabaseCipher.decryptBody(remoteData, vaultKey: sessionKey)
-                } catch {
-                    // 远端仍是旧主密码加密(或已损坏):不进入合并,挂起修复入口由用户裁决
-                    syncRemoteUnreadable = true
-                    syncState = .failed(L10n.t("sync_remote_unreadable_error"))
-                    Log.error("sync", "ios sync \"\(databaseName)\": remote undecryptable — overwrite option offered")
-                    if !auto { showToast(L10n.t("sync_remote_unreadable_error")) }
-                    return
+                let pulled = try await RowSync.pull(
+                    client: relayClient, token: token, vaultId: binding.vaultId,
+                    key: key, database: &db, state: &state)
+                outcome.pulledItems = pulled.pulledItems
+            } catch RelayClient.RelayError.cursorExpired {
+                // 游标落后越过保留地板:全量重建(快照+差量)
+                Log.warn("sync", "ios cursor expired — full rebuild")
+                db = try await RowSync.fullRebuild(
+                    client: relayClient, token: token, vaultId: binding.vaultId,
+                    key: key, state: &state)
+                outcome.pulledItems = db.cards.count + db.labels.count
+            } catch let signal as RowSyncRekeySignal {
+                // 对端 rekey:旧 VEK 解不开新密文,强制锁定接管
+                Log.warn("sync", "ios peer rekey detected (version → \(signal.passwordVersion)) — force locking")
+                if let record = await relayRegistryRecord(), let envelope = record.envelope {
+                    forceLockForRemotePasswordChange(envelope)
                 }
-                let remote = try PasswordDatabase.parse(plain)
-                Log.info("sync", "ios remote: \(remote.cards.count) cards, \(remote.labels.count) labels; local: \(local.cards.count) cards")
-                let localHash = SyncConflict.sha256Hex(local.xmlData())
-                // 远端比较用「明文内容哈希」而非密文字节:密文每次上传都换随机
-                // nonce,同样内容重传后哈希必变,会被误判为远端有修改(双端乒乓)
-                let remoteHash = SyncConflict.sha256Hex(remote.xmlData())
-                let verdict = SyncConflict.evaluate(
-                    localXMLHash: localHash,
-                    remoteXMLHash: remoteHash,
-                    baselines: SyncConflict.Baselines(
-                        localXMLHash: d.string(forKey: DefaultsKey.baselineLocalXML(database: databaseName)),
-                        remoteXMLHash: d.string(forKey: DefaultsKey.baselineRemoteXML(database: databaseName))))
-                guard verdict != .conflict else {
-                    // 本地与云端自上次同步后都有修改:交给用户决定覆盖方向
-                    Log.warn("sync", "ios conflict \"\(databaseName)\": local and remote both changed — asking user")
-                    pendingSyncConflict = PendingSyncConflict(
-                        remoteData: remoteData,
-                        localCards: local.cards.count,
-                        localLabels: local.labels.count,
-                        remoteCards: remote.cards.count,
-                        remoteLabels: remote.labels.count)
-                    syncState = .idle
-                    return
-                }
-                // 双方自基线起均无变化:纯轮询命中,跳过上传(防无意义重传乒乓)
-                if localHash == d.string(forKey: DefaultsKey.baselineLocalXML(database: databaseName)),
-                   remoteHash == d.string(forKey: DefaultsKey.baselineRemoteXML(database: databaseName)) {
-                    lastSync = Date()
-                    syncState = .idle
-                    Log.info("sync", "ios no changes since baseline — skipping upload")
-                    return
-                }
-                Log.info("sync", "ios no conflict — merging")
-                local.merge(with: remote)
-                database = local
-                persist()
-                // 合并后内容与远端一致(本地原本落后,纯拉取场景):本地无可贡献,
-                // 不回传——回传只会刷新密文 nonce,徒增对端"远端变更"误判
-                if SyncConflict.sha256Hex(database.xmlData()) == remoteHash {
-                    recordSyncBaseline()
-                    syncState = .idle
-                    Log.info("sync", "ios merged content equals remote — skipping upload")
-                    if !auto { showToast(L10n.t("last_sync_completed_prompt")) }
-                    return
-                }
-            } else {
-                Log.info("sync", "ios no remote database yet — uploading local")
+                syncState = .idle
+                return nil
             }
-            guard let vaultKey else {
-                Log.error("sync", "ios sync aborted: no vault key in session")
-                syncState = .failed(L10n.t("sync_error"))
-                return
-            }
-            // 读-改-写护栏:提交前再取一次,窗口内有他机提交先并入
-            if let seen = remoteData,
-               let fresh = try? await relayClient.getBody(token: apiToken, vaultId: apiBinding.vaultId),
-               fresh != seen,
-               let freshPlain = try? DatabaseCipher.decryptBody(fresh, vaultKey: vaultKey),
-               let freshRemote = try? PasswordDatabase.parse(freshPlain) {
-                var merged = database
-                merged.merge(with: freshRemote)
-                database = merged
-                persist()
-                Log.warn("sync", "ios relay body changed mid-sync — merged fresh remote (\(freshRemote.cards.count) cards) before commit")
-            }
-            // 上传字节必须在护栏合并之后生成:先加密再合并会把合并前的旧快照
-            // 推上云端,基线(合并内容)与云端实际内容脱节,窗口内他机拿到丢改数据
-            let out = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
-            try await relayClient.putBody(token: apiToken, vaultId: apiBinding.vaultId, cipher: out)
-            await relayReportHashes(cipher: out)
-            recordSyncBaseline()
+            let pushed = try await RowSync.push(
+                client: relayClient, token: token, vaultId: binding.vaultId,
+                key: key, database: &db, state: &state)
+            outcome.pushedItems = pushed.pushedItems
+            outcome.conflictsResolved = pushed.conflictsResolved
+            database = db
+            rowSync = state
+            store.saveSyncState(state, for: databaseName)
+            persist()
             syncRemoteUnreadable = false
+            let finished = Date()
+            d.set(finished.timeIntervalSince1970, forKey: DefaultsKey.lastSync(database: databaseName))
+            lastSync = finished
             syncState = .idle
-            Log.info("sync", "ios sync \"\(databaseName)\" finished via relay (uploaded \(out.count)B)")
+            Log.info("sync", "ios sync \"\(databaseName)\" finished via rows (cursor=\(state.cursor) pending=\(state.dirtyUpserts.count + state.dirtyDeletes.count))")
             if !auto {
-                showToast(L10n.t("last_sync_completed_prompt") + " "
-                    + (lastSync?.formatted(date: .abbreviated, time: .shortened) ?? ""))
+                // 手动同步反馈结果:无变化/拉取·上传条数(时间看设置页状态行)
+                if outcome.pulledItems == 0 && outcome.pushedItems == 0 {
+                    showToast(L10n.t("sync_result_latest"))
+                } else {
+                    showToast(String(format: L10n.t("sync_result_fmt"), outcome.pulledItems, outcome.pushedItems))
+                }
             }
+            return outcome
+        } catch RelayClient.RelayError.unauthorized {
+            // 令牌过期/被撤销:清绑定转登录态,详见 Vault+Relay.handleSessionExpired
+            handleSessionExpired()
         } catch {
+            // 调用任务被取消(下拉刷新中断/切页):静默收场,不作为失败上报
+            if Task.isCancelled {
+                syncState = .idle
+                Log.debug("sync", "ios sync task cancelled (ignored)")
+                return nil
+            }
             syncState = .failed(error.localizedDescription)
             Log.error("sync", "ios sync \"\(databaseName)\" failed: \(error)")
             if !auto {
                 showToast("\(L10n.t("sync_error")): \(error.localizedDescription)")
             }
         }
-    }
-
-    // MARK: 冲突裁决
-
-    /// 用户裁决同步冲突:useLocal = true 用本地覆盖云端(丢弃云端自上次同步后
-    /// 的修改),否则用云端覆盖本地(丢弃本地自上次同步后的修改)。
-    /// 裁决后重设基线,后续同步恢复正常。
-    func resolveSyncConflict(useLocal: Bool) async {
-        guard let conflict = pendingSyncConflict else { return }
-        pendingSyncConflict = nil
-        Log.info("sync", "ios conflict resolution \"\(databaseName)\": overwrite \(useLocal ? "remote with local" : "local with remote")")
-        syncState = .syncing
-        do {
-            if !useLocal {
-                // 用云端覆盖本地:整库替换为远端版本并落盘
-                guard let vaultKey else {
-                    syncState = .idle
-                    Log.error("sync", "ios conflict resolution aborted: no vault key in session")
-                    return
-                }
-                let plain = try DatabaseCipher.decryptBody(conflict.remoteData, vaultKey: vaultKey)
-                let remote = try PasswordDatabase.parse(plain)
-                database = remote
-                persist()
-                Log.info("sync", "ios local replaced by remote (\(remote.cards.count) cards, \(remote.labels.count) labels)")
-            }
-            guard let vaultKey else {
-                syncState = .idle
-                Log.error("sync", "ios conflict resolution aborted: no vault key in session")
-                return
-            }
-            guard let binding = relay.binding(database: databaseName),
-                  let token = relay.token(database: databaseName) else {
-                syncState = .idle
-                Log.warn("sync", "ios conflict resolution \"\(databaseName)\" aborted: relay not bound")
-                return
-            }
-            let out = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
-            try await relayClient.putBody(token: token, vaultId: binding.vaultId, cipher: out)
-            await relayReportHashes(cipher: out)
-            recordSyncBaseline()
-            syncState = .idle
-            Log.info("sync", "ios conflict resolution \"\(databaseName)\" finished (uploaded \(out.count)B)")
-            showToast(L10n.t("last_sync_completed_prompt") + " "
-                + (lastSync?.formatted(date: .abbreviated, time: .shortened) ?? ""))
-        } catch {
-            // 裁决上传失败:基线不动,下次同步会重新检测并再次询问
-            syncState = .failed(error.localizedDescription)
-            Log.error("sync", "ios conflict resolution \"\(databaseName)\" failed: \(error)")
-            showToast("\(L10n.t("sync_error")): \(error.localizedDescription)")
-        }
-    }
-
-    /// 冲突弹窗选「稍后」:丢弃暂存现场、基线不动,下次同步重新检测并再次询问。
-    func postponeSyncConflict() {
-        guard pendingSyncConflict != nil else { return }
-        pendingSyncConflict = nil
-        syncState = .idle
-        Log.info("sync", "ios conflict \"\(databaseName)\" postponed by user")
+        return nil
     }
 }

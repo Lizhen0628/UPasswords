@@ -57,7 +57,7 @@ final class BreachListTests: XCTestCase {
     /// Card.compromised 依赖动态清单:记录前 false,记录后 true。
     func testCardCompromisedFlagUsesDynamicList() throws {
         let spec = try XCTUnwrap(Templates.spec(id: 102))
-        var card = Templates.makeCard(from: spec, id: 999_001)
+        var card = Templates.makeCard(from: spec)
         let unique = "upw-card-breach-test-\(UUID().uuidString)"
         card.fields = card.fields.map { f in
             var f = f

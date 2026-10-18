@@ -22,13 +22,12 @@ final class StoreTests: XCTestCase {
         let (loaded, vek) = try store.loadUnlocked(name: "Alpha", password: "pw1")
         var db = loaded
         XCTAssertEqual(db.templateCards.count, 16)
-        var card = Card(id: 900)
-        card.title = "Added"
+        var card = Card(title: "Added")
         db.cards.append(card)
         try store.save(db, name: "Alpha", vaultKey: vek)
 
         let reloaded = try store.load(name: "Alpha", password: "pw1")
-        XCTAssertEqual(reloaded.card(id: 900)?.title, "Added")
+        XCTAssertEqual(reloaded.card(id: card.id)?.title, "Added")
 
         XCTAssertThrowsError(try store.load(name: "Alpha", password: "bad"))
 
@@ -123,7 +122,7 @@ final class StoreV2Tests: XCTestCase {
         let store = DatabaseStore(root: tempDir)
         try store.create(name: "Rotate", password: "old")
         var (db, oldVek) = try store.loadUnlocked(name: "Rotate", password: "old")
-        db.cards.append(Card(id: 901, title: "AfterRotation"))
+        db.cards.append(Card(title: "AfterRotation"))
         let bodyBefore = try Data(contentsOf: store.url(for: "Rotate"))
         // 旧密文用旧 VEK 可解(轮换前副本即泄露风险的等价物)
         _ = try DatabaseCipher.decryptBody(bodyBefore, vaultKey: oldVek)
@@ -170,7 +169,8 @@ final class StoreV2Tests: XCTestCase {
         try store.create(name: "Source", password: "pw1")
         let (loaded, vek) = try store.loadUnlocked(name: "Source", password: "pw1")
         var db = loaded
-        db.cards.append(Card(id: 902, title: "Migrated"))
+        let migratedCard = Card(title: "Migrated")
+        db.cards.append(migratedCard)
         try store.save(db, name: "Source", vaultKey: vek)
 
         // 模拟"从其他设备拷来的一对文件":独立目录、任意文件名
@@ -185,8 +185,8 @@ final class StoreV2Tests: XCTestCase {
         XCTAssertTrue(store.exists("Restored"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: store.keyURL(for: "Restored").path))
         XCTAssertEqual(file.name, "Restored")
-        let migrated = try store.load(name: "Restored", password: "pw1")
-        XCTAssertEqual(migrated.card(id: 902)?.title, "Migrated", "content survives local restore")
+        let restoredDb = try store.load(name: "Restored", password: "pw1")
+        XCTAssertEqual(restoredDb.card(id: migratedCard.id)?.title, "Migrated", "content survives local restore")
 
         // 错误密码:解信封失败,不落盘
         XCTAssertThrowsError(try store.restore(body: body, envelope: key, name: "WrongPw", password: "bad"))

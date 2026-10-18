@@ -5,16 +5,17 @@ import CryptoKit
 final class GenVectorTests: XCTestCase {
     func testGenerateCrossPlatformVector() throws {
         var db = PasswordDatabase()
-        db.labels.append(CardLabel(id: 1, name: "工作"))
-        var github = Card(id: 7, title: "GitHub")
+        let workLabel = CardLabel(name: "工作")
+        db.labels.append(workLabel)
+        var github = Card(title: "GitHub")
         github.fields = [
             Field(name: "用户名", type: .login, value: "octocat"),
             Field(name: "密码", type: .password, value: "hunter2-example"),
             Field(name: "网址", type: .website, value: "github.com"),
         ]
-        github.labelIds = [1]
+        github.labelIds = [workLabel.id]
         db.cards.append(github)
-        var bank = Card(id: 8, title: "Bank")
+        var bank = Card(title: "Bank")
         bank.fields = [
             Field(name: "login", type: .login, value: "alice"),
             Field(name: "pin", type: .pin, value: "4321"),

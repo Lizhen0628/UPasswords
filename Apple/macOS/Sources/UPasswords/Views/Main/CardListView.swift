@@ -69,7 +69,7 @@ struct CardListView: View {
         Button(L10n.t("save_as_template_command")) {
             var t = card
             t.template = true
-            t.id = ctx.newCardId()
+            t.id = UUID()
             ctx.database.cards.append(t)
         }
         if card.archived {

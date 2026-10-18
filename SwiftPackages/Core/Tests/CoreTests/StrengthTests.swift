@@ -35,7 +35,7 @@ final class StrengthTests: XCTestCase {
     }
 
     func testCardWeakDetection() {
-        var card = Card(id: 1)
+        var card = Card()
         card.fields = [Field(name: "pw", type: .password, value: "123456")]
         XCTAssertTrue(card.hasWeakPasswords)
         card.fields[0].value = "9uH&2mQ!vXz#7LpR"

@@ -95,11 +95,76 @@ export async function decryptBody(body: Uint8Array, vaultKey: Uint8Array): Promi
     }
 }
 
+/**
+ * Wrap a fresh vault key with the master password (vault creation from the
+ * extension). Mirrors Swift `DatabaseCipher.wrapVaultKey` byte layout:
+ * magic(8) + version u32 + iterations u32 + salt(16) + GCM(nonce12+ct32+tag16)
+ * + changedAt f64 (epoch SECONDS). Returns the envelope and the raw 32-byte
+ * vault key (caller must not persist the key).
+ */
+export async function wrapEnvelope(password: string, iterations = 600_000): Promise<{ envelope: Uint8Array; vek: Uint8Array }> {
+    const vek = crypto.getRandomValues(new Uint8Array(32));
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+    const kek = new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, material, 256));
+    const wrapKey = await crypto.subtle.importKey("raw", kek, "AES-GCM", false, ["encrypt"]);
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, wrapKey, vek));
+    const envelope = new Uint8Array(100);
+    envelope.set(ENVELOPE_MAGIC, 0);
+    const view = new DataView(envelope.buffer);
+    view.setUint32(8, 1, true);
+    view.setUint32(12, iterations, true);
+    envelope.set(salt, 16);
+    envelope.set(nonce, 32);
+    envelope.set(sealed, 44);
+    view.setFloat64(92, Date.now() / 1000, true);
+    return { envelope, vek };
+}
+
 /** changedAt recorded in the envelope (password-change propagation hint). */
 export function envelopeChangedAt(envelope: Uint8Array): number | null {
     if (envelope.length < 100 || !hasMagic(envelope, ENVELOPE_MAGIC)) return null;
     const view = new DataView(envelope.buffer, envelope.byteOffset + 92, 8);
     return view.getFloat64(0, true);
+}
+
+/**
+ * Decrypt one row-sync item body (v7 §6.2): AES-GCM(vaultKey) combined
+ * (nonce 12 + ct + tag), AAD bound to the item uuid. Mirrors Swift
+ * `RowSyncCipher` byte-for-byte — the AAD is the *uppercase* canonical
+ * uuid string (Swift uuidString); the server normalizes stored uuids to
+ * lowercase, so callers must pass the server uuid and we re-uppercase here.
+ * Throws VaultCryptoError("item_decrypt_failed") on mismatch.
+ */
+export async function decryptItemBody(body: Uint8Array, vaultKey: Uint8Array, uuid: string): Promise<string> {
+    if (body.length < 28 || !uuid) {
+        throw new VaultCryptoError("item_decrypt_failed");
+    }
+    const key = await crypto.subtle.importKey("raw", vaultKey as BufferSource, "AES-GCM", false, ["decrypt"]);
+    try {
+        const plain = await crypto.subtle.decrypt(
+            {
+                name: "AES-GCM",
+                iv: body.slice(0, 12) as BufferSource,
+                additionalData: new TextEncoder().encode(uuid.toUpperCase()) as BufferSource,
+            },
+            key,
+            body.slice(12) as BufferSource,
+        );
+        return new TextDecoder().decode(plain);
+    } catch {
+        throw new VaultCryptoError("item_decrypt_failed");
+    }
+}
+
+/**
+ * Concatenate decrypted item fragments (each a standalone `<card>`/`<label>`
+ * element, exactly what Swift `DatabaseItemCodec.xmlData` produces) into a
+ * document `parseVaultXml` can read; label elements are ignored by the parser.
+ */
+export function fragmentsToXml(fragments: string[]): string {
+    return `<passworddatabase>${fragments.join("")}</passworddatabase>`;
 }
 
 /** XML 属性来自不可信输入:白名单外的值回退默认,禁止 as 断言直接放行。 */
@@ -141,10 +206,9 @@ export function parseVaultXml(xml: string): ExtensionItem[] {
             };
         });
         const website = fields.find((f) => f.type === "website")?.value ?? "";
-        // 非数字 id 会得到 NaN 并让所有坏卡片共享同一指纹,变更检测失真
-        const rawId = Number(card.getAttribute("id") ?? "0");
+        // v7 条目 id 为 UUID 字符串;缺 id 用空串,变更检测按指纹失真可见
         items.push({
-            id: Number.isFinite(rawId) ? rawId : 0,
+            id: card.getAttribute("id") ?? "",
             title: card.getAttribute("title") ?? "",
             symbol: card.getAttribute("symbol"),
             fields,

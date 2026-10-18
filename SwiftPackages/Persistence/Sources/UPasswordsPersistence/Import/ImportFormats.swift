@@ -49,7 +49,7 @@ public struct SafeInCloudXMLFormat: ImportFormat {
         var count = 0
         for c in parsed.cards where !c.template && !existingTitles.contains(c.title) {
             var card = c
-            if existingIds.contains(card.id) { card.id = db.nextItemId() }
+            if existingIds.contains(card.id) { card.id = UUID() }
             db.cards.append(card)
             count += 1
         }
@@ -116,7 +116,7 @@ public struct BitwardenCsvFormat: ImportFormat {
         for row in rows {
             func col(_ i: Int?) -> String { i.map { $0 < row.count ? row[$0] : "" } ?? "" }
             if col(nIdx).isEmpty && col(uIdx).isEmpty { continue }
-            var card = Card(id: db.nextItemId())
+            var card = Card()
             card.title = col(nIdx).isEmpty ? col(uIdx) : col(nIdx)
             card.symbol = "key"
             card.color = "gray"
@@ -138,11 +138,11 @@ public struct BitwardenCsvFormat: ImportFormat {
 
     /// 取同名标签,不存在则创建;folder/folderId → 标签的共用映射。
     /// - Returns: 标签 id
-    public static func ensureLabel(named name: String, in db: inout PasswordDatabase, now: Date) -> Int {
+    public static func ensureLabel(named name: String, in db: inout PasswordDatabase, now: Date) -> UUID {
         if let l = db.labels.first(where: { $0.name == name }) { return l.id }
-        let id = db.nextItemId()
-        db.labels.append(CardLabel(id: id, name: name, timeStamp: now.millis))
-        return id
+        let label = CardLabel(name: name, timeStamp: now.millis)
+        db.labels.append(label)
+        return label.id
     }
 }
 
@@ -166,7 +166,7 @@ public struct BitwardenJsonFormat: ImportFormat {
         for item in items {
             guard let t = item["name"] as? String else { continue }
             let login = item["login"] as? [String: Any]
-            var card = Card(id: db.nextItemId())
+            var card = Card()
             card.title = t.isEmpty ? "—" : t
             card.symbol = "key"
             card.color = "gray"

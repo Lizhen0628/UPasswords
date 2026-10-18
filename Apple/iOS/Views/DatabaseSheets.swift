@@ -324,7 +324,7 @@ struct DatabaseImportSheet: View {
     /// 本地没有、且服务端有库体镜像的库(镜像在绑定/每轮同步时推送)。
     private var importable: [RelayClient.VaultRecord] {
         let localNames = Set(vault.databases.map(\.name))
-        return records.filter { !localNames.contains($0.name) && $0.bodyUpdatedAt != nil }
+        return records.filter { !localNames.contains($0.name) && $0.itemCount > 0 }
     }
 
     var body: some View {

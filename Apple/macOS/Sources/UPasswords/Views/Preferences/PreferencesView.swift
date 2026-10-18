@@ -761,6 +761,7 @@ struct ConfigureCloudSheetContents: View {
     @State private var relayCode = ""
     @State private var relayBusy = false
     @State private var relayDevices: [RelayClient.DeviceSession] = []
+    @StateObject private var resend = ResendCountdown()
     @State private var showRelayDevices = false
     @State private var relayCodePrompt: RelayCodePrompt? = nil
     @State private var relayCodeInput = ""
@@ -853,6 +854,16 @@ struct ConfigureCloudSheetContents: View {
 
     /// UPasswords 云同步账户:未登录=邮箱+验证码登录(登录即为当前库启用);
     /// 已登录=账户邮箱 + 登出/设备管理/解绑/注销。登录需库处于解锁态(要上传本地信封)。
+    /// 管理设备行的平台图标(与会话表 platform 列对齐)。
+    private static func relayDeviceIcon(for platform: String) -> String {
+        switch platform {
+        case "ios", "autofill": return "iphone"
+        case "macos": return "macbook"
+        case "ext-safari", "ext-chrome", "ext-edge", "ext-firefox": return "puzzlepiece.extension"
+        default: return "desktopcomputer.and.iphone"
+        }
+    }
+
     @ViewBuilder
     private var relayAccountControl: some View {
         if let email = ctx.relayAccountEmail, ctx.relayBound {
@@ -901,17 +912,39 @@ struct ConfigureCloudSheetContents: View {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(relayDevices) { device in
                             HStack(spacing: 8) {
-                                Image(systemName: "desktopcomputer.and.iphone")
-                                Text(device.deviceName.isEmpty
-                                     ? String(device.id.prefix(8)) + "…" : device.deviceName)
-                                Button(L10n.t("relay_revoke_button")) {
-                                    Log.info("ui", "relay session revoke from preferences")
-                                    Task {
-                                        await ctx.relayRevokeSession(id: device.id)
-                                        relayDevices = await ctx.relaySessions()
+                                Image(systemName: Self.relayDeviceIcon(for: device.platform))
+                                VStack(alignment: .leading, spacing: 1) {
+                                    HStack(spacing: 6) {
+                                        Text(device.deviceName.isEmpty
+                                             ? String(device.id.prefix(8)) + "…" : device.deviceName)
+                                        if device.isCurrent {
+                                            Text(L10n.t("relay_device_current_badge"))
+                                                .font(.system(size: 9, weight: .medium))
+                                                .foregroundStyle(.tint)
+                                                .padding(.horizontal, 5)
+                                                .padding(.vertical, 0.5)
+                                                .background(Color.accentColor.opacity(0.16), in: Capsule())
+                                        }
+                                    }
+                                    if let seen = device.lastSeenAt {
+                                        Text(String(
+                                            format: L10n.t("relay_device_last_active_fmt"),
+                                            DateFormatter.localizedString(from: seen, dateStyle: .short, timeStyle: .short)))
+                                            .font(.system(size: 9))
+                                            .foregroundStyle(.secondary)
                                     }
                                 }
-                                .controlSize(.small)
+                                // 本机会话不提供「撤销」——登出按钮就是它的撤销
+                                if !device.isCurrent {
+                                    Button(L10n.t("relay_revoke_button")) {
+                                        Log.info("ui", "relay session revoke from preferences")
+                                        Task {
+                                            await ctx.relayRevokeSession(id: device.id)
+                                            relayDevices = await ctx.relaySessions()
+                                        }
+                                    }
+                                    .controlSize(.small)
+                                }
                             }
                             .font(.caption)
                         }
@@ -924,7 +957,7 @@ struct ConfigureCloudSheetContents: View {
                     TextField(L10n.t("relay_email_placeholder"), text: $relayEmail)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 180)
-                    Button(L10n.t("relay_send_code_button")) {
+                    Button(resend.buttonTitle(L10n.t("relay_send_code_button"))) {
                         let email = relayEmail.trimmingCharacters(in: .whitespaces)
                         guard email.contains("@"), email.contains(".") else {
                             AppToast.shared.show(L10n.t("invalid_email_error"))
@@ -933,10 +966,11 @@ struct ConfigureCloudSheetContents: View {
                         relayBusy = true
                         Log.info("ui", "relay code request from preferences")
                         Task {
-                            await ctx.relaySendCode(email: email)
+                            resend.start(await ctx.relaySendCode(email: email))
                             relayBusy = false
                         }
                     }
+                    .disabled(resend.isRunning)
                     if relayBusy { ProgressView().controlSize(.small) }
                 }
                 HStack(spacing: 8) {

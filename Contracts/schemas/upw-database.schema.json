@@ -13,11 +13,6 @@
         "cards": {
             "type": "array",
             "items": { "$ref": "#/$defs/card" }
-        },
-        "ghosts": {
-            "type": "array",
-            "description": "Deletion tombstones for convergent sync merges.",
-            "items": { "$ref": "#/$defs/ghost" }
         }
     },
     "$defs": {
@@ -68,7 +63,7 @@
             "type": "object",
             "required": ["id", "name"],
             "properties": {
-                "id": { "type": "integer" },
+                "id": { "type": "string", "format": "uuid", "description": "UUID v4, client-generated item identity (v7 row sync)." },
                 "name": { "type": "string" },
                 "color": { "type": ["string", "null"] },
                 "type": { "type": ["string", "null"] },
@@ -76,19 +71,11 @@
                 "timeStamp": { "type": "number", "default": 0, "description": "Unix epoch millis; serialized as the XML <label time> attribute only when > 0 (0 keeps legacy byte-stable output). Drives label merge LWW." }
             }
         },
-        "ghost": {
-            "type": "object",
-            "required": ["id", "time"],
-            "properties": {
-                "id": { "type": "integer" },
-                "time": { "type": "number", "description": "Epoch millis." }
-            }
-        },
         "card": {
             "type": "object",
             "required": ["id"],
             "properties": {
-                "id": { "type": "integer" },
+                "id": { "type": "string", "format": "uuid", "description": "UUID v4, client-generated item identity (v7 row sync)." },
                 "title": { "type": "string", "default": "" },
                 "symbol": { "type": ["string", "null"] },
                 "color": { "type": ["string", "null"] },
@@ -109,7 +96,7 @@
                 "notes": { "type": "string", "default": "" },
                 "labelIds": {
                     "type": "array",
-                    "items": { "type": "integer" },
+                    "items": { "type": "string", "format": "uuid" },
                     "default": []
                 },
                 "images": {

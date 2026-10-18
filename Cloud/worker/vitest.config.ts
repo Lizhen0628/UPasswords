@@ -1,26 +1,15 @@
 import { defineConfig } from "vitest/config";
-import { cloudflareTest } from "@cloudflare/vitest-plugin";
 
-// miniflare 本地跑 D1:每测试独立存储;schema 在 setup 中按测试重建;
-// SMTP 走 mock(验证码改由确定性派生,测试可自行算出)。
+// 集成测试跑在 Node 运行时(vitest workers-pool 内的 workerd 不支持
+// mysql2 的 net/tls),经 UPW_TEST_DB_URL 直连 MariaDB:本地走 ssh 隧道
+// (127.0.0.1:16033),CI 走 service 容器。schema 由 test/apply-schema.ts 准备。
 export default defineConfig({
-  plugins: [
-    cloudflareTest({
-      main: "src/index.ts",
-      miniflare: {
-        compatibilityDate: "2026-01-01",
-        d1Databases: ["DB"],
-        r2Buckets: ["VAULTS"],
-        bindings: {
-          APP_KEK: "11".repeat(32),
-          ADMIN_TOKEN: "test-admin-token",
-          SMTP_MOCK: "1",
-        },
-      },
-    }),
-  ],
   test: {
+    environment: "node",
     include: ["test/**/*.test.ts"],
     setupFiles: ["test/apply-schema.ts"],
+    testTimeout: 90_000,
+    hookTimeout: 120_000,
+    fileParallelism: false,
   },
 });

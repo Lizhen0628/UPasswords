@@ -35,7 +35,7 @@ final class BackupTests: XCTestCase {
         try store.create(name: "Alpha", password: "pw", now: Date(timeIntervalSince1970: 0))
         let (loaded, vek) = try store.loadUnlocked(name: "Alpha", password: "pw")
         var db = loaded
-        var card = Card(id: 777, title: "Restored")
+        var card = Card(title: "Restored")
         db.cards.append(card)
         try store.save(db, name: "Alpha", vaultKey: vek)
         try store.backup(name: "Alpha", now: Date(timeIntervalSince1970: 50))
@@ -44,7 +44,7 @@ final class BackupTests: XCTestCase {
         try store.restore(backup: backup, to: "Beta")
         XCTAssertTrue(store.exists("Beta"))
         let restored = try store.load(name: "Beta", password: "pw")
-        XCTAssertEqual(restored.card(id: 777)?.title, "Restored", "restored copy must contain pre-backup edits")
+        XCTAssertEqual(restored.card(id: card.id)?.title, "Restored", "restored copy must contain pre-backup edits")
     }
 
     /// v2 本体恢复必须连同信封备份;缺信封的备份拒绝恢复(恢复了也解不开)。

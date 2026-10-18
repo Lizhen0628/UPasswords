@@ -33,6 +33,6 @@
         "default_popup": "src/popup.html"
     },
     "content_security_policy": {
-        "extension_pages": "script-src 'self'; default-src 'self'; style-src 'self' 'unsafe-inline'"
+        "extension_pages": "script-src 'self'; connect-src 'self' https://api.upasswords.com; default-src 'self'; style-src 'self' 'unsafe-inline'"
     }
 }

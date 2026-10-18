@@ -381,6 +381,7 @@ private struct AccountStepView: View {
     @State private var email = ""
     @State private var code = ""
     @State private var busy = false
+    @StateObject private var resend = ResendCountdown()
     @State private var error = ""
 
     var body: some View {
@@ -410,16 +411,16 @@ private struct AccountStepView: View {
                 Text(error).foregroundStyle(.red).font(.callout)
             }
             HStack {
-                Button(L10n.t("relay_send_code_button")) {
+                Button(resend.buttonTitle(L10n.t("relay_send_code_button"))) {
                     Log.info("ui", "setup: onboarding code request")
                     busy = true
                     let address = email.trimmingCharacters(in: .whitespaces)
                     Task {
-                        await ctx.relaySendCode(email: address)
+                        resend.start(await ctx.relaySendCode(email: address))
                         busy = false
                     }
                 }
-                .disabled(!email.contains("@" ) || busy)
+                .disabled(!email.contains("@" ) || busy || resend.isRunning)
                 Button(L10n.t("relay_login_button")) {
                     Log.info("ui", "setup: onboarding login")
                     busy = true
@@ -458,11 +459,11 @@ struct RestoreCloudForm: View {
     @State private var password = ""
     @State private var error = ""
 
-    /// 选中且有服务端库体镜像的库才可恢复(镜像在绑定/每轮同步时推送)。
+    /// 选中即可恢复:v7 行级同步下空库同样合法(信封+0 行 → 空库接管,
+    /// 其他设备同步后的条目随后拉取)。不再设"有镜像才可恢复"的 v6 遗留门槛
+    /// ——该门槛曾让选中空库时"恢复并打开"永久禁用。
     private var selectedRecord: RelayClient.VaultRecord? {
-        guard let record = serverVaults.first(where: { $0.name == selected }),
-              record.bodyUpdatedAt != nil else { return nil }
-        return record
+        serverVaults.first(where: { $0.name == selected })
     }
 
     var body: some View {
@@ -489,7 +490,7 @@ struct RestoreCloudForm: View {
                             } else {
                                 Picker("", selection: $selected) {
                                     ForEach(serverVaults.map(\.name), id: \.self) { n in
-                                        Text(rowLabel(n)).tag(n)
+                                        Text(n).tag(n)
                                     }
                                 }
                                 .pickerStyle(.radioGroup)
@@ -541,17 +542,10 @@ struct RestoreCloudForm: View {
             // 引导账户步登录在先:进入本表单即从注册表列出账户名下的库
             if let records = await ctx.relayVaultsForRestore() {
                 serverVaults = records
-                selected = records.first { $0.bodyUpdatedAt != nil }?.name ?? ""
+                selected = records.first?.name ?? ""
             }
             loaded = true
         }
-    }
-
-    /// 单行标签:尚无服务端库体镜像的库标注(在原设备同步一次后即可恢复)。
-    private func rowLabel(_ n: String) -> String {
-        guard let record = serverVaults.first(where: { $0.name == n }),
-              record.bodyUpdatedAt == nil else { return n }
-        return n + L10n.t("cloud_restore_no_mirror_suffix")
     }
 
     private func setupItem(_ n: Int, @ViewBuilder title: () -> some View) -> some View {

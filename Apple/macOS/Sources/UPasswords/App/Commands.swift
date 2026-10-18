@@ -54,7 +54,7 @@ struct UPasswordsCommands: Commands {
                     if let c = ctx.selectedCard {
                         var t = c
                         t.template = true
-                        t.id = ctx.newCardId()
+                        t.id = UUID()
                         ctx.database.cards.append(t)
                         AppToast.shared.show(L10n.t("template_saved_message"))
                     }

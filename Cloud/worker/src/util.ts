@@ -1,8 +1,12 @@
 // 公共工具:KEK 应用层加密、键控哈希、随机、常量时间比较、输入校验、响应构造。
-// 隐私红线:任何日志/错误/审计不包含邮箱、令牌、验证码、信封内容。
+// 隐私红线:任何日志/错误/审计不包含邮箱、令牌、验证码、信封内容、条目密文。
 
 export type Env = {
-  DB: D1Database;
+  /// Hyperdrive 绑定(生产);本地/测试用 DATABASE_URL 直连
+  DB?: { connectionString: string };
+  DATABASE_URL?: string;
+  /// "1" = 直连启用 TLS(自签证书不校验,仅加密通道)
+  DATABASE_SSL?: string;
   VAULTS: R2Bucket;
   APP_KEK: string;
   ADMIN_TOKEN: string;
@@ -14,8 +18,16 @@ export type Env = {
   SMTP_PASSWORD: string;
   SMTP_MOCK?: string;
   VAULT_LIMIT_PER_USER: string;
-  VAULT_BODY_MAX_BYTES: string;
-  VAULT_STAGING_MAX_OBJECTS?: string;
+  ITEM_BODY_MAX_BYTES: string;
+  ITEMS_PER_VAULT_LIMIT: string;
+  ITEMS_BATCH_MAX: string;
+  ATTACHMENT_MAX_BYTES: string;
+  ATTACH_QUOTA_PER_VAULT: string;
+  ATTACH_STAGING_MAX_OBJECTS: string;
+  CHANGE_RETENTION_DAYS: string;
+  REKEY_TTL_MS: string;
+  SITES_ICON_MAX_BYTES: string;
+  BREACH_CACHE_TTL_SECONDS: string;
   CODE_TTL_SECONDS: string;
   CODE_RESEND_COOLDOWN_SECONDS: string;
   CODE_HOURLY_PER_EMAIL: string;
@@ -23,7 +35,6 @@ export type Env = {
   CODE_MAX_ATTEMPTS: string;
   SESSION_TTL_DAYS: string;
   DEREGISTER_PURGE_DAYS: string;
-  CHANGED_AT_MAX_SKEW_SECONDS: string;
 };
 
 /// 数字型 var 读取,缺省回退。
@@ -32,8 +43,8 @@ export function numVar(env: Env, key: keyof Env, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-export function nowSec(): number {
-  return Date.now() / 1000;
+export function nowMs(): number {
+  return Date.now();
 }
 
 // ---------- 编码 ----------
@@ -73,6 +84,10 @@ const textDecoder = new TextDecoder();
 
 export function utf8(s: string): Uint8Array {
   return textEncoder.encode(s);
+}
+
+export function decodeUtf8(bytes: Uint8Array): string {
+  return textDecoder.decode(bytes);
 }
 
 // ---------- 随机 ----------
@@ -167,18 +182,18 @@ export async function kekHmac(env: Env, info: string): Promise<string> {
 }
 
 /// 登录查询键:HMAC(APP_KEK, "email:" + 规范化邮箱)。
-export async function emailHmac(env: Env, email: string): Promise<string> {
+export async function emailHmc(env: Env, email: string): Promise<string> {
   return kekHmac(env, "email:" + email);
 }
 
-/// 验证码哈希:HMAC(APP_KEK, "code:" + emailHmac + ":" + code + ":" + purpose)。
+/// 验证码哈希:HMAC(APP_KEK, "code:" + emailHmc + ":" + code + ":" + purpose)。
 export async function codeHash(
   env: Env,
-  emailHmacHex: string,
+  emailHmcHex: string,
   code: string,
   purpose: string,
 ): Promise<string> {
-  return kekHmac(env, `code:${emailHmacHex}:${code}:${purpose}`);
+  return kekHmac(env, `code:${emailHmcHex}:${code}:${purpose}`);
 }
 
 /// 会话令牌哈希:令牌为 256bit 随机数,普通 SHA-256 即不可逆。
@@ -187,7 +202,7 @@ export async function sha256Hex(input: string): Promise<string> {
   return bytesToHex(new Uint8Array(digest));
 }
 
-/// 字节版 SHA-256(库体 commit 的服务端实算校验用)。
+/// 字节版 SHA-256(条目体/附件写入的服务端实算校验用)。
 export async function sha256OfBytes(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return bytesToHex(new Uint8Array(digest));
@@ -212,7 +227,7 @@ export function normalizeEmail(input: unknown): string | null {
   return email;
 }
 
-/// 库名会成为网盘文件名:拒绝路径危险字符与伴随文件后缀冲突。
+/// 库名会成为本地文件名:拒绝路径危险字符与伴随文件后缀冲突。
 export function validVaultName(input: unknown): string | null {
   if (typeof input !== "string") return null;
   const name = input.trim();
@@ -224,9 +239,31 @@ export function validVaultName(input: unknown): string | null {
   return name;
 }
 
+/// 十六进制校验统一大小写不敏感,并归一化为小写存储:
+/// Swift 的 UUID().uuidString 是大写、TS 侧是小写,不归一化的话同一
+/// 条目会按大小写变体存成两行(游标分页与 CAS 全部失真)。
 export function validSha256Hex(input: unknown): string | null {
-  if (typeof input !== "string" || !/^[0-9a-f]{64}$/.test(input)) return null;
-  return input;
+  if (typeof input !== "string" || !/^[0-9a-f]{64}$/i.test(input)) return null;
+  return input.toLowerCase();
+}
+
+/// 条目标识:UUIDv4 客户端生成,服务端只认格式;同样归一化为小写
+/// (Swift uuidString 大写 → 小写入库,与 changes/列表回读一致)。
+export function validItemUuid(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input)) return null;
+  return input.toLowerCase();
+}
+
+/// 网站目录域名:小写 host(去端口去末尾点),字符集收紧。
+export function normalizeDomain(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  let d = input.trim().toLowerCase();
+  if (d.includes("://")) d = d.split("://", 2)[1] ?? "";
+  d = d.split("/", 1)[0].split(":", 1)[0].replace(/\.+$/, "");
+  if (d.length < 1 || d.length > 253) return null;
+  if (!/^[a-z0-9.-]+$/.test(d)) return null;
+  return d;
 }
 
 // ---------- 响应 ----------
@@ -252,16 +289,19 @@ export function json(data: unknown, status = 200, extra?: Record<string, string>
   return new Response(JSON.stringify(data), { status, headers });
 }
 
-/// 读取 JSON 请求体;非法/超限抛 400。
-export async function readJson(request: Request): Promise<Record<string, unknown>> {
-  const MAX_BODY_BYTES = 64 * 1024;
+/// 读取 JSON 请求体;非法/超限抛 400。maxBytes 按端点区分:
+/// 条目批量与 rekey chunk 允许到 8MB,其余维持 64KB。
+export async function readJson(
+  request: Request,
+  maxBytes = 64 * 1024,
+): Promise<Record<string, unknown>> {
   // 未认证端点也走这里:content-length 预检防匿名大包先把 isolate 内存吃满
   const declaredLength = Number(request.headers.get("content-length") ?? "");
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     throw new ApiError(413, "too_large");
   }
   const raw = await request.text();
-  if (raw.length > MAX_BODY_BYTES) throw new ApiError(400, "bad_request");
+  if (raw.length > maxBytes) throw new ApiError(400, "bad_request");
   try {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -273,8 +313,7 @@ export async function readJson(request: Request): Promise<Record<string, unknown
   throw new ApiError(400, "bad_request");
 }
 
-/// R2 前缀全删(游标翻页到空)。删库与注销 purge 共用同一实现——
-/// 曾因两处手写循环复制走样,staging 前缀漏了 `vaults/` 段造成密文残留。
+/// R2 前缀全删(游标翻页到空)。删库、注销 purge 与附件前缀清理共用同一实现。
 export async function deleteR2Prefix(bucket: R2Bucket, prefix: string): Promise<void> {
   let cursor: string | undefined;
   do {

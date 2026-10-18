@@ -223,7 +223,7 @@ struct RestoreTemplatesSheet: View {
             onCancel: { dismiss() },
             onOk: {
                 for spec in Templates.all {
-                    if ctx.database.card(id: spec.id) == nil {
+                    if ctx.database.templateCards.first(where: { $0.title == L10n.db(spec.titleKey) }) == nil {
                         ctx.database.cards.append(Templates.makeTemplateCard(spec))
                     }
                 }

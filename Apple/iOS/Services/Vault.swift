@@ -25,7 +25,7 @@ final class Vault: ObservableObject {
 
     // 设置(共享 defaults,AutoFill 扩展可读面容 ID 开关)
     @Published var faceIDEnabled: Bool { didSet { d.set(faceIDEnabled, forKey: "set.faceID") } }
-    @Published var autoLockSeconds: Int { didSet { d.set(autoLockSeconds, forKey: "set.autoLock") } } // 0=立即
+    @Published var autoLockSeconds: Int { didSet { d.set(autoLockSeconds, forKey: "set.autoLock") } } // 0=立即,默认 300=5 分钟
     @Published var clipboardClearSeconds: Int { didSet { d.set(clipboardClearSeconds, forKey: "set.clipboard") } } // 0=不清除
     @Published var maskPasswords: Bool { didSet { d.set(maskPasswords, forKey: "set.mask") } }
     @Published var themeIndex: Int { didSet { d.set(themeIndex, forKey: "set.theme") } }
@@ -76,8 +76,20 @@ final class Vault: ObservableObject {
     @Published var lastSync: Date? = nil
     /// 远端容器用当前密码解不开(常见于改主密码后):设置页据此展示覆盖云端的修复入口。
     @Published var syncRemoteUnreadable = false
+    /// relay 账户/绑定状态版本号:登录、登出、绑定/解绑、会话失效时自增。
+    /// RelayStore 只是 defaults 读写,不经 @Published——没有这个版本号,
+    /// 登录成功后设置页表单不会翻页(用户会误判"登录失败"而反复重试,
+    /// 每次重试都在服务端多签发一条会话)。
+    @Published private(set) var relayStateVersion = 0
+
+    /// relay 状态版本号自增(跨文件扩展经此触发设置页重渲染,setter 保持私有)。
+    func relayStateChanged() {
+        relayStateVersion += 1
+    }
     /// 未决同步冲突(密文现场);由 RootView 呈现裁决弹窗。
-    @Published var pendingSyncConflict: PendingSyncConflict? = nil
+    /// 行级同步状态(游标/revision/脏集合/快照基线)。
+    /// 故意不用 @Published:呈现走 syncState,这里高频读写不驱动逐条 UI。
+    var rowSync = RowSyncState()
     /// 本地数据库列表(设置页多库管理展示)。
     @Published private(set) var databases: [DatabaseFile] = []
     /// 最近一次同步尝试时间(成功或失败都算;自动同步失败退避用,仅内存)。
@@ -94,6 +106,7 @@ final class Vault: ObservableObject {
     internal var vaultKey: SymmetricKey? = nil
     private var backgroundAt: Date? = nil
     private var toastTask: Task<Void, Never>? = nil
+    private var biometricUnlockInFlight = false
     internal var autoSyncTimer: Timer? = nil
     internal var syncInFlight = false
     internal var breachCheckInFlight = false
@@ -110,7 +123,7 @@ final class Vault: ObservableObject {
 
     private init() {
         faceIDEnabled = d.object(forKey: "set.faceID") as? Bool ?? false
-        autoLockSeconds = d.object(forKey: "set.autoLock") as? Int ?? 60
+        autoLockSeconds = d.object(forKey: "set.autoLock") as? Int ?? 300
         clipboardClearSeconds = d.object(forKey: "set.clipboard") as? Int ?? 90
         maskPasswords = d.object(forKey: "set.mask") as? Bool ?? true
         themeIndex = d.object(forKey: "set.theme") as? Int ?? 0
@@ -147,10 +160,18 @@ final class Vault: ObservableObject {
     var hasVault: Bool { store.exists(databaseName) }
 
     /// 首次创建:建库 + 钥匙串存密码,直接进入解锁态。
-    func createVault(password pw: String, biometric: Bool) {
+    /// - Parameter name: 用户输入的库名(空/空白回退默认 Main)
+    func createVault(name rawName: String, password pw: String, biometric: Bool) {
+        let name = rawName.trimmingCharacters(in: .whitespaces)
+        databaseName = name.isEmpty ? SharedVaultStore.defaultDatabaseName : name
         do {
             _ = try store.create(name: databaseName, password: pw)
             password = pw
+            // 会话必须带上库密钥:建库即解锁,后续登录绑定/保存都要用
+            // (真实事故:缺这一步时建库后立刻登录云同步报 notConfigured)
+            if let (_, vek) = try? store.loadUnlocked(name: databaseName, password: pw) {
+                vaultKey = vek
+            }
             if biometric {
                 PasswordStore.savePasswordForBiometric(pw, databaseName: databaseName)
             }
@@ -158,6 +179,12 @@ final class Vault: ObservableObject {
             locked = false
             refreshDatabases()
             Log.info("app", "ios vault created db=\(databaseName) biometric=\(biometric)")
+            // 引导登录在先的场景:库就绪即自动补绑(无需重启等下一次解锁)
+            Task {
+                await relayBindCurrentVaultIfNeeded()
+                await relayRenameCurrentSession()
+                await checkRelayPasswordVersion()
+            }
         } catch {
             Log.error("app", "ios vault create failed: \(error)")
             showToast(L10n.t("ios_vault_create_error"))
@@ -166,6 +193,8 @@ final class Vault: ObservableObject {
 
     @discardableResult
     func unlock(with pw: String) -> Bool {
+        // 已解锁态的重复提交(锁屏过渡期双击/重复回调):幂等成功,不重跑副作用
+        guard locked else { return true }
         guard let (db, vek) = try? store.loadUnlocked(name: databaseName, password: pw) else { return false }
         password = pw
         vaultKey = vek
@@ -202,19 +231,21 @@ final class Vault: ObservableObject {
                 Log.warn("app", "ios remote unlock fallback: password rejected by remote envelope")
                 return false
             }
-            let body: Data
+            // v7:远端是行级密文,走全量重建收敛本地(他机改密后本体随新 VEK 重加密)
+            var state = store.loadSyncState(for: databaseName)
+            let rebuilt: PasswordDatabase
             do {
-                body = try await relayClient.getBody(token: token, vaultId: binding.vaultId)
+                rebuilt = try await RowSync.fullRebuild(
+                    client: relayClient, token: token, vaultId: binding.vaultId,
+                    key: RowSyncKey(raw: vek.withUnsafeBytes { Data($0) }), state: &state)
+                store.saveSyncState(state, for: databaseName)
             } catch {
-                Log.warn("sync", "ios remote unlock fallback: rotated body not on relay yet")
-                showToast(L10n.t("unlock_remote_body_missing"))
+                Log.warn("sync", "ios remote unlock fallback: rows not reachable yet (\(error))")
                 return false
             }
-            let plain = try DatabaseCipher.decryptBody(body, vaultKey: vek)
-            let db = try PasswordDatabase.parse(plain)
-            try store.save(db, name: databaseName, vaultKey: vek)
+            try store.save(rebuilt, name: databaseName, vaultKey: vek)
             try store.saveEnvelope(envelopeBytes, for: databaseName)
-            Log.info("app", "ios remote unlock fallback converged local vault db=\(databaseName)")
+            Log.info("app", "ios remote unlock fallback converged local vault db=\(databaseName) (rows rebuilt)")
             return unlock(with: pw)
         } catch {
             Log.warn("sync", "ios remote unlock fallback failed: \(error)")
@@ -265,9 +296,13 @@ final class Vault: ObservableObject {
     }
 
     /// 面容 ID 快速解锁:先经系统生物识别门禁(LAContext),通过后才取
-    /// 该库的面容 ID 密码条目并解锁。
+    /// 该库的面容 ID 密码条目并解锁。并发防护:锁屏重渲染可能重复触发,
+    /// 两个评估并发时后者会被系统取消("认证已取消")并打断用户。
     func unlockWithBiometrics() async -> BiometricUnlockOutcome {
         guard faceIDEnabled, biometricAvailable else { return .failed }
+        guard !biometricUnlockInFlight else { return .failed }
+        biometricUnlockInFlight = true
+        defer { biometricUnlockInFlight = false }
         let name = databaseName
         let stored: String? = await withCheckedContinuation { continuation in
             PasswordStore.biometricPassword(databaseName: name) { continuation.resume(returning: $0) }
@@ -314,15 +349,10 @@ final class Vault: ObservableObject {
                 PasswordStore.savePasswordForBiometric(new, databaseName: databaseName)
             }
             Log.info("app", "ios master password changed db=\(databaseName) (vault key rotated, body re-encrypted)")
-            // 云端接力(账户中继):信封先行(他机强锁定/直接认新密码),库体随后换代
+            // 云端接力(rekey):全部条目新 VEK 密文分块换入;失败下轮同步自愈
             if relayBound {
                 Task {
-                    await relayPushEnvelope()
-                    let rotated = try? DatabaseCipher.encryptBody(database.xmlData(), vaultKey: effectiveKey)
-                    if let rotated {
-                        await relayPushBody(cipher: rotated)
-                        await relayReportHashes(cipher: rotated)
-                    }
+                    await relayRekeyUpload(newKey: effectiveKey, new: new)
                 }
             } else {
                 Log.info("sync", "ios password changed with relay unbound — other devices adopt via next sync")
@@ -394,7 +424,7 @@ final class Vault: ObservableObject {
     func reloadPerDatabaseState() {
         lastSync = Self.storedDate(DefaultsKey.lastSync(database: databaseName))
         lastBreachCheck = Self.storedDate("breach.last.\(databaseName)")
-        pendingSyncConflict = nil
+        rowSync = store.loadSyncState(for: databaseName)
         syncState = .idle
         lastSyncAttempt = nil
     }
@@ -479,6 +509,11 @@ final class Vault: ObservableObject {
     func createDatabase(name: String, password pw: String, biometric: Bool) -> Bool {
         do {
             _ = try store.create(name: name, password: pw) // store.create 已写入钥匙串主密码
+            // 会话带上库密钥:建库即解锁,后续保存/登录绑定都要用
+            var vek: SymmetricKey? = nil
+            if let (_, key) = try? store.loadUnlocked(name: name, password: pw) {
+                vek = key
+            }
             if biometric, biometricAvailable {
                 PasswordStore.savePasswordForBiometric(pw, databaseName: name)
             }
@@ -486,6 +521,7 @@ final class Vault: ObservableObject {
             databaseName = name
             database = PasswordDatabase()
             password = pw
+            vaultKey = vek
             locked = false
             reloadPerDatabaseState()
             refreshDatabases()
@@ -604,22 +640,20 @@ final class Vault: ObservableObject {
                 showToast(L10n.t("envelope_missing_error"))
                 return false
             }
-            let data: Data
+            let vek = try DatabaseCipher.unwrapVaultKey(envelope, password: pw)
+            let rebuilt: PasswordDatabase
             do {
-                data = try await relayClient.getBody(token: token, vaultId: record.vaultId)
-            } catch RelayClient.RelayError.notFound {
-                Log.warn("lifecycle", "ios restore from relay \"\(name)\": server body mirror missing")
+                var state = RowSyncState()
+                rebuilt = try await RowSync.fullRebuild(
+                    client: relayClient, token: token, vaultId: record.vaultId,
+                    key: RowSyncKey(raw: vek.withUnsafeBytes { Data($0) }), state: &state)
+                store.saveSyncState(state, for: name)
+            } catch {
+                Log.warn("lifecycle", "ios restore from relay \"\(name)\": rows not reachable (\(error))")
                 showToast(L10n.t("cloud_database_not_found"))
                 return false
             }
-            guard DatabaseCipher.isV2Container(data) else {
-                Log.warn("lifecycle", "ios restore from relay \"\(name)\": not a v2 container")
-                showToast(L10n.t("ios_db_import_invalid_message"))
-                return false
-            }
-            let vek = try DatabaseCipher.unwrapVaultKey(envelope, password: pw)
-            let plain = try DatabaseCipher.decryptBody(data, vaultKey: vek)
-            let db = try PasswordDatabase.parse(plain)
+            let db = rebuilt
             try store.save(db, name: name, vaultKey: vek)
             try store.saveEnvelope(envelope, for: name)
             SharedVaultStore.currentDatabaseName = name
@@ -749,14 +783,13 @@ final class Vault: ObservableObject {
 
     // MARK: 条目操作
 
-    var nextId: Int { database.nextItemId() }
 
     /// 视图层读取的条目集合(非模板)。
     var cards: [Card] { database.cards.filter { !$0.template } }
     var labels: [CardLabel] { database.labels }
     /// 用户自建模板(模板卡中非内置 id 的部分)。
     var customTemplates: [Card] {
-        database.cards.filter { $0.template && !TemplateGroups.builtInTemplateIds.contains($0.id) }
+        database.templateCards.filter { !TemplateGroups.builtInTemplateTitles.contains($0.title) }
     }
 
     func addCard(_ card: Card) {
@@ -827,7 +860,7 @@ final class Vault: ObservableObject {
 
     func duplicate(_ card: Card) {
         var c = card
-        c.id = nextId
+        c.id = UUID()
         c.title = String(format: L10n.t("ios_duplicate_title_fmt"), card.title)
         c.favorite = false
         c.trashed = false
@@ -871,7 +904,7 @@ final class Vault: ObservableObject {
     // MARK: 标签
 
     func addLabel(name: String, color: String) -> CardLabel {
-        let label = CardLabel(id: database.nextItemId(), name: name, color: color, timeStamp: Date().millis)
+        let label = CardLabel(name: name, color: color, timeStamp: Date().millis)
         database.labels.append(label)
         persist()
         Log.info("app", "ios addLabel id=\(label.id)")
@@ -901,7 +934,7 @@ final class Vault: ObservableObject {
 
     var weakCards: [Card] { activeCards.filter { $0.hasWeakPasswords } }
     var compromisedCards: [Card] { activeCards.filter { $0.compromised } }
-    var reusedGroups: [String: [Int]] { SamePasswordsService.groups(cards: activeCards) }
+    var reusedGroups: [String: [UUID]] { SamePasswordsService.groups(cards: activeCards) }
     var reusedCards: [Card] {
         let ids = Set(reusedGroups.values.flatMap { $0 })
         return activeCards.filter { ids.contains($0.id) }

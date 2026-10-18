@@ -23,17 +23,23 @@ struct LockScreen: View {
     @State private var accountEmail = ""
     @State private var accountCode = ""
     @State private var accountBusy = false
+    /// 初始化方式(邮箱验证后三选一;nil = 停在选择页,可返回重选)。
+    enum SetupChoice {
+        case create, importFile, restore
+    }
+    @State private var setupChoice: SetupChoice? = nil
+    @State private var newVaultName = SharedVaultStore.defaultDatabaseName
+    @StateObject private var resend = ResendCountdown()
 
     private var isSetup: Bool { !vault.hasVault }
     private var theme: (name: String, colors: [Color]) {
         Vault.themes[max(0, min(Vault.themes.count - 1, vault.themeIndex))]
     }
 
-    /// 选中且有服务端库体镜像的库才可恢复(镜像在绑定/每轮同步时推送)。
+    /// 选中即可恢复:v7 行级同步下空库同样合法(信封+0 行 → 空库接管,
+    /// 其他设备同步后的条目随后拉取);不再设 v6 整库镜像时代的门槛。
     private var selectedRecord: RelayClient.VaultRecord? {
-        guard let record = serverVaults.first(where: { $0.name == selectedVault }),
-              record.bodyUpdatedAt != nil else { return nil }
-        return record
+        serverVaults.first(where: { $0.name == selectedVault })
     }
 
     var body: some View {
@@ -97,16 +103,12 @@ struct LockScreen: View {
                             .foregroundStyle(Brand.accent)
                         }
                         .padding(.top, 28)
-                    } else {
-                        Text(L10n.t("ios_local_only_hint"))
-                            .font(.footnote)
-                            .foregroundStyle(Brand.muted)
-                            .padding(.top, 28)
                     }
                 }
                 .padding(.horizontal, 28)
                 .padding(.bottom, 48)
             }
+            .simultaneousGesture(setupBackSwipe)
         }
         .onAppear {
             lockImage = vault.loadLockImage()
@@ -115,7 +117,11 @@ struct LockScreen: View {
                 if password.isEmpty, let stored = vault.storedMasterPassword() {
                     password = stored
                 }
-                if vault.canUnlockWithBiometrics {
+                // 面容 ID 仅在"无密码可预填"时自动弹(此时它是唯一通路,
+                // 如他机改密清掉钥匙串副本后)。预填在场时自动弹纯属摩擦:
+                // 用户取消面容 ID 后照样一键解锁,生物识别没有真正把门——
+                // 这种场景下面容 ID 降级为按钮,想用再点。
+                if vault.canUnlockWithBiometrics, vault.storedMasterPassword() == nil {
                     Task { await vault.unlockWithBiometrics() }
                 }
             }
@@ -145,23 +151,7 @@ struct LockScreen: View {
                     // 一概后置到验证完成(库就绪后自动补绑云同步)
                     onboardingAccountCard
                 } else {
-                    serverRestoreCard
-                    Button {
-                        showFileImporter = true
-                    } label: {
-                        Label(L10n.t("ios_import_file_button"), systemImage: "doc.badge.plus")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(Brand.accent)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 46)
-                            .background(Brand.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                    Text(L10n.t("ios_or_create_new_hint"))
-                        .font(.footnote)
-                        .foregroundStyle(Brand.muted)
-                        .padding(.vertical, 4)
-                    createFields
+                    setupFlow
                 }
             } else {
                 unlockFields
@@ -173,8 +163,141 @@ struct LockScreen: View {
             guard isSetup else { return }
             if let records = await vault.relayVaultsForRestore() {
                 serverVaults = records
-                selectedVault = records.first { $0.bodyUpdatedAt != nil }?.name ?? ""
+                selectedVault = records.first?.name ?? ""
             }
+        }
+    }
+
+    // MARK: 初始化方式选择(三选一分步)
+
+    /// 左缘右滑返回选择页:必须挂在最外层滚动容器上——内容区手势会被
+    /// ScrollView 抢占,且内容 28pt 边距使子视图根本覆盖不到屏幕边缘。
+    /// 与滚动并存(simultaneous),仅在"初始化步骤页 + 左缘起手 + 横向为主"
+    /// 时触发,纵向滚动不受影响。
+    private var setupBackSwipe: some Gesture {
+        DragGesture(minimumDistance: 20)
+            .onEnded { value in
+                guard isSetup, setupChoice != nil else { return }
+                let nearLeftEdge = value.startLocation.x < 60
+                let horizontal = value.translation.width
+                let mostlyHorizontal = abs(value.translation.height) * 2 < abs(horizontal)
+                if nearLeftEdge, horizontal > 40, mostlyHorizontal {
+                    Log.info("ui", "ios setup edge-swipe back to chooser")
+                    withAnimation(.easeOut(duration: 0.15)) { setupChoice = nil }
+                }
+            }
+    }
+
+    /// 邮箱验证后的初始化:方式选择页 → 对应步骤页(可返回重选)。
+    /// 步骤页支持两种返回:左上角按钮 + 左缘右滑手势(与系统推拉返回同向;
+    /// 内容嵌在外层 ScrollView 里用不了系统手势,这里自实现边缘判定)。
+    @ViewBuilder
+    private var setupFlow: some View {
+        if setupChoice != nil {
+            VStack(spacing: 12) {
+                Button {
+                    Log.info("ui", "ios setup back to chooser")
+                    withAnimation(.easeOut(duration: 0.15)) { setupChoice = nil }
+                } label: {
+                    Label(L10n.t("ios_setup_back_button"), systemImage: "chevron.left")
+                        .font(.footnote)
+                        .foregroundStyle(Brand.accent)
+                }
+                .frame(maxWidth: 340, alignment: .leading)
+                setupChoicePage
+            }
+        } else {
+            setupChooser
+        }
+    }
+
+    /// 当前所选方式的步骤页内容。
+    @ViewBuilder
+    private var setupChoicePage: some View {
+        switch setupChoice {
+        case .restore:
+            if serverVaults.isEmpty {
+                Text(L10n.t("cloud_restore_empty_hint"))
+                    .font(.footnote)
+                    .foregroundStyle(Brand.muted)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 8)
+            } else {
+                serverRestoreCard
+            }
+        case .importFile:
+            importCard
+        case .create:
+            createFields
+        case nil:
+            EmptyView()
+        }
+    }
+
+    /// 方式选择页:新建 / 文件导入 / 云端恢复 三选一。
+    private var setupChooser: some View {
+        VStack(spacing: 12) {
+            Text(L10n.t("ios_setup_choose_title"))
+                .font(.headline)
+                .foregroundStyle(Brand.fg)
+            Text(L10n.t("ios_setup_choose_hint"))
+                .font(.footnote)
+                .foregroundStyle(Brand.muted)
+            choiceRow(.create, icon: "plus.circle.fill", titleKey: "ios_setup_create_title", hintKey: "ios_setup_create_hint")
+            choiceRow(.importFile, icon: "doc.badge.plus", titleKey: "ios_setup_import_title", hintKey: "ios_setup_import_hint")
+            choiceRow(.restore, icon: "person.icloud.fill", titleKey: "ios_setup_restore_title", hintKey: "ios_setup_restore_hint")
+        }
+    }
+
+    private func choiceRow(_ choice: SetupChoice, icon: String, titleKey: String, hintKey: String) -> some View {
+        Button {
+            Log.info("ui", "ios setup choice \(String(describing: choice))")
+            setupChoice = choice
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 22))
+                    .foregroundStyle(Brand.accent)
+                    .frame(width: 34)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.t(titleKey))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Brand.fg)
+                    Text(L10n.t(hintKey))
+                        .font(.caption)
+                        .foregroundStyle(Brand.muted)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(Brand.muted)
+            }
+            .padding(14)
+            .background(Brand.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 文件导入步骤页:选择 .upw/.upwkey 文件对(容器校验与配套信封检查
+    /// 在 Vault.importDatabaseFile 内完成)。
+    private var importCard: some View {
+        VStack(spacing: 10) {
+            Button {
+                showFileImporter = true
+            } label: {
+                Label(L10n.t("ios_import_file_button"), systemImage: "doc.badge.plus")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Brand.accent)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 46)
+                    .background(Brand.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            Text(L10n.t("local_restore_hint"))
+                .font(.caption)
+                .foregroundStyle(Brand.muted)
+                .multilineTextAlignment(.center)
         }
     }
 
@@ -198,16 +321,16 @@ struct LockScreen: View {
                 SecureField(L10n.t("relay_code_placeholder"), text: $accountCode)
                     .keyboardType(.numberPad)
                     .textFieldStyle(.roundedBorder)
-                Button(L10n.t("relay_send_code_button")) {
+                Button(resend.buttonTitle(L10n.t("relay_send_code_button"))) {
                     Log.info("ui", "ios onboarding code request")
                     accountBusy = true
                     let address = accountEmail.trimmingCharacters(in: .whitespaces)
                     Task {
-                        await vault.relaySendCode(email: address)
+                        resend.start(await vault.relaySendCode(email: address))
                         accountBusy = false
                     }
                 }
-                .disabled(!accountEmail.contains("@") || accountBusy)
+                .disabled(!accountEmail.contains("@") || accountBusy || resend.isRunning)
                 .buttonStyle(.borderless)
             }
             Button {
@@ -252,7 +375,7 @@ struct LockScreen: View {
                     .foregroundStyle(Brand.fg)
                 Picker(L10n.t("ios_cloud_db_picker"), selection: $selectedVault) {
                     ForEach(serverVaults.map(\.name), id: \.self) { name in
-                        Text(rowLabel(name)).tag(name)
+                        Text(name).tag(name)
                     }
                 }
                 .pickerStyle(.menu)
@@ -289,17 +412,20 @@ struct LockScreen: View {
         }
     }
 
-    /// 单行标签:尚无服务端库体镜像的库标注(在原设备同步一次后即可恢复)。
-    private func rowLabel(_ n: String) -> String {
-        guard let record = serverVaults.first(where: { $0.name == n }),
-              record.bodyUpdatedAt == nil else { return n }
-        return n + L10n.t("cloud_restore_no_mirror_suffix")
-    }
 
     // MARK: 创建 / 解锁
 
     private var createFields: some View {
         VStack(spacing: 12) {
+            // 库名可自定义(默认 Main);云端注册与多库管理都以这个名字认领/展示
+            TextField(L10n.t("ios_setup_vault_name_placeholder"), text: $newVaultName)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textFieldStyle(.plain)
+                .font(.body)
+                .padding(.horizontal, 16)
+                .frame(height: 50)
+                .background(Brand.fg.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             SecureField(L10n.t("ios_master_password_prompt"), text: $password)
                 .textContentType(.newPassword)
                 .textFieldStyle(.plain)
@@ -370,7 +496,7 @@ struct LockScreen: View {
     private func create() {
         guard password.count >= PasswordPolicy.minimumMasterPasswordLength else { fail(L10n.t("ios_password_too_short_error")); return }
         guard password == confirm else { fail(L10n.t("ios_password_mismatch_error")); return }
-        vault.createVault(password: password, biometric: enableFaceID && vault.biometricAvailable)
+        vault.createVault(name: newVaultName, password: password, biometric: enableFaceID && vault.biometricAvailable)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 

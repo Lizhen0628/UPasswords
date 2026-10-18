@@ -34,7 +34,7 @@ final class AppContext: ObservableObject {
         }
     }
     @Published var selection: SidebarSelection = .special(.allCards)
-    @Published var selectedCardId: Int? = nil
+    @Published var selectedCardId: UUID? = nil
     /// 搜索框逐键文本。故意不用 @Published(同 editDraft/lastActivity 先例,规范 11.5):
     /// 逐键广播 objectWillChange 会让整棵视图树重渲染造成输入卡顿;
     /// TextField 编辑期间自绘显示,防抖后的 searchQuery 才驱动列表/计数。
@@ -51,7 +51,7 @@ final class AppContext: ObservableObject {
             let closed = oldValue != nil && editDraft == nil
             if opened || closed {
                 objectWillChange.send()
-                Log.info("ui", "editDraft \(opened ? "open" : "close") cardId=\(editDraft?.card.id ?? oldValue?.card.id ?? -1) isNew=\(editDraft?.isNew ?? false)")
+                Log.info("ui", "editDraft \(opened ? "open" : "close") cardId=\(editDraft?.card.id.uuidString.prefix(8) ?? oldValue?.card.id.uuidString.prefix(8) ?? "nil")… isNew=\(editDraft?.isNew ?? false)")
             }
         }
     }
@@ -66,23 +66,32 @@ final class AppContext: ObservableObject {
     /// 远端密文用本机不知道的密码加密(对端刚改过主密码/数据损坏):
     /// 云同步设置页据此展示「接管/覆盖」修复入口(与 iOS 同语义)。
     @Published var syncRemoteUnreadable = false
+    /// relay 账户/绑定状态版本号:登录、登出、绑定/解绑、会话失效时自增。
+    /// RelayStore 只是 defaults 读写,不经 @Published——没有这个版本号,
+    /// 登录成功后设置页表单不会翻页(用户会误判"登录失败"而反复重试,
+    /// 每次重试都在服务端多签发一条会话)。
+    @Published private(set) var relayStateVersion = 0
+
+    /// relay 状态版本号自增(跨文件扩展经此触发设置页重渲染,setter 保持私有)。
+    func relayStateChanged() {
+        relayStateVersion += 1
+    }
     @Published var lastSyncFailed: Date? = nil
     @Published var failedUnlockAttempts = 0
 
     enum SyncState: Equatable {
-        case disabled, idle, syncing, conflict, error(String)
+        case disabled, idle, syncing, error(String)
     }
 
-    /// 未决同步冲突现场(检测与裁决逻辑见 AppContext+Sync)。故意不用
-    /// @Published:弹窗呈现经 activeSheet 驱动,这里只保存裁决所需现场,
-    /// 弹窗打开时按需读取。
-    var pendingSyncConflict: PendingSyncConflict? = nil
+    /// 行级同步状态(游标/revision/脏集合/快照基线);解锁时按库装载。
+    /// 故意不用 @Published:同步状态呈现走 syncState,这里高频读写不驱动逐条 UI。
+    var rowSync = RowSyncState()
     // 空闲追踪用,不进 UI。故意不用 @Published:活动监视器把每次键盘/鼠标
     // 事件都算作活动,若发布会在打字时逐键触发整棵视图树重渲染(输入卡顿)。
     var lastActivity: Date = Date()
     // 网站图标抓取状态(逻辑在 AppContext+Icons.swift):
     // 本会话已尝试抓取的卡片,防止反复请求失败站点;补抓串行任务句柄。
-    var iconFetchAttempted = Set<Int>()
+    var iconFetchAttempted = Set<UUID>()
     var iconBackfillTask: Task<Void, Never>? = nil
 
     /// In-memory password, present only while unlocked.
@@ -144,7 +153,7 @@ final class AppContext: ObservableObject {
                    let spec = Templates.spec(id: 102) {
                     // 演示值(非真实凭据);前两张卡共用同一密码以复现「重复使用的密码」警告
                     if !database.cards.contains(where: { $0.title == "国金" }) {
-                        var a = Templates.makeCard(from: spec, id: newCardId())
+                        var a = Templates.makeCard(from: spec)
                         a.title = "国金"
                         a.fields = a.fields.map { f in
                             var f = f
@@ -157,9 +166,9 @@ final class AppContext: ObservableObject {
                             return f
                         }
                         a.notes = "第二因子使用硬件密钥。"
-                        a.labelIds = [1]
+                        a.labelIds = []
                         upsertCard(a)
-                        var b = Templates.makeCard(from: spec, id: newCardId())
+                        var b = Templates.makeCard(from: spec)
                         b.title = "国金备用"
                         b.fields = b.fields.map { f in
                             var f = f
@@ -171,7 +180,7 @@ final class AppContext: ObservableObject {
                     }
                     // 短密码卡:复现 ≤6 位全打点掩码与「弱密码」警告卡
                     if !database.cards.contains(where: { $0.title == "短密码示例" }) {
-                        var c = Templates.makeCard(from: spec, id: newCardId())
+                        var c = Templates.makeCard(from: spec)
                         c.title = "短密码示例"
                         c.fields = c.fields.map { f in
                             var f = f
@@ -202,7 +211,7 @@ final class AppContext: ObservableObject {
                             w.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
                             w.makeKeyAndOrderFront(nil)
                         }
-                        var m = EditCardModel(card: Templates.makeCard(from: spec, id: AppContext.shared.newCardId()))
+                        var m = EditCardModel(card: Templates.makeCard(from: spec))
                         m.isNew = true
                         AppContext.shared.editDraft = m
                     }
@@ -255,7 +264,7 @@ final class AppContext: ObservableObject {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
                         NSApp.activate(ignoringOtherApps: true)
                         guard let spec = Templates.spec(id: specId) else { return }
-                        var m = EditCardModel(card: Templates.makeCard(from: spec, id: AppContext.shared.newCardId()))
+                        var m = EditCardModel(card: Templates.makeCard(from: spec))
                         m.isNew = true
                         AppContext.shared.editDraft = m
                     }
@@ -308,7 +317,6 @@ final class AppContext: ObservableObject {
         databaseName = name
         self.password = password
         phase = .unlocked
-        pendingSyncConflict = nil // 切换/解锁数据库:旧库的冲突现场作废
         lastActivity = Date() // otherwise the idle timer re-locks right after unlocking
         failedUnlockAttempts = 0
         lastFailedUnlockAt = nil
@@ -376,19 +384,21 @@ final class AppContext: ObservableObject {
                     Log.warn("lifecycle", "remote unlock fallback: password rejected by remote envelope")
                     return .wrongPassword
                 }
-                let body: Data
+                // v7:远端是行级密文,走全量重建收敛本地(他机改密后本体随新 VEK 重加密)
+                var state = store.loadSyncState(for: name)
+                let db: PasswordDatabase
                 do {
-                    body = try await relayClient.getBody(token: token, vaultId: binding.vaultId)
+                    db = try await RowSync.fullRebuild(
+                        client: relayClient, token: token, vaultId: binding.vaultId,
+                        key: RowSyncKey(raw: vek.withUnsafeBytes { Data($0) }), state: &state)
                 } catch {
-                    Log.warn("sync", "remote unlock fallback: rotated body not on relay yet")
-                    AppToast.shared.show(L10n.t("unlock_remote_body_missing"))
+                    Log.warn("sync", "remote unlock fallback: rows not reachable yet (\(error))")
                     return .unavailable
                 }
-                let plain = try DatabaseCipher.decryptBody(body, vaultKey: vek)
-                let db = try PasswordDatabase.parse(plain)
                 try store.save(db, name: name, vaultKey: vek)
                 try store.saveEnvelope(envelopeBytes, for: name)
-                Log.info("lifecycle", "remote unlock fallback converged local vault \"\(name)\"")
+                store.saveSyncState(state, for: name)
+                Log.info("lifecycle", "remote unlock fallback converged local vault \"\(name)\" (rows rebuilt)")
                 do {
                     try unlock(name: name, password: password)
                     return .success
@@ -426,7 +436,6 @@ final class AppContext: ObservableObject {
         activeSheet = nil
         editDraft = nil
         // 未决冲突现场随之作废:下次解锁后的同步会重新检测
-        pendingSyncConflict = nil
         // 关闭设置窗等独立窗口,不让它们残留在锁屏之上
         WindowChromeManager.shared.closeAuxiliaryWindows()
         // 锁定即清掉本 App 复制进剪贴板的内容(自动清除关闭/未走完时不残留)
@@ -509,7 +518,6 @@ final class AppContext: ObservableObject {
         database = PasswordDatabase()
         databaseName = ""
         password = ""
-        pendingSyncConflict = nil
         phase = .setup
     }
 

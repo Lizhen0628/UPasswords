@@ -175,7 +175,7 @@ public struct Attachment: Codable, Equatable, Identifiable {
 
 /// A user label (`<label name id/>`).
 public struct CardLabel: Codable, Equatable, Identifiable {
-    public init(id: Int, name: String, color: String? = nil, type: String? = nil,
+    public init(id: UUID = UUID(), name: String, color: String? = nil, type: String? = nil,
                 pinToTop: Bool = false, timeStamp: TimeInterval = 0) {
         self.id = id
         self.name = name
@@ -185,7 +185,7 @@ public struct CardLabel: Codable, Equatable, Identifiable {
         self.timeStamp = timeStamp
     }
 
-    public var id: Int
+    public var id: UUID = UUID()
     public var name: String
     public var color: String? = nil
     public var type: String? = nil            // e.g. "web_accounts"
@@ -196,27 +196,17 @@ public struct CardLabel: Codable, Equatable, Identifiable {
     public static func == (l: CardLabel, r: CardLabel) -> Bool { l.id == r.id }
 }
 
-/// Deletion tombstone used for convergent sync merges.
-public struct Ghost: Codable, Equatable {
-    public init(id: Int, time: TimeInterval) {
-        self.id = id
-        self.time = time
-    }
-
-    public var id: Int
-    public var time: TimeInterval // millis
-}
-
 /// A card. Attribute names match the XML exchange format
 /// (title/id/symbol/color/template/autofill/favorite/archived/
-/// trashed/expiration/reminder/created/modified).
+/// trashed/expiration/reminder/created/modified);id 为 UUID v4
+/// (客户端生成,行级同步的条目身份,离线多端无碰撞)。
 public struct Card: Codable, Equatable, Identifiable {
-    public init(id: Int, title: String = "") {
+    public init(id: UUID = UUID(), title: String = "") {
         self.id = id
         self.title = title
     }
 
-    public var id: Int
+    public var id: UUID = UUID()
     public var title: String = ""
     public var symbol: String? = nil
     public var color: String? = nil
@@ -240,7 +230,7 @@ public struct Card: Codable, Equatable, Identifiable {
     public var iconData: Data? = nil
     public var fields: [Field] = []
     public var notes: String = ""
-    public var labelIds: [Int] = []
+    public var labelIds: [UUID] = []
     public var images: [Attachment] = []
     public var files: [Attachment] = []
 

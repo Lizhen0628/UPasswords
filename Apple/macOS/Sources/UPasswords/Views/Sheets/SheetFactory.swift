@@ -26,7 +26,6 @@ enum SheetFactory {
         case .compromised: CompromisedSheet()
         case .changePassword: ChangePasswordSheet()
         case .configureCloud: ConfigureCloudSheet()
-        case .syncConflict: SyncConflictSheet()
         case .eraseData: EraseDataSheet()
         case .manageDatabases: ManageDatabasesSheet()
         case .selectDatabase: SelectDatabaseSheet()

@@ -91,7 +91,9 @@ test('Contracts: database schema parses and field vocabulary matches the app', (
     ])
     assert.equal(schema.$defs.autofill.enum.length, 9, 'autofill vocabulary has 9 tokens')
     assert.ok(schema.$defs.card, 'card def present')
-    assert.ok(schema.$defs.ghost, 'ghost (tombstone) def present')
+    assert.equal(schema.$defs.ghost, undefined, 'v7: no tombstone (row store is authoritative)')
+    assert.equal(schema.$defs.card.properties.id.type, 'string', 'v7: card id is uuid string')
+    assert.equal(schema.$defs.label.properties.id.format, 'uuid', 'v7: label id is uuid')
 })
 
 test('Contracts: extension message schema covers all request/response tags', () => {
