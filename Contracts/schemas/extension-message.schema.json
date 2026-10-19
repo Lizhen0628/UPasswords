@@ -114,6 +114,10 @@
                 "notes": {
                     "type": "string"
                 },
+                "favorite": {
+                    "type": "boolean",
+                    "description": "Native favorite marker; trusted popup/background only, never included in page fill payloads."
+                },
                 "source": {
                     "type": "object",
                     "properties": {

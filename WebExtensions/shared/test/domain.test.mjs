@@ -133,6 +133,8 @@ test('Contracts: raw XML is trusted-session only and fills require an origin', (
     assert.equal(schema.$defs.item.properties.source, undefined)
     assert.equal(schema.$defs.item.properties.notes, undefined)
     assert.ok(schema.$defs.sessionItem.properties.source)
+    assert.equal(schema.$defs.sessionItem.properties.favorite.type, 'boolean')
+    assert.equal(schema.$defs.item.properties.favorite, undefined, 'favorites must remain trusted-session only')
     assert.equal(session.properties.item.$ref, '#/$defs/sessionItem')
     assert.ok(session.properties.action.enum.includes('replace'))
     const hint = schema.oneOf[1].oneOf.find((branch) => branch.properties.type.const === 'site-hint')
@@ -152,6 +154,8 @@ test('Contracts: all four browser manifests agree on shared entry points', () =>
         // 弹窗必须始终能读当前页地址做站点匹配:无 tabs 权限时
         // tabs.query 不含 url,插件在所有网页都报"此页面不可填充"
         assert.ok(m.permissions.includes('tabs'), 'permissions must include tabs')
+        assert.ok(m.permissions.includes('clipboardWrite'), 'explicit copy must work across popup session checks')
+        assert.equal(m.permissions.includes('clipboardRead'), false, 'never request clipboard reading')
         assert.ok(m.content_scripts.some((cs) => cs.js.includes('src/content.js')))
         assert.ok(m.action.default_popup.includes('popup.html'))
         // relay 数据通路:各端都要覆盖 relay 域名(Firefox 为可选授予语义)

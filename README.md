@@ -8,6 +8,10 @@
 
 **功能清单**：全部客户端形态与云同步的功能面见 [FEATURES.md](FEATURES.md)。
 
+**浏览器插件**：Safari / Chrome / Edge / Firefox 提供密码库工作台、站点／收藏筛选、
+域名搜索、快捷复制、密码生成器及手动新建／联网编辑。使用方法、加载步骤与安全边界见
+[浏览器扩展说明](WebExtensions/README.md)。
+
 ## 仓库结构
 
 ```

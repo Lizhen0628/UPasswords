@@ -7,7 +7,7 @@
     <style>
         :root {
             color-scheme: light dark;
-            --surface: #ffffff;
+            --surface: #fff;
             --subtle: #f5f6f8;
             --text: #202631;
             --secondary: #697382;
@@ -17,130 +17,135 @@
             --danger: #b62c3a;
             --danger-tint: #fff1f2;
             --success: #23754e;
+            --shadow: 0 12px 28px rgb(20 30 50 / .08);
         }
         * { box-sizing: border-box; }
         [hidden] { display: none !important; }
         .visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-        html, body { width: 440px; min-width: 440px; max-width: 440px; }
+        html, body { width: 440px; min-width: 340px; max-width: 440px; }
         html { overflow: hidden; background: var(--surface); }
-        body {
-            height: auto; max-height: 600px;
-            margin: 0; display: flex; flex-direction: column; overflow: hidden;
-            font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            color: var(--text); background: var(--surface);
-        }
+        body { height: auto; max-height: 600px; margin: 0; display: flex; flex-direction: column; overflow: hidden; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--text); background: var(--surface); }
         button, input, select, textarea { font: inherit; }
         button { cursor: pointer; }
         button:disabled { opacity: .55; cursor: default; }
-        .item button:disabled { opacity: 1; cursor: default; }
         button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
         svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; }
-        .header {
-            display: flex; align-items: center; gap: 12px; min-height: 72px; padding: 14px 24px;
-            border-bottom: 1px solid var(--line); flex-shrink: 0;
-        }
+        .header { display: flex; align-items: center; gap: 10px; min-height: 64px; padding: 10px 18px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
         .brand-mark { width: 34px; height: 34px; display: grid; place-items: center; color: var(--accent); background: var(--tint); border-radius: 10px; flex-shrink: 0; }
         .brand-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
         h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.3px; }
-        .vault-name { min-width: 0; font-size: 12px; color: var(--secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .vault-name { display: block; min-width: 0; max-width: 100%; padding: 0; border: 0; color: var(--secondary); background: transparent; text-align: left; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .vault-name:empty { display: none; }
-        .state-badge { flex-shrink: 0; padding: 4px 9px; border-radius: 999px; background: var(--subtle); font-size: 11px; color: var(--secondary); }
-        body[data-panel="items"] .state-badge,
-        body[data-panel="detail"] .state-badge,
-        body[data-panel="settings"] .state-badge { color: var(--success); background: color-mix(in srgb, var(--success) 10%, var(--surface)); }
-        body:not([data-panel="unlock"]):not([data-panel="items"]):not([data-panel="settings"]):not([data-panel="detail"]) .state-badge,
-        body:not([data-panel="unlock"]):not([data-panel="items"]):not([data-panel="settings"]):not([data-panel="detail"]) .vault-name { display: none; }
+        #switchVaultButton { cursor: pointer; }
+        #switchVaultButton:hover { color: var(--accent); }
+        .state-badge { flex: 0 0 auto; max-width: 88px; padding: 4px 8px; border-radius: 999px; background: var(--subtle); font-size: 11px; color: var(--secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        body[data-panel="items"] .state-badge, body[data-panel="detail"] .state-badge, body[data-panel="settings"] .state-badge, body[data-panel="generator"] .state-badge, body[data-panel="new-login"] .state-badge { color: var(--success); background: color-mix(in srgb, var(--success) 10%, var(--surface)); }
+        body:not([data-panel="unlock"]):not([data-panel="items"]):not([data-panel="settings"]):not([data-panel="detail"]):not([data-panel="generator"]):not([data-panel="new-login"]) .state-badge,
+        body:not([data-panel="unlock"]):not([data-panel="items"]):not([data-panel="settings"]):not([data-panel="detail"]):not([data-panel="generator"]):not([data-panel="new-login"]) .vault-name { display: none; }
         body:not([data-panel="items"]) .site-context { display: none; }
-        #headerTools { display: flex; align-items: center; }
+        #headerTools { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
         #lockNowButton { display: grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: 8px; color: var(--secondary); background: transparent; }
         #lockNowButton:hover { color: var(--text); background: var(--subtle); }
-        main { min-height: 0; flex: 1 1 auto; max-height: 474px; overflow-y: auto; padding: 24px; scrollbar-gutter: stable; }
-        body[data-panel="items"] main { min-height: 340px; padding: 18px 24px 20px; }
-        .panel { display: flex; flex-direction: column; gap: 20px; }
-        .panel-heading { display: flex; flex-direction: column; gap: 8px; }
+        main { min-height: 0; flex: 1 1 auto; max-height: 474px; overflow-y: auto; padding: 18px; scrollbar-gutter: stable; }
+        body[data-panel="items"] main { min-height: 340px; padding: 14px 18px 18px; }
+        .panel { display: flex; flex-direction: column; gap: 18px; }
+        .panel-heading { display: flex; flex-direction: column; gap: 7px; }
         .step { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -.3px; }
         .description { margin: 0; color: var(--secondary); font-size: 13px; overflow-wrap: anywhere; }
-        .field { min-width: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px; font-weight: 500; }
-        input, select, textarea {
-            min-width: 0; width: 100%; height: 44px; padding: 10px 12px; border-radius: 9px;
-            border: 1px solid #cdd3dc; background: var(--surface); color: var(--text);
-        }
+        .field { min-width: 0; display: flex; flex-direction: column; gap: 7px; font-size: 13px; font-weight: 500; }
+        input, select, textarea { min-width: 0; width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid #cdd3dc; border-radius: 9px; background: var(--surface); color: var(--text); }
+        textarea { height: auto; resize: vertical; }
         input::placeholder { color: var(--secondary); }
-        .primary, .secondary { min-height: 44px; border-radius: 9px; padding: 10px 16px; font-weight: 600; }
+        .primary, .secondary { min-height: 40px; border-radius: 9px; padding: 8px 13px; font-weight: 600; }
         .primary { width: 100%; border: 1px solid var(--accent); color: #fff; background: var(--accent); }
         .primary:hover:not(:disabled) { filter: brightness(.94); }
-        .secondary { border: 1px solid var(--line); color: var(--text); background: var(--subtle); white-space: nowrap; }
+        .secondary { border: 1px solid var(--line); color: var(--text); background: var(--subtle); white-space: normal; }
         .secondary:hover:not(:disabled) { background: var(--tint); }
-        .row { display: grid; grid-template-columns: minmax(0, 1fr) 144px; align-items: start; gap: 12px; }
-        #createVaultForm { display: flex; flex-direction: column; gap: 20px; }
+        .row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 144px); align-items: start; gap: 10px; }
+        #createVaultForm { display: flex; flex-direction: column; gap: 18px; }
         #vaultList { display: flex; flex-direction: column; }
         #vaultList:empty { display: none; }
-        .vault-row {
-            display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
-            padding: 11px 10px; border: 0; border-bottom: 1px solid var(--line); border-radius: 4px;
-            background: var(--surface); color: var(--text); font-weight: 600; overflow-wrap: anywhere;
-        }
+        .vault-row { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left; padding: 11px 10px; border: 0; border-bottom: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
         .vault-row:hover { background: var(--tint); }
         .count { color: var(--secondary); font-size: 12px; font-weight: 400; }
-        .unlock-note { margin: -8px 0 0; padding: 10px 12px; border-radius: 8px; color: var(--secondary); background: var(--subtle); font-size: 12px; }
-        #navigation { display: flex; gap: 6px; padding: 8px 20px; border-top: 1px solid var(--line); flex-shrink: 0; }
-        #navigation button { flex: 1; min-height: 40px; border: 0; border-radius: 8px; color: var(--secondary); background: transparent; font-weight: 550; }
+        .unlock-note, .privacy-note { margin: 0; padding: 10px 12px; border-radius: 8px; color: var(--secondary); background: var(--subtle); font-size: 12px; }
+        #navigation { display: flex; gap: 6px; padding: 7px 14px; border-top: 1px solid var(--line); flex-shrink: 0; }
+        #navigation button { flex: 1; min-width: 0; min-height: 40px; padding: 7px 5px; border: 0; border-radius: 8px; color: var(--secondary); background: transparent; font-weight: 550; overflow-wrap: anywhere; }
         #navigation button:hover, #navigation button[aria-current="page"] { color: var(--accent); background: var(--tint); }
-        .site-context { display: flex; align-items: center; gap: 8px; margin: 0 0 18px; padding: 10px 12px; border-radius: 9px; background: var(--subtle); }
+        .site-context { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; padding: 10px 12px; border-radius: 9px; background: var(--subtle); }
         .site-context svg { width: 16px; height: 16px; color: var(--secondary); flex-shrink: 0; }
         .site-copy { min-width: 0; flex: 1; }
         .host { font-size: 13px; color: var(--secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .suggestion-section { margin-bottom: 22px; }
-        .search { position: relative; display: block; margin-bottom: 20px; }
-        .search svg { position: absolute; left: 12px; top: 13px; width: 18px; height: 18px; color: var(--secondary); pointer-events: none; }
+        .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: -6px 0 10px; }
+        .toolbar select, .toolbar button { width: auto; min-width: 0; min-height: 34px; padding: 5px 8px; font-size: 12px; }
+        .toolbar select { flex: 1 1 110px; }
+        .toolbar button { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--subtle); }
+        #newLoginButton { border-color: var(--accent); color: var(--accent); background: var(--tint); font-weight: 650; }
+        .search { position: relative; display: block; margin-bottom: 15px; }
+        .search svg { position: absolute; left: 12px; top: 12px; width: 18px; height: 18px; color: var(--secondary); pointer-events: none; }
         .search input { padding-left: 40px; background: var(--subtle); border-color: transparent; }
         .search input:focus { background: var(--surface); }
-        .list-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; color: var(--secondary); }
+        .sync-summary { margin: -5px 0 10px; color: var(--secondary); font-size: 11px; }
+        .list-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; color: var(--secondary); }
         .list-heading h2 { margin: 0; font-size: 13px; font-weight: 600; }
         #resultCount { flex-shrink: 0; font-size: 12px; font-variant-numeric: tabular-nums; }
         ul { list-style: none; margin: 0; padding: 0; }
-        .item { display: flex; flex-wrap: wrap; align-items: center; }
-        .item > button:first-child { flex: 1; min-width: 0; width: auto; }
-        .item > .fill-action { width: auto; min-height: 40px; color: var(--accent); font-size: 12px; }
-        #detailContent { display: flex; flex-direction: column; gap: 18px; }
-        .detail-actions { display: flex; justify-content: space-between; gap: 12px; }
-        .detail-value { display: flex; gap: 8px; align-items: start; }
-        .detail-value input, .detail-value textarea { flex: 1; }
-        .detail-value textarea { height: auto; min-height: 100px; resize: vertical; white-space: pre-wrap; }
-        #detailSaveSection { display: flex; flex-direction: column; gap: 16px; }
-        #detailLegacyNote { margin: 0; }
+        .suggestion-section { margin-bottom: 18px; }
+        .item { display: flex; flex-wrap: wrap; align-items: center; gap: 0 4px; padding: 4px 0; }
         .item + .item { border-top: 1px solid var(--line); }
-        .item button {
-            display: flex; align-items: center; gap: 12px; width: 100%; min-height: 68px; text-align: left;
-            padding: 10px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text);
-        }
+        .item > button:first-child { flex: 1 1 175px; min-width: 0; width: auto; }
+        .item button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 58px; text-align: left; padding: 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text); }
         .item button:hover:not(:disabled), .item button:focus-visible { background: var(--tint); }
-        .item-avatar { width: 36px; height: 36px; flex-shrink: 0; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 9px; color: var(--secondary); font-size: 14px; font-weight: 600; }
-        .item-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+        .item-avatar { width: 34px; height: 34px; flex-shrink: 0; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 9px; color: var(--secondary); font-size: 14px; font-weight: 600; }
+        .item-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
         .title, .user { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
         .title { font-weight: 600; }
         .user { color: var(--secondary); font-size: 12px; }
-        .fill-label, .site-label { font-size: 12px; flex-shrink: 0; }
+        .fill-label, .site-label { flex: 0 0 auto; font-size: 11px; }
         .fill-label { color: var(--accent); }
         .site-label { color: var(--secondary); }
-        .item .ok { display: block; margin: 0 8px 8px 56px; color: var(--success); font-size: 12px; }
-        .empty-state { padding: 30px 16px; text-align: center; background: var(--subtle); border-radius: 10px; }
-        .empty-state h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
-        .empty-state p { margin: 0; color: var(--secondary); font-size: 13px; overflow-wrap: anywhere; }
-        #settingsBox { display: flex; flex-direction: column; gap: 20px; }
+        .item-actions { display: flex; align-items: center; justify-content: flex-end; gap: 3px; flex: 0 0 auto; }
+        .item-actions button, .item > .fill-action { width: auto; min-width: 34px; min-height: 34px; padding: 5px 8px; border: 1px solid transparent; border-radius: 7px; color: var(--secondary); background: transparent; font-size: 11px; }
+        .item-actions button:hover, .item > .fill-action:hover { border-color: var(--line); color: var(--accent); background: var(--surface); }
+        .item .ok { display: block; flex-basis: 100%; margin: 0 8px 6px 52px; color: var(--success); font-size: 12px; }
+        .empty-state { padding: 24px 16px; text-align: center; background: var(--subtle); border: 1px solid var(--line); border-radius: 10px; }
+        .empty-state h3 { margin: 0 0 7px; font-size: 14px; font-weight: 600; }
+        .empty-state p { margin: 0 0 14px; color: var(--secondary); font-size: 13px; overflow-wrap: anywhere; }
+        .empty-state .secondary { width: auto; }
+        #detailContent { display: flex; flex-direction: column; gap: 16px; }
+        .detail-actions { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+        .detail-value { display: flex; gap: 8px; align-items: start; }
+        .detail-value input, .detail-value textarea { flex: 1; }
+        .detail-value textarea { min-height: 100px; white-space: pre-wrap; }
+        #detailSaveSection { display: flex; flex-direction: column; gap: 14px; }
+        #detailLegacyNote { margin: 0; }
+        #settingsBox { display: flex; flex-direction: column; gap: 18px; }
         body[data-panel="settings"] main { min-height: 260px; }
-        .setting-row { display: flex; flex-direction: column; gap: 8px; font-size: 13px; font-weight: 550; }
-        #persistenceNote, #sessionMode { margin: 0; color: var(--secondary); font-size: 12px; }
-        #status { margin-top: 14px; font-size: 12px; overflow-wrap: anywhere; }
+        .setting-row { display: flex; flex-direction: column; gap: 7px; font-size: 13px; font-weight: 550; }
+        #persistenceNote, #sessionMode, #accountInfo, #settingsSyncStatus, #clipboardNote { margin: 0; color: var(--secondary); font-size: 12px; overflow-wrap: anywhere; }
+        #settingsSyncStatus { padding: 9px 10px; border-radius: 7px; background: var(--subtle); }
+        #status { margin-top: 12px; font-size: 12px; overflow-wrap: anywhere; }
         #status:empty { display: none; }
         #status.muted { color: var(--secondary); }
         #status.error { color: var(--danger); background: var(--danger-tint); padding: 9px 10px; border-radius: 5px; }
-        .footer { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 6px 16px; border-top: 1px solid var(--line); flex-shrink: 0; }
-        .footer button { border: 0; min-height: 36px; background: transparent; color: var(--secondary); border-radius: 6px; padding: 8px; font-size: 12px; }
+        .footer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 42px; padding: 6px 12px; border-top: 1px solid var(--line); flex-shrink: 0; }
+        .footer button { min-width: 0; border: 0; min-height: 34px; background: transparent; color: var(--secondary); border-radius: 6px; padding: 7px; font-size: 12px; }
         .footer button:hover { background: var(--subtle); color: var(--text); }
         #lockButton { margin-left: auto; }
+        .generator-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .check-row { display: flex; align-items: center; gap: 7px; color: var(--secondary); font-size: 12px; }
+        .check-row input { width: 16px; min-height: 16px; height: 16px; margin: 0; }
+        #generatedPassword { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+        .clip-note { margin: 0; color: var(--secondary); font-size: 11px; }
+        #newLoginBox .privacy-note { margin-top: -4px; }
+        @media (max-width: 390px) {
+            html, body { width: 360px; }
+            .header { gap: 7px; padding-inline: 12px; }
+            .state-badge { max-width: 70px; }
+            .toolbar select { flex-basis: 95px; }
+        }
         @media (prefers-color-scheme: dark) {
-            :root { --surface: #202227; --subtle: #292c32; --text: #e8e9ed; --secondary: #a3a8b4; --line: #353942; --accent: #82adff; --tint: #29374f; --danger: #ff9da7; --danger-tint: #422a30; --success: #83ceaa; }
+            :root { --surface: #202227; --subtle: #292c32; --text: #e8e9ed; --secondary: #a3a8b4; --line: #353942; --accent: #82adff; --tint: #29374f; --danger: #ff9da7; --danger-tint: #422a30; --success: #83ceaa; --shadow: 0 12px 28px rgb(0 0 0 / .3); }
             input, select, textarea { border-color: #484e59; }
             .primary { color: #142745; }
         }
@@ -149,29 +154,24 @@
 <body>
     <header class="header">
         <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 4v9a6 6 0 0 0 12 0V4M9 4v9a3 3 0 0 0 6 0V4"/></svg></div>
-        <div class="brand-copy"><h1>UPasswords</h1><div class="vault-name" id="vaultName"></div></div>
+        <div class="brand-copy">
+            <h1>UPasswords</h1>
+            <button class="vault-name" id="switchVaultButton" type="button" aria-label="Switch vault" hidden><span id="vaultName"></span><span aria-hidden="true">⌄</span></button>
+        </div>
         <span class="state-badge" id="stateBadge"></span>
-        <div id="headerTools" hidden><button id="lockNowButton" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span class="visually-hidden" data-zh="立即锁定" data-en="Lock now"></span></button></div>
+        <div id="headerTools" hidden><button id="lockNowButton" type="button" aria-label="Lock now" title="Lock now"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span class="visually-hidden" data-zh="立即锁定" data-en="Lock now"></span></button></div>
     </header>
     <main>
         <section class="panel" id="loginBox" aria-labelledby="loginStepTitle" hidden>
-            <div class="panel-heading">
-                <h2 class="step" id="loginStepTitle"></h2>
-                <p class="description" data-zh="使用邮箱验证码登录。" data-en="Sign in with an email verification code."></p>
-            </div>
+            <div class="panel-heading"><h2 class="step" id="loginStepTitle"></h2><p class="description" data-zh="使用邮箱验证码登录。" data-en="Sign in with an email verification code."></p></div>
             <label class="field"><span data-zh="邮箱地址" data-en="Email address"></span><input type="email" id="email" autocomplete="off" placeholder="Email"></label>
-            <div class="field">
-                <label for="code" data-zh="邮箱验证码" data-en="Verification code"></label>
-                <div class="row"><input type="text" id="code" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="Code"><button class="secondary" id="sendCodeButton" type="button"></button></div>
-            </div>
+            <div class="field"><label for="code" data-zh="邮箱验证码" data-en="Verification code"></label><div class="row"><input type="text" id="code" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="Code"><button class="secondary" id="sendCodeButton" type="button"></button></div></div>
             <button class="primary" id="loginButton" type="button"></button>
         </section>
         <section class="panel" id="vaultBox" aria-labelledby="vaultStepTitle" hidden>
-            <div class="panel-heading">
-                <h2 class="step" id="vaultStepTitle"></h2>
-                <p class="description" data-zh="连接此浏览器使用的密码库。" data-en="Connect a vault to this browser."></p>
-            </div>
+            <div class="panel-heading"><h2 class="step" id="vaultStepTitle"></h2><p class="description" data-zh="连接此浏览器使用的密码库。" data-en="Connect a vault to this browser."></p></div>
             <div id="vaultList"></div>
+            <button class="secondary" id="cancelVaultSwitchButton" type="button" data-zh="取消切换" data-en="Cancel switch" hidden></button>
             <div id="createVaultForm" hidden>
                 <label class="field"><span data-zh="密码库名称" data-en="Vault name"></span><input type="text" id="newVaultName" autocomplete="off" placeholder="Main"></label>
                 <label class="field"><span data-zh="主密码" data-en="Master password"></span><input type="password" id="newVaultPassword" autocomplete="new-password"></label>
@@ -180,71 +180,69 @@
             </div>
         </section>
         <section class="panel" id="unlockBox" aria-labelledby="unlockStepTitle" hidden>
-            <div class="panel-heading">
-                <h2 class="step" id="unlockStepTitle"></h2>
-                <p class="description" data-zh="输入主密码，在本机解锁。" data-en="Enter your master password to unlock locally."></p>
-            </div>
+            <div class="panel-heading"><h2 class="step" id="unlockStepTitle"></h2><p class="description" data-zh="输入主密码，在本机解锁。" data-en="Enter your master password to unlock locally."></p></div>
             <label class="field"><span data-zh="主密码" data-en="Master password"></span><input type="password" id="masterPassword" autocomplete="off"></label>
             <button class="primary" id="unlockButton" type="button"></button>
             <p class="unlock-note" data-zh="切换页签不会锁定，闲置后自动锁定。" data-en="Switching tabs keeps your vault unlocked. It locks after inactivity."></p>
         </section>
         <section id="itemsBox" aria-labelledby="itemsHeading" hidden>
             <label class="search"><span class="visually-hidden" data-zh="搜索条目" data-en="Search items"></span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><path d="m15 15 6 6"/></svg><input type="search" id="searchItems" autocomplete="off"></label>
-            <section class="site-context" id="siteContext" hidden>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a18 18 0 0 1 0 18 18 18 0 0 1 0-18Z"/></svg>
-                <div class="site-copy"><div class="host" id="host"></div></div>
-            </section>
-            <section class="suggestion-section" id="suggestionSection" aria-labelledby="suggestionHeading" hidden>
-                <div class="list-heading"><h2 id="suggestionHeading" data-zh="当前网站" data-en="Autofill suggestions"></h2></div>
-                <ul id="suggestions"></ul>
-            </section>
+            <div class="toolbar">
+                <label class="visually-hidden" for="siteFilter" data-zh="筛选条目" data-en="Filter items"></label>
+                <select id="siteFilter" aria-label="Filter items"><option value="all" data-zh="全部网站" data-en="All sites"></option><option value="current" data-zh="当前网站" data-en="Current site"></option><option value="favorites" data-zh="收藏" data-en="Favorites"></option></select>
+                <label class="visually-hidden" for="sortItems" data-zh="排序条目" data-en="Sort items"></label>
+                <select id="sortItems" aria-label="Sort items"><option value="title" data-zh="标题 A–Z" data-en="Title A–Z"></option><option value="title-desc" data-zh="标题 Z–A" data-en="Title Z–A"></option></select>
+                <button id="newLoginButton" type="button" data-zh="新建登录" data-en="New login"></button>
+            </div>
+            <p id="syncSummary" class="sync-summary" aria-live="polite"></p>
+            <section class="site-context" id="siteContext" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a18 18 0 0 1 0 18 18 18 0 0 1 0-18Z"/></svg><div class="site-copy"><div class="host" id="host"></div></div></section>
+            <section class="suggestion-section" id="suggestionSection" aria-labelledby="suggestionHeading" hidden><div class="list-heading"><h2 id="suggestionHeading" data-zh="当前网站" data-en="Autofill suggestions"></h2></div><ul id="suggestions"></ul></section>
             <div class="list-heading"><h2 id="itemsHeading" data-zh="全部条目" data-en="All items"></h2><span id="resultCount" aria-live="polite">0</span></div>
             <ul id="items"></ul>
-            <div class="empty-state" id="emptyState" hidden>
-                <h3 id="emptyTitle"></h3><p id="emptyDescription"></p>
-            </div>
+            <div class="empty-state" id="emptyState" hidden><h3 id="emptyTitle"></h3><p id="emptyDescription"></p><button class="secondary" id="emptyNewLoginButton" type="button" data-zh="新建登录" data-en="New login" hidden></button></div>
         </section>
         <section class="panel" id="detailBox" aria-labelledby="detailHeading" hidden>
-            <div class="detail-actions">
-                <button class="secondary" id="detailBackButton" type="button" data-zh="返回" data-en="Back"></button>
-                <button class="secondary" id="detailEditButton" type="button" data-zh="编辑" data-en="Edit"></button>
-                <button class="secondary" id="detailCancelButton" type="button" data-zh="取消" data-en="Cancel" hidden></button>
-            </div>
+            <div class="detail-actions"><button class="secondary" id="detailBackButton" type="button" data-zh="返回" data-en="Back"></button><button class="secondary" id="detailEditButton" type="button" data-zh="编辑" data-en="Edit"></button><button class="secondary" id="detailCancelButton" type="button" data-zh="取消" data-en="Cancel" hidden></button></div>
             <h2 class="step" id="detailHeading" data-zh="条目详情" data-en="Item details"></h2>
             <p class="description" id="detailLegacyNote" data-zh="此条目仅可查看：缺少可安全编辑的原始数据。请在 App 中编辑，或重新同步。" data-en="View only: original data for safe editing is unavailable. Edit in the app or sync again." hidden></p>
             <div id="detailContent"></div>
-            <div id="detailSaveSection" hidden>
-                <p class="description" data-zh="保存会在本机加密并更新云端条目。请重新输入主密码授权；不会保存主密码或编辑草稿。" data-en="Saving encrypts this item locally and updates it in the cloud. Enter your master password again to authorize; the password and edit draft are never stored."></p>
-                <label class="field"><span data-zh="主密码（仅用于此次保存）" data-en="Master password (this save only)"></span><input type="password" id="detailMasterPassword" autocomplete="off"></label>
-                <button class="primary" id="detailSaveButton" type="button" data-zh="加密并保存" data-en="Encrypt and save"></button>
-            </div>
+            <div id="detailSaveSection" hidden><p class="description" data-zh="保存会在本机加密并更新云端条目。请重新输入主密码授权；不会保存主密码或编辑草稿。" data-en="Saving encrypts this item locally and updates it in the cloud. Enter your master password again to authorize; the password and edit draft are never stored."></p><label class="field"><span data-zh="主密码（仅用于此次保存）" data-en="Master password (this save only)"></span><input type="password" id="detailMasterPassword" autocomplete="off"></label><button class="primary" id="detailSaveButton" type="button" data-zh="加密并保存" data-en="Encrypt and save"></button></div>
+        </section>
+        <section class="panel" id="generatorBox" aria-labelledby="generatorHeading" hidden>
+            <div class="panel-heading"><h2 class="step" id="generatorHeading" data-zh="密码生成器" data-en="Password generator"></h2><p class="description" data-zh="生成的密码仅保留在此弹窗内存中。" data-en="Generated passwords stay in this popup’s memory only."></p></div>
+            <label class="field"><span data-zh="长度（8–128）" data-en="Length (8–128)"></span><input id="generatorLength" type="number" min="8" max="128" value="20" inputmode="numeric"></label>
+            <div class="generator-options"><label class="check-row"><input id="genUppercase" type="checkbox" checked><span data-zh="大写字母" data-en="Uppercase"></span></label><label class="check-row"><input id="genLowercase" type="checkbox" checked><span data-zh="小写字母" data-en="Lowercase"></span></label><label class="check-row"><input id="genDigits" type="checkbox" checked><span data-zh="数字" data-en="Digits"></span></label><label class="check-row"><input id="genSymbols" type="checkbox" checked><span data-zh="符号" data-en="Symbols"></span></label></div>
+            <button class="secondary" id="regenerateButton" type="button" data-zh="重新生成" data-en="Regenerate"></button>
+            <label class="field"><span data-zh="生成的密码" data-en="Generated password"></span><input id="generatedPassword" type="password" readonly autocomplete="off"></label>
+            <div class="row"><button class="secondary" id="revealGeneratedButton" type="button" aria-pressed="false" data-zh="显示密码" data-en="Reveal password"></button><button class="secondary" id="copyGeneratedButton" type="button" data-zh="复制" data-en="Copy"></button></div>
+            <button class="primary" id="useGeneratedButton" type="button" data-zh="用于新登录" data-en="Use in new login"></button>
+            <p class="clip-note" data-zh="复制内容会留在剪贴板，直到被其他内容覆盖；关闭弹窗后无法可靠自动清除。" data-en="Copied content stays on your clipboard until overwritten; it cannot be reliably cleared after this popup closes."></p>
+        </section>
+        <section class="panel" id="newLoginBox" aria-labelledby="newLoginHeading" hidden>
+            <div class="detail-actions"><button class="secondary" id="newLoginBackButton" type="button" data-zh="返回" data-en="Back"></button></div>
+            <h2 class="step" id="newLoginHeading" data-zh="新建登录" data-en="New login"></h2>
+            <p class="privacy-note" data-zh="草稿仅保留在此弹窗内存中。返回或关闭弹窗将丢弃未保存内容。" data-en="This draft exists only in popup memory. Going back or closing the popup discards unsaved changes."></p>
+            <label class="field"><span data-zh="标题" data-en="Title"></span><input id="newLoginTitle" autocomplete="off"></label>
+            <label class="field"><span data-zh="用户名" data-en="Username"></span><input id="newLoginUsername" autocomplete="off"></label>
+            <label class="field"><span data-zh="密码" data-en="Password"></span><input id="newLoginPassword" type="password" autocomplete="new-password"></label>
+            <label class="field"><span data-zh="网站地址" data-en="Website URL"></span><input id="newLoginUrl" type="url" autocomplete="url"></label>
+            <label class="field"><span data-zh="备注" data-en="Notes"></span><textarea id="newLoginNotes" rows="3"></textarea></label>
+            <label class="field"><span data-zh="主密码（确认保存）" data-en="Master password (confirm save)"></span><input id="newLoginMasterPassword" type="password" autocomplete="off"></label>
+            <button class="primary" id="createLoginSaveButton" type="button" data-zh="加密并创建" data-en="Encrypt and create"></button>
         </section>
         <section id="settingsBox" aria-labelledby="settingsHeading" hidden>
-            <div class="panel-heading">
-                <h2 class="step" id="settingsHeading" data-zh="设置" data-en="Settings"></h2>
-                <p class="description" data-zh="选择密码库自动锁定前的闲置时间。" data-en="Choose how long to wait before locking your vault after inactivity."></p>
-            </div>
-            <label class="setting-row" for="lockTimeout"><span data-zh="闲置自动锁定" data-en="Lock after inactivity"></span>
-                <select id="lockTimeout">
-                    <option value="5" data-zh="5 分钟" data-en="5 minutes">5 minutes</option>
-                    <option value="15" data-zh="15 分钟" data-en="15 minutes">15 minutes</option>
-                    <option value="30" data-zh="30 分钟" data-en="30 minutes">30 minutes</option>
-                    <option value="60" data-zh="60 分钟" data-en="60 minutes">60 minutes</option>
-                </select>
-            </label>
+            <div class="panel-heading"><h2 class="step" id="settingsHeading" data-zh="设置" data-en="Settings"></h2><p class="description" data-zh="选择密码库自动锁定前的闲置时间。" data-en="Choose how long to wait before locking your vault after inactivity."></p></div>
+            <label class="setting-row" for="lockTimeout"><span data-zh="闲置自动锁定" data-en="Lock after inactivity"></span><select id="lockTimeout"><option value="5" data-zh="5 分钟" data-en="5 minutes">5 minutes</option><option value="15" data-zh="15 分钟" data-en="15 minutes">15 minutes</option><option value="30" data-zh="30 分钟" data-en="30 minutes">30 minutes</option><option value="60" data-zh="60 分钟" data-en="60 minutes">60 minutes</option></select></label>
             <p id="persistenceNote" data-zh="设置保存在此浏览器中。" data-en="Settings are saved in this browser."></p>
             <p id="sessionMode"></p>
+            <p id="accountInfo"></p>
+            <p id="settingsSyncStatus" role="status" aria-live="polite"></p>
+            <p id="clipboardNote" class="clip-note" data-zh="复制密码后会由浏览器暂存；关闭弹窗后不保证能自动清除。" data-en="Copied passwords are held by the browser clipboard; automatic clearing after popup close is not guaranteed."></p>
         </section>
         <div id="status" class="muted" role="status" aria-live="polite"></div>
     </main>
-    <nav id="navigation" aria-label="Main navigation" hidden>
-        <button id="vaultTab" type="button" data-zh="密码库" data-en="Vault">Vault</button>
-        <button id="settingsTab" type="button" data-zh="设置" data-en="Settings">Settings</button>
-    </nav>
-    <footer class="footer" id="footer" hidden>
-        <button id="refreshButton" type="button" data-zh="同步" data-en="Sync"></button>
-        <button id="lockButton" type="button" data-zh="退出登录" data-en="Sign out"></button>
-    </footer>
+    <nav id="navigation" aria-label="Main navigation" hidden><button id="vaultTab" type="button" data-zh="密码库" data-en="Vault">Vault</button><button id="generatorTab" type="button" data-zh="生成器" data-en="Generator">Generator</button><button id="settingsTab" type="button" data-zh="设置" data-en="Settings">Settings</button></nav>
+    <footer class="footer" id="footer" hidden><button id="refreshButton" type="button" data-zh="同步" data-en="Sync"></button><button id="lockButton" type="button" data-zh="退出登录" data-en="Sign out"></button></footer>
     <script type="module" src="popup.js"></script>
 </body>
 </html>

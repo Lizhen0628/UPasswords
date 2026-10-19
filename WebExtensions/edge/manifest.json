@@ -1,13 +1,14 @@
 {
     "manifest_version": 3,
     "name": "UPasswords",
-    "version": "1.1",
+    "version": "1.2",
     "description": "UPasswords password manager companion for Edge.",
     "permissions": [
         "activeTab",
         "storage",
         "alarms",
-        "tabs"
+        "tabs",
+        "clipboardWrite"
     ],
     "background": {
         "service_worker": "src/background.js",

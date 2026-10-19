@@ -3,11 +3,18 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { webcrypto } from 'node:crypto'
 import { runInNewContext } from 'node:vm'
-import { credentialsOf, hostMatches, VaultCryptoError } from '../dist/index.js'
+import {
+    safeWebsiteUrl,
+    credentialsOf,
+    generatePassword,
+    hostMatches,
+    VaultCryptoError,
+} from '../dist/index.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const browsers = ['chrome', 'edge', 'firefox', 'safari']
+const browsers = process.env.TEST_BROWSERS ? process.env.TEST_BROWSERS.split(',') : ['chrome', 'edge', 'firefox', 'safari']
 const read = (browser, file) => readFileSync(join(here, `../../${browser}/src/${file}`), 'utf8')
 
 function element(tag = 'div') {
@@ -21,18 +28,45 @@ function element(tag = 'div') {
             if (tag === 'input') value = value.replace(/[\r\n]/g, '')
             if (tag === 'textarea') value = value.replace(/\r\n?/g, '\n')
         },
-        append(...children) { this.children.push(...children) },
-        appendChild(child) { this.children.push(child) },
-        replaceChildren() { this.children = [] },
+        append(...children) {
+            for (const child of children) child.parentElement = this
+            this.children.push(...children)
+        },
+        appendChild(child) {
+            child.parentElement = this
+            this.children.push(child)
+        },
+        replaceChildren(...children) {
+            for (const child of this.children) child.parentElement = null
+            for (const child of children) child.parentElement = this
+            this.children = children
+        },
+        remove() {
+            const index = this.parentElement?.children.indexOf(this) ?? -1
+            if (index >= 0) this.parentElement.children.splice(index, 1)
+        },
         setAttribute(name, value) { this.attributes[name] = value },
         addEventListener(type, listener) { this.listeners[type] = listener },
         focus() {},
+        scrollIntoView() {},
+        classList: {
+            values: new Set(),
+            add(...values) { values.forEach(value => this.values.add(value)) },
+            remove(...values) { values.forEach(value => this.values.delete(value)) },
+            contains(value) { return this.values.has(value) },
+            toggle(value, force) {
+                const enabled = force ?? !this.values.has(value)
+                if (enabled) this.values.add(value)
+                else this.values.delete(value)
+                return enabled
+            },
+        },
         querySelector() { return null },
         querySelectorAll() { return [] },
     }
 }
 
-function renderer(browser, { host = 'example.com', query = '' } = {}) {
+function renderer(browser, { host = 'example.com', query = '', filter = 'all' } = {}) {
     const source = read(browser, 'popup.js')
     const start = source.indexOf('function renderCandidates(items) {')
     const end = source.indexOf('\nasync function fill(', start)
@@ -41,11 +75,12 @@ function renderer(browser, { host = 'example.com', query = '' } = {}) {
     const suggestionSection = element()
     const resultCount = element()
     const emptyState = element()
-    const labels = { emptyTitle: element(), emptyDescription: element() }
+    const labels = { emptyTitle: element(), emptyDescription: element(), itemsHeading: element(), emptyNewLoginButton: element() }
     const calls = []
     const render = runInNewContext(`${source.slice(start, end)}; renderCandidates`, {
         itemsEl, suggestionsEl, suggestionSection, resultCount, emptyState, host, credentialsOf, hostMatches,
-        searchInput: { value: query }, t: (zh, en) => en,
+        searchInput: { value: query }, siteFilter: { value: filter }, sortItems: { value: 'title' },
+        t: (zh, en) => en, copyText: (...args) => calls.push(['copy', ...args]),
         document: { createElement: element, getElementById: id => labels[id] },
         fill: (...args) => calls.push(['fill', ...args]),
         openItemDetail: id => calls.push(['detail', id]),
@@ -64,13 +99,27 @@ async function popup(browserName, {
 } = {}) {
     const source = read(browserName, 'popup.js')
     const html = read(browserName, 'popup.html')
-    const elements = Object.fromEntries([...html.matchAll(/\bid="([^"]+)"/g)].map(m => [m[1], element()]))
+    const elements = Object.fromEntries([...html.matchAll(/<(\w+)\b([^>]*\bid="([^"]+)"[^>]*)>/g)].map(match => {
+        const control = element(match[1])
+        control.value = match[2].match(/\bvalue="([^"]*)"/)?.[1] ?? ''
+        control.checked = /\bchecked\b/.test(match[2])
+        control.hidden = /\bhidden\b/.test(match[2])
+        control.type = match[2].match(/\btype="([^"]+)"/)?.[1] ?? 'text'
+        control.scrollTop = 0
+        if (match[3] === 'siteFilter') control.value = 'all'
+        if (match[3] === 'sortItems') control.value = 'title'
+        return [match[3], control]
+    }))
     const storage = {
         'relay.session': { token: 'synthetic-token', userId, expiresAt: expired ? 0 : Date.now() + 60_000 },
         'relay.vault': { id: 'synthetic-vault', name: 'Main' },
     }
     const commands = [], fills = [], saves = [], keys = [], edits = [], intervals = []
-    const cacheCalls = [], syncCalls = [], envelopeCalls = [], events = []
+    const cacheCalls = [], syncCalls = [], envelopeCalls = [], events = [], creations = [], confirmations = [], clipboard = []
+    const confirm = (...args) => {
+        confirmations.push(args)
+        return hooks.confirm ? hooks.confirm(...args) : true
+    }
     const scope = { userId, vaultId: 'synthetic-vault' }
     const rowOf = item => ({ uuid: item.id, revision: item.source?.revision ?? 1,
         kind: 1, bodyB64: 'synthetic-ciphertext', modifiedMs: 1 })
@@ -122,15 +171,20 @@ async function popup(browserName, {
         : items.find(item => item.id.toLowerCase() === uuid.toLowerCase())?.source?.xml ?? ''
     let state = { type: 'vault-session', unlocked, items: structuredClone(items), generation: 'g1',
         snapshotVersion: 1, passwordVersion: 1, expiresAt: Date.now() + 60_000 }
+    let stateContext = { token: 'synthetic-token', userId, vaultId: 'synthetic-vault' }
     const locked = code => ({ type: 'vault-session', unlocked: false, code })
     const response = () => structuredClone(state)
     let deferredRead = null
     const browser = {
         tabs: {
             query: async () => [{ id: 1, url }],
-            sendMessage: async (tab, message) => { fills.push(message); return { ok: true } },
+            sendMessage: async (tab, message) => {
+                fills.push(message)
+                return hooks.fillResponse ? await hooks.fillResponse(tab, message) : { ok: true }
+            },
         },
         permissions: { contains: async () => true },
+        notifications: { create: async (...args) => confirmations.push(args) },
         storage: { local: {
             get: async keys => {
                 const bag = structuredClone(Object.fromEntries(keys.map(key => [key, storage[key]])))
@@ -143,7 +197,7 @@ async function popup(browserName, {
                 for (const key of [].concat(keys)) delete storage[key]
             },
         } },
-        runtime: { sendMessage: async message => {
+        runtime: { getURL: path => path, sendMessage: async message => {
             commands.push(structuredClone(message))
             if (message.action === 'read' && deferredRead) {
                 const deferred = deferredRead
@@ -163,7 +217,13 @@ async function popup(browserName, {
             const session = storage['relay.session'], vault = storage['relay.vault']
             if (message.context?.token !== session?.token || message.context?.userId !== session?.userId
                 || message.context?.vaultId !== vault?.id) return locked('session_context_mismatch')
-            if (message.action === 'begin') state = { ...locked(), generation: 'ticket' }
+            if (message.action === 'begin') {
+                stateContext = structuredClone(message.context)
+                state = { ...locked(), generation: 'ticket' }
+            }
+            if (message.action !== 'begin' && state.unlocked
+                && (message.context.token !== stateContext.token || message.context.userId !== stateContext.userId
+                    || message.context.vaultId !== stateContext.vaultId)) return locked('session_context_mismatch')
             if (message.action === 'commit' && message.generation === state.generation) {
                 state = { ...state, unlocked: true, items: structuredClone(message.items),
                     snapshotVersion: message.snapshotVersion, passwordVersion: message.passwordVersion,
@@ -209,16 +269,36 @@ async function popup(browserName, {
             passwordVersion: options.keyVersion, accountEpoch, cursor: 1, rows }, null)
         return { snapshot: initialized, changedRows: rows, deletedIds: [], rebuilt: true, changedCount: rows.length }
     }
+    const main = { scrollTop: 0 }
     const document = {
         body: { dataset: {} }, documentElement: {},
         getElementById: id => elements[id], createElement: element,
+        querySelector: selector => selector === 'main' ? main : null,
         querySelectorAll: () => [], addEventListener() {},
     }
     const start = source.indexOf('const zh = ')
-    const api = await runInNewContext(`(async () => { ${source.slice(start)}; return { render, fill, unlock, syncVault, openItemDetail, saveItemDetail, clearUnlockedView }; })()`, {
-        browser, chrome: browser, document, navigator: { language: 'en' },
+    const api = await runInNewContext(`(async () => { ${source.slice(start)}; return { render, fill, unlock, syncVault, openItemDetail, saveItemDetail, clearUnlockedView, copyText, createNewLogin, regeneratePassword }; })()`, {
+        browser, chrome: browser, document, navigator: { language: 'en', clipboard: {
+            writeText: async text => { clipboard.push(text) },
+        } },
+        window: { confirm }, confirm, crypto: webcrypto,
         canonicalizeHost: host => host, hostnameOf: url => new URL(url).hostname,
-        hostMatches, credentialsOf, clearItems: async () => {},
+        hostMatches, credentialsOf, generatePassword, safeWebsiteUrl,
+        createLoginItemXml: (input, nowMs) => {
+            const created = { id: input.id, title: input.title, host: input.url ? new URL(safeWebsiteUrl(input.url)).hostname : '',
+                notes: input.notes, symbol: 'key', fields: [
+                    { type: 'login', value: input.username, autofill: 'username' },
+                    { type: 'password', value: input.password, autofill: 'current-password' },
+                    { type: 'website', value: input.url, autofill: 'url' },
+                ] }
+            return JSON.stringify(created)
+        },
+        createItem: async (token, vaultId, input) => {
+            creations.push(structuredClone({ token, vaultId, item: input }))
+            if (hooks.createItem) return await hooks.createItem(token, vaultId, input)
+            return { revision: 1 }
+        },
+        clearItems: async () => {},
         verifyCode: async (...args) => hooks.verifyCode ? await hooks.verifyCode(...args)
             : { token: 'new-synthetic-token', userId: 'new-synthetic-user', expiresAt: Date.now() + 60_000 },
         revokeOwnSession: async () => {
@@ -230,7 +310,7 @@ async function popup(browserName, {
         createEncryptedCache: () => cache, synchronizeVault: synchronize, projectVaultFragment: project,
         setInterval(callback) { intervals.push(callback) }, clearInterval() {}, console: { info() {}, warn() {} },
         URL, Uint8Array, VaultCryptoError,
-        listVaults: async () => [],
+        listVaults: async (...args) => hooks.listVaults ? await hooks.listVaults(...args) : [],
         getVaultEnvelope: async (...args) => {
             envelopeCalls.push(args)
             return hooks.envelope ? await hooks.envelope(...args)
@@ -265,10 +345,14 @@ async function popup(browserName, {
     await new Promise(setImmediate)
     return {
         api, elements, document, commands, fills, storage, saves, keys, edits, intervals,
-        cache, cacheCalls, syncCalls, envelopeCalls, events,
+        cache, cacheCalls, syncCalls, envelopeCalls, events, creations, confirmations, clipboard,
         get snapshot() { return structuredClone(snapshot) },
         get state() { return response() },
-        setState: value => { state = { ...state, type: 'vault-session', ...value } },
+        setState: value => {
+            state = { ...state, type: 'vault-session', ...value }
+            stateContext = { token: storage['relay.session']?.token, userId: storage['relay.session']?.userId,
+                vaultId: storage['relay.vault']?.id }
+        },
         deferRead() {
             const snapshot = response()
             let resolve, started
@@ -301,7 +385,8 @@ test('Popup: fixed root width and independent scroll prevent popup collapse', ()
     const html = read('chrome', 'popup.html')
     const rootStyle = html.match(/html, body\s*\{([^}]+)\}/)[1]
     assert.match(rootStyle, /(?:^|;)\s*width:\s*440px\s*;/)
-    assert.match(rootStyle, /(?:^|;)\s*min-width:\s*440px\s*;/)
+    assert.match(rootStyle, /(?:^|;)\s*min-width:\s*340px\s*;/)
+    assert.match(rootStyle, /(?:^|;)\s*max-width:\s*440px\s*;/)
     assert.doesNotMatch(html, /\b(?:max-)?width:\s*100vw/)
     assert.match(html, /overflow-y:\s*auto/)
     for (const id of ['suggestionSection', 'suggestions', 'settingsBox', 'lockTimeout', 'lockNowButton', 'navigation']) {
@@ -316,19 +401,21 @@ for (const browser of browsers) {
         assert.equal(view.resultCount.textContent, '2')
         assert.equal(view.emptyState.hidden, true)
         assert.equal(view.itemsEl.children.length, 2)
-        assert.equal(view.suggestionsEl.children.length, 1)
-        const button = view.suggestionsEl.children[0].children[0]
+        assert.equal(view.suggestionsEl.children.length, 0)
+        const workRow = view.itemsEl.children.find(row => row.children[0].children[1].children[0].textContent === 'Work')
+        const button = workRow.children[0]
         assert.equal(button.disabled, false)
         assert.equal(button.children[1].children[0].textContent, 'Work')
         button.listeners.click()
         assert.deepEqual(view.calls[0], ['detail', 'Work-Alice'])
-        view.suggestionsEl.children[0].children[1].listeners.click()
+        workRow.children[1].children.find(button => button.textContent === 'Fill').listeners.click()
         assert.equal(view.calls[1][0], 'fill')
-        const other = view.itemsEl.children[1].children[0]
+        const otherRow = view.itemsEl.children.find(row => row.children[0].children[1].children[0].textContent === 'Other')
+        const other = otherRow.children[0]
         assert.equal(other.disabled, false)
         other.listeners.click()
         assert.deepEqual(view.calls[2], ['detail', 'Other-Alice'])
-        assert.equal(view.itemsEl.children[1].children.length, 1)
+        assert.equal(otherRow.children[1].children.some(button => button.textContent === 'Fill'), false)
         view.render([])
         assert.equal(view.itemsEl.children.length, 0)
         assert.equal(view.suggestionsEl.children.length, 0)
@@ -345,13 +432,15 @@ for (const browser of browsers) {
         assert.equal(view.resultCount.textContent, '1')
         assert.equal(view.suggestionSection.hidden, true)
         assert.equal(view.itemsEl.children[0].children[0].disabled, false)
-        assert.equal(view.itemsEl.children[0].children.length, 1)
+        assert.equal(view.itemsEl.children[0].children[1].children.some(button => button.textContent === 'Fill'), false)
     })
 
     test(`Popup ${browser}: reopening restores an empty unlocked vault and settings`, async () => {
         const view = await popup(browser)
         assert.equal(view.document.body.dataset.panel, 'items')
         assert.equal(view.elements.emptyState.hidden, false)
+        assert.equal(view.elements.emptyNewLoginButton.hidden, false)
+        assert.equal(view.elements.switchVaultButton.hidden, false)
         assert.equal(view.elements.navigation.hidden, false)
         await view.elements.settingsTab.listeners.click()
         assert.equal(view.document.body.dataset.panel, 'settings')
@@ -362,6 +451,7 @@ for (const browser of browsers) {
         await view.elements.lockNowButton.listeners.click()
         assert.equal(view.document.body.dataset.panel, 'unlock')
         assert.equal(view.elements.navigation.hidden, true)
+        assert.equal(view.elements.switchVaultButton.hidden, false)
         assert.ok(view.storage['relay.session'], 'locking must not sign out')
     })
 
@@ -558,8 +648,8 @@ for (const browser of browsers) {
             const entry = editableItem()
             const deferred = deferredOperation()
             const hooks = stage === 'unwrap'
-                ? { unwrap: () => deferred.wait() }
-                : { save: async () => { await deferred.wait(); return { revision: 4 } } }
+                ? { unwrap: () => deferred.wait(), confirm: () => false }
+                : { save: async () => { await deferred.wait(); return { revision: 4 } }, confirm: () => false }
             const view = await popup(browser, { items: [entry], hooks })
             await view.api.openItemDetail(entry.id, true)
             const controls = view.elements.detailContent.children.map((_, i) => detailControl(view, i))
@@ -1279,5 +1369,320 @@ for (const browser of browsers) {
             assert.ok(view.commands.some(command => command.action === 'lock' && command.generation === 'g1'))
             assert.equal(view.snapshot.version, 1)
         }
+    })
+}
+
+const settle = () => new Promise(setImmediate)
+const newLoginIds = ['newLoginTitle', 'newLoginUsername', 'newLoginPassword', 'newLoginUrl', 'newLoginNotes']
+async function draftNewLogin(view) {
+    await view.elements.newLoginButton.listeners.click()
+    const values = ['Synthetic site', 'synthetic-user', 'synthetic-created-password', 'https://example.com/login', 'synthetic private note']
+    newLoginIds.forEach((id, index) => {
+        view.elements[id].value = values[index]
+        view.elements[id].listeners.input?.({ target: view.elements[id] })
+    })
+}
+
+for (const browser of browsers) {
+    test(`Popup ${browser}: creation requires master password then publishes encrypted row with refresh`, async () => {
+        const existing = editableItem()
+        const view = await popup(browser, { items: [existing] })
+        await draftNewLogin(view)
+        await view.api.createNewLogin()
+        assert.equal(view.creations.length, 0)
+        assert.equal(view.keys.length, 0)
+        view.elements.newLoginMasterPassword.value = 'synthetic-password'
+        await view.api.createNewLogin()
+        assert.equal(view.creations.length, 1)
+        const creation = view.creations[0]
+        assert.equal(creation.token, 'synthetic-token')
+        assert.equal(creation.vaultId, 'synthetic-vault')
+        assert.match(creation.item.uuid, /^[0-9a-f-]{36}$/i)
+        assert.equal(creation.item.bodyB64, 'encrypted-body')
+        assert.equal(Object.hasOwn(creation.item, 'revision'), false)
+        assert.equal(JSON.stringify(creation).includes('synthetic-created-password'), false)
+        assert.equal(view.snapshot.rows.length, 2)
+        assert.equal(view.snapshot.version, 2)
+        assert.equal(view.state.items.length, 2)
+        assert.equal(view.state.items.find(item => item.id.toLowerCase() === creation.item.uuid.toLowerCase()).source.revision, 1)
+        const refresh = view.commands.find(command => command.action === 'refresh')
+        assert.equal(refresh.expectedSnapshotVersion, 1)
+        assert.equal(refresh.snapshotVersion, 2)
+        assert.equal(view.commands.some(command => command.action === 'replace'), false)
+        assert.equal(view.elements.newLoginMasterPassword.value, '')
+        assert.ok(newLoginIds.every(id => view.elements[id].value === ''))
+        assert.ok(view.keys.every(key => key.every(byte => byte === 0)))
+        assert.equal(JSON.stringify(view.storage).includes('synthetic-created-password'), false)
+        await view.api.createNewLogin()
+        assert.equal(view.creations.length, 1)
+    })
+
+    test(`Popup ${browser}: ambiguous creation response never retries or auto-resubmits`, async () => {
+        const view = await popup(browser, { hooks: { createItem() { throw new Error('synthetic response lost') } } })
+        await draftNewLogin(view)
+        view.elements.newLoginMasterPassword.value = 'synthetic-password'
+        await view.api.createNewLogin()
+        assert.equal(view.creations.length, 1)
+        assert.equal(view.commands.some(command => ['replace', 'refresh'].includes(command.action)), false)
+        assert.equal(view.elements.newLoginMasterPassword.value, '')
+        assert.ok(view.keys.every(key => key.every(byte => byte === 0)))
+        await view.api.render()
+        await view.intervals[0]()
+        await view.api.createNewLogin()
+        assert.equal(view.creations.length, 1)
+        assert.match(view.elements.status.textContent, /confirm|check|sync|password/i)
+    })
+
+    test(`Popup ${browser}: lock during creation cannot publish or restore plaintext`, async () => {
+        const deferred = deferredOperation()
+        const view = await popup(browser, { hooks: { createItem: async () => {
+            await deferred.wait()
+            return { revision: 1 }
+        } } })
+        await draftNewLogin(view)
+        const controls = newLoginIds.map(id => view.elements[id])
+        view.elements.newLoginMasterPassword.value = 'synthetic-password'
+        const saving = view.api.createNewLogin()
+        await deferred.ready
+        assert.equal(view.elements.newLoginMasterPassword.value, '')
+        await view.elements.lockNowButton.listeners.click()
+        assert.ok(controls.every(control => control.value === ''))
+        deferred.release()
+        await saving
+        assert.equal(view.document.body.dataset.panel, 'unlock')
+        assert.equal(view.state.unlocked, false)
+        assert.equal(view.elements.newLoginBox.hidden, true)
+        assert.ok(controls.every(control => control.value === ''))
+        assert.equal(view.commands.some(command => ['replace', 'refresh'].includes(command.action)), false)
+        assert.ok(view.keys.every(key => key.every(byte => byte === 0)))
+    })
+
+    test(`Popup ${browser}: generation uses selected options, populates new login and clears on lock`, async () => {
+        const view = await popup(browser)
+        await view.elements.generatorTab.listeners.click()
+        view.elements.generatorLength.value = '32'
+        for (const id of ['genUppercase', 'genLowercase', 'genSymbols']) view.elements[id].checked = false
+        view.elements.genDigits.checked = true
+        await view.api.regeneratePassword()
+        const generated = view.elements.generatedPassword.value
+        assert.match(generated, /^\d{32}$/)
+        await view.elements.useGeneratedButton.listeners.click()
+        assert.equal(view.document.body.dataset.panel, 'new-login')
+        assert.equal(view.elements.newLoginPassword.value, generated)
+        assert.equal(JSON.stringify(view.storage).includes(generated), false)
+        await view.elements.lockNowButton.listeners.click()
+        assert.equal(view.elements.generatedPassword.value, '')
+        assert.equal(view.elements.newLoginPassword.value, '')
+    })
+
+    test(`Popup ${browser}: copy reads fresh session credentials and never stale rendered values`, async () => {
+        const entry = editableItem()
+        const view = await popup(browser, { items: [entry] })
+        const buttons = view.elements.items.children[0].children[1].children
+        const copyPassword = buttons.find(button => /Copy password/i.test(button.textContent))
+        const fresh = { ...entry, fields: entry.fields.map(field => field.type === 'password'
+            ? { ...field, value: 'synthetic-fresh-password' } : field) }
+        view.setState({ items: [fresh] })
+        copyPassword.listeners.click()
+        await settle()
+        assert.deepEqual(view.clipboard, ['synthetic-fresh-password'])
+        view.setState({ unlocked: false })
+        copyPassword.listeners.click()
+        await settle()
+        assert.deepEqual(view.clipboard, ['synthetic-fresh-password'])
+    })
+
+    test(`Popup ${browser}: delayed copy after lock cannot export secrets`, async () => {
+        const entry = editableItem(), view = await popup(browser, { items: [entry] })
+        const deferred = view.deferRead()
+        const copy = view.api.copyText({ id: entry.id, field: 'password' })
+        await deferred.ready
+        await view.elements.lockNowButton.listeners.click()
+        deferred.release()
+        await copy
+        assert.equal(view.clipboard.length, 0)
+    })
+
+    test(`Popup ${browser}: rejected HTTP confirmation never sends credentials`, async () => {
+        const entry = editableItem()
+        const view = await popup(browser, { items: [entry], url: 'http://example.com/login', hooks: { confirm: () => false } })
+        await view.api.fill({ item: entry }, element())
+        assert.equal(view.confirmations.length, 1)
+        assert.equal(view.fills.length, 0)
+    })
+
+    test(`Popup ${browser}: dirty navigation cancellation retains edit and new-login plaintext only in current view`, async () => {
+        const entry = editableItem()
+        const view = await popup(browser, { items: [entry], hooks: { confirm: () => false } })
+        await view.api.openItemDetail(entry.id, true)
+        const title = detailControl(view, 0)
+        title.value = 'Synthetic unsaved title'
+        title.listeners.input?.({ target: title })
+        await view.elements.settingsTab.listeners.click()
+        assert.equal(view.document.body.dataset.panel, 'detail')
+        assert.equal(title.value, 'Synthetic unsaved title')
+        assert.equal(view.saves.length, 0)
+        await view.elements.lockNowButton.listeners.click()
+        assert.equal(title.value, '')
+        const draft = await popup(browser, { hooks: { confirm: () => false } })
+        await draftNewLogin(draft)
+        await draft.elements.settingsTab.listeners.click()
+        assert.equal(draft.document.body.dataset.panel, 'new-login')
+        assert.equal(draft.elements.newLoginPassword.value, 'synthetic-created-password')
+        assert.equal(draft.creations.length, 0)
+    })
+
+    test(`Popup ${browser}: favorites, current site and domain filters exclude secret search`, async () => {
+        const entries = [{ ...item('Work', 'Alice'), favorite: true }, item('Personal', 'Bob', 'other.org'),
+            { ...item('Child', 'Charlie', 'sub.example.com'), favorite: false }]
+        const favorites = renderer(browser, { filter: 'favorites' })
+        favorites.render(entries)
+        assert.equal(favorites.resultCount.textContent, '1')
+        const current = renderer(browser, { filter: 'current' })
+        current.render(entries)
+        assert.equal(current.resultCount.textContent, '2')
+        const domain = renderer(browser, { query: 'OTHER.ORG' })
+        domain.render(entries)
+        assert.equal(domain.resultCount.textContent, '1')
+        const privateEntry = { ...entries[0], notes: 'synthetic-private-search', fields: [...entries[0].fields,
+            { type: 'secret', value: 'synthetic-private-search' }, { type: 'pin', value: '91827364' }] }
+        for (const query of ['not-searchable', 'synthetic-private-search', '91827364']) {
+            const search = renderer(browser, { query })
+            search.render([privateEntry])
+            assert.equal(search.resultCount.textContent, '0', query)
+        }
+    })
+
+    test(`Popup ${browser}: switching vault clears all old plaintext and draft controls`, async () => {
+        const entry = editableItem(), view = await popup(browser, { items: [entry] })
+        await view.api.openItemDetail(entry.id, true)
+        const controls = view.elements.detailContent.children.map((_, index) => detailControl(view, index))
+        view.storage['relay.vault'] = { id: 'synthetic-other-vault', name: 'Other' }
+        await view.api.render()
+        assert.ok(controls.every(control => control.value === '' && control.originalValue === ''))
+        assert.equal(view.elements.detailContent.children.length, 0)
+        assert.equal(view.elements.items.children.length, 0)
+        assert.ok(newLoginIds.every(id => view.elements[id].value === ''))
+        assert.equal(view.elements.generatedPassword.value, '')
+        assert.notEqual(view.document.body.dataset.panel, 'detail')
+    })
+}
+
+for (const browser of browsers) {
+    for (const stage of ['unwrap', 'encrypt']) {
+        test(`Popup ${browser}: lock during new-login ${stage} aborts before creation POST`, async () => {
+            const deferred = deferredOperation()
+            const hooks = stage === 'unwrap' ? { unwrap: () => deferred.wait() }
+                : { encrypt: async () => { await deferred.wait(); return new Uint8Array(48) } }
+            const view = await popup(browser, { hooks })
+            await draftNewLogin(view)
+            view.elements.newLoginMasterPassword.value = 'synthetic-password'
+            const pending = view.api.createNewLogin()
+            await deferred.ready
+            await view.elements.lockNowButton.listeners.click()
+            deferred.release()
+            await pending
+            assert.equal(view.creations.length, 0)
+            assert.equal(view.state.unlocked, false)
+            assert.equal(view.document.body.dataset.panel, 'unlock')
+            assert.ok(newLoginIds.every(id => view.elements[id].value === ''))
+            assert.ok(view.keys.every(key => key.every(byte => byte === 0)))
+        })
+    }
+
+    test(`Popup ${browser}: confirmed creation followed by cache failure closes draft without another POST`, async () => {
+        const hooks = {}, view = await popup(browser, { hooks })
+        await draftNewLogin(view)
+        hooks.cacheCommit = () => { throw new Error('synthetic cache failure') }
+        view.elements.newLoginMasterPassword.value = 'synthetic-password'
+        await view.api.createNewLogin()
+        assert.equal(view.creations.length, 1)
+        assert.equal(view.state.unlocked, false)
+        assert.equal(view.document.body.dataset.panel, 'unlock')
+        assert.ok(newLoginIds.every(id => view.elements[id].value === ''))
+        assert.equal(view.commands.some(command => ['replace', 'refresh'].includes(command.action)), false)
+        await view.api.createNewLogin()
+        assert.equal(view.creations.length, 1)
+        assert.ok(view.keys.every(key => key.every(byte => byte === 0)))
+    })
+}
+
+for (const browser of browsers) {
+    test(`Popup ${browser}: detail secret copy resolves latest session field and denies stale controls after lock`, async () => {
+        const entry = editableItem(), view = await popup(browser, { items: [entry] })
+        await view.api.openItemDetail(entry.id)
+        const row = view.elements.detailContent.children[3].children[1]
+        const copy = row.children.find(button => button.textContent === 'Copy')
+        const fresh = { ...entry, fields: entry.fields.map((field, index) => index === 2
+            ? { ...field, value: 'synthetic-current-pin' } : field) }
+        view.setState({ items: [fresh] })
+        copy.listeners.click()
+        await settle()
+        assert.deepEqual(view.clipboard, ['synthetic-current-pin'])
+        await view.elements.lockNowButton.listeners.click()
+        copy.listeners.click()
+        await settle()
+        assert.deepEqual(view.clipboard, ['synthetic-current-pin'])
+    })
+}
+
+for (const browser of browsers) {
+    test(`Popup ${browser}: blank optional credentials and website still require a master password`, async () => {
+        const view = await popup(browser)
+        await draftNewLogin(view)
+        for (const id of ['newLoginUsername', 'newLoginPassword', 'newLoginUrl']) view.elements[id].value = ''
+        await view.api.createNewLogin()
+        assert.equal(view.creations.length, 0)
+        assert.equal(view.keys.length, 0)
+        view.elements.newLoginMasterPassword.value = 'synthetic-password'
+        await view.api.createNewLogin()
+        assert.equal(view.creations.length, 1)
+        assert.equal(view.state.items.length, 1)
+        assert.equal(credentialsOf(view.state.items[0]).password, '')
+        assert.equal(view.elements.newLoginMasterPassword.value, '')
+        assert.ok(view.keys.every(key => key.every(byte => byte === 0)))
+    })
+}
+
+for (const browser of browsers) {
+    test(`Popup ${browser}: cancelled vault switch rejects late vault-list response`, async () => {
+        const deferred = deferredOperation()
+        const view = await popup(browser, { items: [editableItem()], hooks: {
+            listVaults: async () => { await deferred.wait(); return [{ vaultId: 'synthetic-other', name: 'Other', itemCount: 1 }] },
+        } })
+        const switching = view.elements.switchVaultButton.listeners.click()
+        await deferred.ready
+        await view.elements.cancelVaultSwitchButton.listeners.click()
+        assert.equal(view.document.body.dataset.panel, 'unlock')
+        deferred.release()
+        await switching
+        assert.equal(view.document.body.dataset.panel, 'unlock')
+        assert.equal(view.elements.vaultBox.hidden, true)
+        assert.equal(view.elements.vaultList.children.length, 0)
+        assert.equal(view.storage['relay.vault'].id, 'synthetic-vault')
+        assert.equal(view.state.unlocked, false)
+    })
+
+    test(`Popup ${browser}: remote field reorder blocks old copy control and repaints read-only details`, async () => {
+        const entry = editableItem(), view = await popup(browser, { items: [entry] })
+        await view.api.openItemDetail(entry.id)
+        const oldInput = detailControl(view, 3)
+        const oldCopy = view.elements.detailContent.children[3].children[1].children.find(button => button.textContent === 'Copy')
+        const reordered = { ...entry, title: 'Remote reorder', fields: [entry.fields[0], entry.fields[1], entry.fields[3], entry.fields[2], entry.fields[4]],
+            source: { xml: '<synthetic-reordered/>', revision: 4 } }
+        view.setState({ items: [reordered] })
+        oldCopy.listeners.click()
+        await settle()
+        assert.equal(view.clipboard.length, 0)
+        await view.api.render()
+        assert.equal(oldInput.value, '')
+        assert.equal(oldInput.originalValue, '')
+        assert.equal(detailControl(view, 0).value, 'Remote reorder')
+        assert.equal(detailControl(view, 3).value, entry.fields[3].value)
+        await view.api.openItemDetail(entry.id)
+        const newCopy = view.elements.detailContent.children[3].children[1].children.find(button => button.textContent === 'Copy')
+        newCopy.listeners.click()
+        await settle()
+        assert.deepEqual(view.clipboard, [entry.fields[3].value])
     })
 }

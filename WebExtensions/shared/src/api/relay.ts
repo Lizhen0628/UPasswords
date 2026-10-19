@@ -337,12 +337,49 @@ export async function saveVaultItem(
     if (!Number.isSafeInteger(item.revision) || item.revision < 1) {
         throw new RelayApiError(0, "bad_item_revision");
     }
+    return putItem(token, vaultId, item, item.revision);
+}
+
+export type NewVaultItem = Omit<SaveVaultItem, "revision">;
+
+/**
+ * Insert one newly generated UUID through the existing items CAS endpoint. Zero is creation only:
+ * an occupied UUID conflicts, and neither conflicts nor HTTP failures are retried as updates.
+ */
+export async function createItem(
+    token: string,
+    vaultId: string,
+    item: NewVaultItem,
+): Promise<{ revision: number }> {
+    if (!isValidRelayItemRow({ ...item, kind: 1, revision: 1 })) {
+        throw new RelayApiError(0, "bad_item_request");
+    }
+    console.info("[upw] relay item creation started");
+    const started = performance.now();
+    try {
+        const result = await putItem(token, vaultId, item, 0);
+        console.info("[upw] relay item creation completed", { durationMs: Math.round(performance.now() - started) });
+        return result;
+    } catch (error) {
+        // Never log tokens, request bodies, titles, secrets or server-provided response values.
+        console.warn("[upw] relay item creation failed", { durationMs: Math.round(performance.now() - started) });
+        throw error;
+    }
+}
+
+/** Share strict single-result validation without exposing a zero-revision update API. */
+async function putItem(
+    token: string,
+    vaultId: string,
+    item: NewVaultItem,
+    baseRevision: number,
+): Promise<{ revision: number }> {
     const response = await call("POST", `/v2/vaults/${encodeURIComponent(vaultId)}/items`, token, {
         items: [{
             uuid: item.uuid,
             kind: 1,
             op: "upsert",
-            baseRevision: item.revision,
+            baseRevision,
             bodyB64: item.bodyB64,
             modifiedMs: item.modifiedMs,
         }],
@@ -362,7 +399,7 @@ export async function saveVaultItem(
     if (result.status === "not_found") throw new RelayApiError(404, "item_deleted");
     if (result.status !== "ok" || !("revision" in result)
         || typeof result.revision !== "number" || !Number.isSafeInteger(result.revision)
-        || result.revision !== item.revision + 1) {
+        || result.revision !== baseRevision + 1) {
         throw malformed();
     }
     return { revision: result.revision };

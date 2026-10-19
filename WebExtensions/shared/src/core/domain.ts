@@ -15,6 +15,26 @@ export function hostnameOf(url: string): string {
     }
 }
 
+/**
+ * Safe URL for opening a stored website. Bare hosts default to HTTPS; no credentials,
+ * protocol-relative URLs, controls or non-HTTP(S) schemes are accepted.
+ */
+export function safeWebsiteUrl(value: string): string | null {
+    if (typeof value !== "string" || /[\u0000-\u001F\u007F\\]/.test(value)) return null;
+    const trimmed = value.trim();
+    if (!trimmed || trimmed.startsWith("//")) return null;
+    const hasWebScheme = /^https?:\/\//i.test(trimmed);
+    if (!hasWebScheme && /^[a-z][a-z\d+.-]*:/i.test(trimmed)
+        && !/^(?:localhost|[^/:?#]+\.[^/:?#]+):\d+(?:[/?#]|$)/i.test(trimmed)) return null;
+    try {
+        const url = new URL(hasWebScheme ? trimmed : `https://${trimmed}`);
+        if (!['https:', 'http:'].includes(url.protocol) || !url.hostname || url.username || url.password) return null;
+        return url.href;
+    } catch {
+        return null;
+    }
+}
+
 /** Strips common wired/technical prefixes from a hostname. */
 export function canonicalizeHost(host: string): string {
     const value = host.trim().toLowerCase();

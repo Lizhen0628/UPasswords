@@ -2,9 +2,13 @@
 import {
     base64ToBytes,
     bytesToBase64,
+    safeWebsiteUrl,
     canonicalizeHost,
     clearItems,
     createVault,
+    createItem,
+    createLoginItemXml,
+    generatePassword,
     createEncryptedCache,
     synchronizeVault,
     projectVaultFragment,
@@ -34,6 +38,7 @@ import {
 const browser = {
     tabs: {
         query: (q) => new Promise((resolve) => chrome.tabs.query(q, resolve)),
+        create: (options) => chrome.tabs.create(options),
         // lastError 必须在回调内消费;有错时 reject 以对齐 browser.* 的抛错语义
         sendMessage: (tabId, message) => new Promise((resolve, reject) => {
             chrome.tabs.sendMessage(tabId, message, (response) => {
@@ -83,6 +88,16 @@ let detailSaving = false;
 let detailTitleInput = null;
 let detailNotesInput = null;
 let detailFieldInputs = [];
+let activePanel = "";
+let listScrollTop = 0;
+let lastSyncSuccessAt = 0;
+let generatedPassword = "";
+let newLoginDirty = false;
+let newLoginSaving = false;
+let newLoginId = null;
+let newLoginUncertain = false;
+let syncFailed = false;
+let switchingVault = false;
 
 // 首次两步引导标记:邮箱验证刚通过时,第二页标题带步骤号
 let justVerifiedEmail = false;
@@ -93,6 +108,12 @@ const loginBox = document.getElementById("loginBox");
 const unlockBox = document.getElementById("unlockBox");
 const itemsEl = document.getElementById("items");
 const itemsBox = document.getElementById("itemsBox");
+const generatorBox = document.getElementById("generatorBox");
+const newLoginBox = document.getElementById("newLoginBox");
+const generatorTab = document.getElementById("generatorTab");
+const siteFilter = document.getElementById("siteFilter");
+const sortItems = document.getElementById("sortItems");
+const syncSummary = document.getElementById("syncSummary");
 const searchInput = document.getElementById("searchItems");
 const resultCount = document.getElementById("resultCount");
 const emptyState = document.getElementById("emptyState");
@@ -120,6 +141,10 @@ const createVaultButton = document.getElementById("createVaultButton");
 const suggestionsEl = document.getElementById("suggestions");
 const suggestionSection = document.getElementById("suggestionSection");
 const settingsBox = document.getElementById("settingsBox");
+const newLoginFields = ["newLoginTitle", "newLoginUsername", "newLoginPassword", "newLoginUrl", "newLoginNotes"]
+    .map(id => document.getElementById(id));
+const generatedInput = document.getElementById("generatedPassword");
+const settingsHeading = document.getElementById("settingsHeading");
 const navigation = document.getElementById("navigation");
 const vaultTab = document.getElementById("vaultTab");
 const settingsTab = document.getElementById("settingsTab");
@@ -144,7 +169,14 @@ document.documentElement.lang = zh ? "zh-Hans" : "en";
 for (const element of document.querySelectorAll("[data-zh][data-en]")) {
     element.textContent = t(element.dataset.zh, element.dataset.en);
 }
-searchInput.placeholder = t("搜索密码库", "Search vault");
+searchInput.placeholder = t("搜索标题、用户名或网站", "Search title, username, or domain");
+siteFilter.setAttribute("aria-label", t("筛选条目", "Filter items"));
+sortItems.setAttribute("aria-label", t("标题排序", "Sort by title"));
+lockNowButton.setAttribute("aria-label", t("立即锁定", "Lock now"));
+lockNowButton.title = t("立即锁定并丢弃草稿", "Lock now and discard drafts");
+document.getElementById("switchVaultButton").setAttribute("aria-label", t("切换密码库", "Switch vault"));
+document.getElementById("switchVaultButton").title = t("切换密码库", "Switch vault");
+navigation.setAttribute("aria-label", t("主导航", "Main navigation"));
 searchInput.setAttribute("aria-label", searchInput.placeholder);
 refreshButton.title = t("增量同步最新条目", "Sync the latest changes");
 
@@ -172,7 +204,7 @@ if (!pageUrl) {
         pageUrl = reply?.href ?? "";
     } catch { /* 后台未应答按无地址处理 */ }
 }
-const host = canonicalizeHost(hostnameOf(pageUrl));
+const host = /^https?:\/\//i.test(pageUrl) ? canonicalizeHost(hostnameOf(pageUrl)) : "";
 // host 行只承载域名;取不到(chrome:// 内部页/新标签页)整行隐藏,
 // "此页面不可填充"只由下方状态行说一次——避免两行重复提示
 hostEl.textContent = host;
@@ -192,18 +224,22 @@ function show(panel) {
     unlockBox.hidden = panel !== "unlock";
     itemsBox.hidden = panel !== "items";
     settingsBox.hidden = panel !== "settings";
+    generatorBox.hidden = panel !== "generator";
+    newLoginBox.hidden = panel !== "new-login";
     detailBox.hidden = panel !== "detail";
+    activePanel = panel;
     itemsEl.replaceChildren();
     suggestionsEl.replaceChildren();
-    if (panel !== "items") searchInput.value = "";
     document.body.dataset.panel = panel;
-    const unlocked = panel === "items" || panel === "settings" || panel === "detail";
+    const unlocked = ["items", "settings", "detail", "generator", "new-login"].includes(panel);
     stateBadge.textContent = unlocked ? t("已解锁", "Unlocked") : t("已锁定", "Locked");
     footerEl.hidden = panel === "login";
     navigation.hidden = !unlocked;
     headerTools.hidden = !unlocked;
+    document.getElementById("switchVaultButton").hidden = !unlocked && panel !== "unlock";
     refreshButton.hidden = !unlocked;
-    vaultTab.setAttribute("aria-current", (panel === "items" || panel === "detail") ? "page" : "false");
+    vaultTab.setAttribute("aria-current", (panel === "items" || panel === "detail" || panel === "new-login") ? "page" : "false");
+    generatorTab.setAttribute("aria-current", panel === "generator" ? "page" : "false");
     settingsTab.setAttribute("aria-current", panel === "settings" ? "page" : "false");
     if (panel === "login") vaultNameEl.textContent = "";
     console.info("[upw] popup panel:", panel);
@@ -314,9 +350,29 @@ async function login() {
 
 async function showVaultPage(token) {
     const operation = operationGeneration;
-    const vaults = await listVaults(token).catch(() => []);
+    show("vault");
+    vaultList.replaceChildren();
+    createVaultForm.hidden = true;
+    document.getElementById("cancelVaultSwitchButton").hidden = !switchingVault;
+    vaultStepTitle.textContent = t("选择密码库", "Choose vault");
+    status(t("正在加载密码库…", "Loading vaults…"));
+    let vaults;
+    try {
+        await requireRelayAccess(true);
+        vaults = await listVaults(token);
+    } catch {
+        if (operation !== operationGeneration) return;
+        show("vault");
+        vaultList.replaceChildren();
+        createVaultForm.hidden = true;
+        document.getElementById("cancelVaultSwitchButton").hidden = !switchingVault;
+        status(t("无法获取密码库列表，请检查网络或重新登录。", "Could not load vaults. Check your connection or sign in again."), true);
+        console.warn("[upw] vault listing failed");
+        return;
+    }
     if (operation !== operationGeneration) return;
     show("vault");
+    document.getElementById("cancelVaultSwitchButton").hidden = !switchingVault;
     vaultList.replaceChildren();
     if (vaults.length > 0) {
         vaultStepTitle.textContent = t("第 2 步 · 选择密码库", "Step 2 · Choose vault");
@@ -332,9 +388,16 @@ async function showVaultPage(token) {
             countEl.textContent = t(`${v.itemCount} 条条目`, `${v.itemCount} items`);
             row.append(nameEl, countEl);
             row.addEventListener("click", async () => {
+                row.disabled = true;
                 await lockSession();
+                const selection = operationGeneration;
+                const active = await storageGet([SESSION_KEY]);
+                if (selection !== operationGeneration || active[SESSION_KEY]?.token !== token) return;
                 await storageSet({ [VAULT_KEY]: { id: v.vaultId, name: v.name } });
+                if (selection !== operationGeneration) return;
+                switchingVault = false;
                 justVerifiedEmail = true;
+                console.info("[upw] vault selected");
                 await render();
             });
             vaultList.appendChild(row);
@@ -543,7 +606,7 @@ async function markCloudSessionExpired(context, operation, generation) {
 }
 
 async function syncVault(auto = false) {
-    if (unlockedItems === null || syncInFlight || detailEditing || detailSaving) return;
+    if (unlockedItems === null || syncInFlight || detailEditing || detailSaving || currentView === "new-login" || newLoginSaving) return;
     if (auto && Date.now() - lastSyncAttempt < SYNC_INTERVAL_MS) return;
     const operation = operationGeneration;
     const generation = unlockedGeneration;
@@ -560,6 +623,9 @@ async function syncVault(auto = false) {
     syncInFlight = true;
     lastSyncAttempt = Date.now();
     refreshButton.disabled = true;
+    updateSyncSummary();
+    const startedAt = Date.now();
+    console.info("[upw] incremental sync started");
     if (!auto) status(t("正在同步变化…", "Syncing changes…"));
     let persisted = false;
     let context;
@@ -624,6 +690,8 @@ async function syncVault(auto = false) {
         }
         published = true;
         if (operation !== operationGeneration) return;
+        lastSyncSuccessAt = Date.now();
+        syncFailed = false;
         if (persisted || !auto) await render();
         if (!auto) status(outcome.changedCount === 0
             ? t("已是最新", "Vault is up to date")
@@ -631,7 +699,8 @@ async function syncVault(auto = false) {
         console.info("[upw] incremental sync complete; changes:", outcome.changedCount);
     } catch (error) {
         if (operation !== operationGeneration) return;
-        console.warn("[upw] sync did not finish; code:", error?.code ?? error?.message ?? error?.name);
+        syncFailed = true;
+        console.warn("[upw] sync did not finish; code:", error?.code ?? error?.name);
         if (error?.status === 401) {
             if (!await markCloudSessionExpired(context, operation, generation)) return;
             status(t("云端登录已过期；本地加密副本仍保留，请重新登录。", "Cloud sign-in expired. Your local encrypted copy is preserved. Sign in again."), true);
@@ -665,6 +734,8 @@ async function syncVault(auto = false) {
         }
         syncInFlight = false;
         refreshButton.disabled = false;
+        updateSyncSummary();
+        console.info("[upw] incremental sync finished; ms:", Date.now() - startedAt);
     }
 }
 
@@ -674,21 +745,28 @@ function renderCandidates(items) {
     itemsEl.replaceChildren();
     suggestionsEl.replaceChildren();
     const query = searchInput.value.trim().toLocaleLowerCase();
+    const filter = siteFilter.value;
     const candidates = items
         .map((item) => ({ item, ...credentialsOf(item) }))
-        .filter(({ item, username }) => !query
-            || item.title.toLocaleLowerCase().includes(query)
-            || username.toLocaleLowerCase().includes(query));
-    const suggestions = candidates.filter(({ item }) => hostMatches(host, item.host));
-    suggestionSection.hidden = suggestions.length === 0;
+        .filter(({ item, username }) => (filter !== "favorites" || item.favorite === true)
+            && (filter !== "current" || Boolean(host && hostMatches(host, item.host)))
+            && (!query || item.title.toLocaleLowerCase().includes(query)
+                || username.toLocaleLowerCase().includes(query)
+                || item.host.toLocaleLowerCase().includes(query)))
+        .sort((left, right) => left.item.title.localeCompare(right.item.title)
+            * (sortItems.value === "title-desc" ? -1 : 1));
+    suggestionSection.hidden = true;
     resultCount.textContent = String(candidates.length);
     emptyState.hidden = candidates.length > 0;
-    document.getElementById("emptyTitle").textContent = query
+    document.getElementById("emptyNewLoginButton").hidden = candidates.length > 0;
+    const narrowed = query || filter === "favorites" || filter === "current";
+    document.getElementById("itemsHeading").textContent = filter === "current" ? t("当前网站", "Current site")
+        : filter === "favorites" ? t("收藏条目", "Favorites") : t("全部条目", "All items");
+    document.getElementById("emptyTitle").textContent = narrowed
         ? t("没有搜索结果", "No matching items") : t("密码库暂无条目", "Your vault is empty");
-    document.getElementById("emptyDescription").textContent = query
-        ? t("试试其他标题或用户名。", "Try another title or username.")
-        : t("在 App 中添加条目并同步后，在此重新同步。", "Add items in the app, sync them, then sync again here.");
-    for (const candidate of suggestions) appendCandidate(candidate, suggestionsEl);
+    document.getElementById("emptyDescription").textContent = narrowed
+        ? t("调整搜索或筛选，也可以新建登录。", "Change the search or filter, or create a new login.")
+        : t("新建第一条登录，或同步已有密码。", "Create your first login, or sync existing passwords.");
     for (const candidate of candidates) appendCandidate(candidate, itemsEl);
 }
 
@@ -714,16 +792,61 @@ function appendCandidate(candidate, list) {
     button.append(avatar, copy);
     button.addEventListener("click", () => { void openItemDetail(candidate.item.id); });
     li.appendChild(button);
+    const actions = document.createElement("div");
+    actions.className = "item-actions";
+    const copyUsername = document.createElement("button");
+    copyUsername.type = "button";
+    copyUsername.textContent = t("复制用户名", "Copy user");
+    copyUsername.addEventListener("click", () => void copyText({ id: candidate.item.id, field: "username" }));
+    actions.appendChild(copyUsername);
+    if (candidate.password) {
+        const copyPassword = document.createElement("button");
+        copyPassword.type = "button";
+        copyPassword.textContent = t("复制密码", "Copy password");
+        copyPassword.addEventListener("click", () => void copyText({ id: candidate.item.id, field: "password" }));
+        actions.appendChild(copyPassword);
+    }
     if (canFill) {
         const fillButton = document.createElement("button");
         fillButton.type = "button";
         fillButton.className = "fill-action";
         fillButton.textContent = t("填充", "Fill");
         fillButton.addEventListener("click", () => { void fill(candidate, li); });
-        li.appendChild(fillButton);
+        actions.appendChild(fillButton);
     }
+    li.appendChild(actions);
     list.appendChild(li);
 }
+
+async function copyText(value) {
+    const operation = operationGeneration;
+    const generation = unlockedGeneration;
+    try {
+        const state = await sessionCommand("read");
+        if (operation !== operationGeneration || generation !== unlockedGeneration
+            || !state.unlocked || state.generation !== generation) return;
+        const fresh = state.items?.find(item => item.id === value.id);
+        if (!fresh) return;
+        if (Number.isInteger(value.index) && value.revision !== undefined
+            && fresh.source?.revision !== value.revision) {
+            status(t("条目已更新，请重新打开详情后复制。", "This item changed. Reopen its details before copying."), true);
+            return;
+        }
+        const text = value.field === "username" ? credentialsOf(fresh).username
+            : value.field === "password" ? credentialsOf(fresh).password
+            : value.field === "title" ? fresh.title
+            : value.field === "notes" ? readItemDetail(fresh).notes
+            : Number.isInteger(value.index) ? fresh.fields[value.index]?.value : "";
+        if (!text) return;
+        await navigator.clipboard.writeText(text);
+        status(t("已复制。内容会留在剪贴板，直到被覆盖。", "Copied. Clipboard contents remain until overwritten."));
+        console.info("[upw] clipboard copy completed");
+    } catch {
+        status(t("无法写入剪贴板，请检查浏览器权限。", "Could not write to clipboard. Check browser permissions."), true);
+        console.warn("[upw] clipboard write failed");
+    }
+}
+
 
 async function fill(candidate, li) {
     if (!tab?.id || !/^https?:\/\//i.test(pageUrl) || !hostMatches(host, candidate.item.host)) return;
@@ -754,6 +877,10 @@ async function fill(candidate, li) {
             status(t("页面已切换，请重新打开插件", "The page changed. Reopen the extension."), true);
             return;
         }
+        if (new URL(activeTab.url).protocol === "http:" && !window.confirm(t(
+            "此页面使用不安全的 HTTP 连接。仍要填充密码吗？",
+            "This page uses an insecure HTTP connection. Fill the password anyway?",
+        ))) return;
         const { username, password } = credentialsOf(current);
         const fillItem = {
             id: current.id, title: current.title, symbol: current.symbol, host: current.host,
@@ -820,7 +947,7 @@ function leaveDetailView() {
     clearDetailView();
 }
 
-function detailInput(labelText, value, editing, secret = false, multiline = false) {
+function detailInput(labelText, value, editing, secret = false, multiline = false, copySource) {
     const group = document.createElement("div");
     group.className = "field";
     const label = document.createElement("label");
@@ -855,6 +982,15 @@ function detailInput(labelText, value, editing, secret = false, multiline = fals
         });
         row.appendChild(toggle);
     }
+    if (copySource && !editing) {
+        const copyButton = document.createElement("button");
+        copyButton.type = "button";
+        copyButton.className = "secondary";
+        copyButton.textContent = t("复制", "Copy");
+        copyButton.setAttribute("aria-label", t(`复制${labelText}`, `Copy ${labelText}`));
+        copyButton.addEventListener("click", () => copyText(copySource));
+        row.appendChild(copyButton);
+    }
     group.append(label, row);
     detailContent.appendChild(group);
     return input;
@@ -882,19 +1018,39 @@ function paintItemDetail(item, editing) {
     }
     editing = editing && editable;
     detailEditing = editing;
-    detailTitleInput = detailInput(t("标题", "Title"), item.title, editing);
-    detailFieldInputs = item.fields.map((field, index) => detailInput(
-        field.name || t(`字段 ${index + 1}`, `Field ${index + 1}`),
-        field.value, editing, ["password", "pin", "secret", "one_time_password"].includes(field.type),
-        !["password", "pin", "secret", "one_time_password"].includes(field.type) && /[\r\n]/.test(field.value),
-    ));
-    detailNotesInput = detailInput(t("备注", "Notes"), notes, editing, false, true);
+    detailTitleInput = detailInput(t("标题", "Title"), item.title, editing, false, false, { id: item.id, field: "title" });
+    const fieldLabels = {
+        login: t("用户名", "Username"), email: t("邮箱", "Email"), password: t("密码", "Password"),
+        website: t("网站", "Website"), pin: "PIN", secret: t("秘密", "Secret"),
+        one_time_password: t("验证码密钥", "OTP secret"),
+    };
+    detailFieldInputs = item.fields.map((field, index) => {
+        const label = field.name && !field.name.startsWith("@string/")
+            ? field.name : fieldLabels[field.type] ?? t(`字段 ${index + 1}`, `Field ${index + 1}`);
+        const input = detailInput(label, field.value, editing,
+            ["password", "pin", "secret", "one_time_password"].includes(field.type),
+            !["password", "pin", "secret", "one_time_password"].includes(field.type) && /[\r\n]/.test(field.value),
+            { id: item.id, index, revision: item.source?.revision });
+        if (!editing && field.type === "website" && safeWebsiteUrl(field.value)) {
+            const open = document.createElement("button");
+            open.type = "button";
+            open.className = "secondary";
+            open.textContent = t("打开", "Open");
+            open.setAttribute("aria-label", t("打开网站", "Open website"));
+            open.addEventListener("click", () => openWebsite(item.id, index));
+            detailContent.children[detailContent.children.length - 1].children[1].appendChild(open);
+        }
+        return input;
+    });
+    detailNotesInput = detailInput(t("备注", "Notes"), notes, editing, false, true, { id: item.id, field: "notes" });
     detailEditButton.disabled = !editable;
     detailEditButton.hidden = editing;
     detailCancelButton.hidden = !editing;
     detailSaveSection.hidden = !editing;
     detailLegacyNote.hidden = editable;
+    if (activePanel === "items") listScrollTop = document.querySelector("main").scrollTop;
     show("detail");
+    document.querySelector("main").scrollTop = 0;
 }
 
 async function openItemDetail(id, editing = false) {
@@ -1112,17 +1268,230 @@ async function saveItemDetail() {
     }
 }
 
-detailBackButton.addEventListener("click", async () => {
-    leaveDetailView();
-    currentView = "vault";
-    await render();
-});
+detailBackButton.addEventListener("click", () => navigate("vault"));
 detailEditButton.addEventListener("click", () => openItemDetail(selectedItemId, true));
 detailCancelButton.addEventListener("click", () => {
+    if (!confirmDiscard()) return;
     console.info("[upw] popup edit cancelled");
     return openItemDetail(selectedItemId);
 });
 detailSaveButton.addEventListener("click", saveItemDetail);
+
+async function openWebsite(id, index) {
+    const operation = operationGeneration;
+    const generation = unlockedGeneration;
+    try {
+        const state = await sessionCommand("read");
+        if (operation !== operationGeneration || generation !== unlockedGeneration
+            || !state.unlocked || state.generation !== generation) return;
+        const item = state.items?.find(item => item.id === id);
+        const field = item?.fields[index];
+        const url = field?.type === "website" ? safeWebsiteUrl(field.value) : null;
+        if (!url) return;
+        await browser.tabs.create({ url });
+        console.info("[upw] website opened");
+    } catch {
+        console.warn("[upw] website open failed");
+        status(t("无法打开网站", "Could not open the website"), true);
+    }
+}
+
+async function regeneratePassword() {
+    const operation = operationGeneration;
+    const generation = unlockedGeneration;
+    try {
+        const state = await sessionCommand("read");
+        if (operation !== operationGeneration || generation !== unlockedGeneration
+            || !state.unlocked || state.generation !== generation) return;
+        generatedPassword = generatePassword({
+            length: Number(document.getElementById("generatorLength").value),
+            uppercase: document.getElementById("genUppercase").checked,
+            lowercase: document.getElementById("genLowercase").checked,
+            digits: document.getElementById("genDigits").checked,
+            symbols: document.getElementById("genSymbols").checked,
+        });
+        generatedInput.value = generatedPassword;
+        generatedInput.type = "password";
+        document.getElementById("revealGeneratedButton").textContent = t("显示", "Show");
+        status("");
+        console.info("[upw] generator result refreshed");
+    } catch {
+        generatedPassword = "";
+        generatedInput.value = "";
+        status(t("长度须为 8–128，且至少选择一类字符。", "Choose a length of 8–128 and at least one character class."), true);
+        console.warn("[upw] password generation unavailable");
+    }
+}
+
+async function openNewLogin(password = "") {
+    if (syncInFlight) return;
+    await navigate("new-login");
+    if (activePanel !== "new-login" || unlockedItems === null || newLoginId) return;
+    newLoginId = crypto.randomUUID();
+    newLoginFields[0].value = host;
+    newLoginFields[2].value = password;
+    newLoginFields[3].value = /^https?:\/\//i.test(pageUrl) ? new URL(pageUrl).origin : "";
+    newLoginDirty = Boolean(password);
+    newLoginFields[0].focus();
+    console.info("[upw] new login opened");
+}
+
+async function createNewLogin() {
+    if (newLoginSaving || newLoginUncertain || currentView !== "new-login" || unlockedItems === null) return;
+    const [titleInput, usernameInput, passwordField, urlInput, notesInput] = newLoginFields;
+    const draft = { id: newLoginId ?? crypto.randomUUID(), title: titleInput.value.trim(),
+        username: usernameInput.value, password: passwordField.value, url: urlInput.value.trim(), notes: notesInput.value };
+    newLoginId = draft.id;
+    const masterPassword = document.getElementById("newLoginMasterPassword");
+    let authorization = masterPassword.value;
+    masterPassword.value = "";
+    if (!draft.title || (draft.url && !safeWebsiteUrl(draft.url))) {
+        status(t("请输入标题及有效的 HTTP(S) 网站地址（可留空）。", "Enter a title and a valid HTTP(S) website URL, or leave the URL empty."), true);
+        authorization = "";
+        return;
+    }
+    if (!authorization) {
+        status(t("保存前请输入主密码。", "Enter your master password before saving."), true);
+        return;
+    }
+    const operation = ++operationGeneration;
+    const generation = unlockedGeneration;
+    const expectedSnapshotVersion = unlockedSnapshotVersion;
+    const passwordVersion = unlockedPasswordVersion;
+    const startedAt = Date.now();
+    const isCurrent = () => operation === operationGeneration && generation === unlockedGeneration
+        && currentView === "new-login" && newLoginId === draft.id;
+    let vek;
+    let cloudSaved = false;
+    let postStarted = false;
+    let published = false;
+    let context;
+    newLoginSaving = true;
+    const saveButton = document.getElementById("createLoginSaveButton");
+    saveButton.disabled = true;
+    for (const input of newLoginFields) input.readOnly = true;
+    console.info("[upw] encrypted login creation started");
+    status(t("正在加密并创建…", "Encrypting and creating…"));
+    try {
+        const bag = await storageGet([SESSION_KEY, VAULT_KEY]);
+        if (!isCurrent()) return;
+        const session = bag[SESSION_KEY], vault = bag[VAULT_KEY];
+        if (!session?.token || session.expiresAt <= Date.now() || !vault?.id) throw new Error("session_changed");
+        context = sessionContext(session, vault);
+        const scope = cacheScope(session, vault);
+        const cached = await encryptedCache.read(scope);
+        if (!isCurrent()) return;
+        if (!cached || cached.version !== expectedSnapshotVersion || cached.passwordVersion !== passwordVersion) throw new Error("session_changed");
+        const validate = async (version = expectedSnapshotVersion) => {
+            if (!isCurrent()) throw new Error("operation_cancelled");
+            const active = await storageGet([SESSION_KEY, VAULT_KEY]);
+            if (!isCurrent()) throw new Error("operation_cancelled");
+            if (active[SESSION_KEY]?.token !== context.token || active[SESSION_KEY]?.userId !== context.userId
+                || active[SESSION_KEY]?.expiresAt <= Date.now() || active[VAULT_KEY]?.id !== context.vaultId) throw new Error("session_changed");
+            const state = await sessionCommand("read", {}, context);
+            if (!isCurrent()) throw new Error("operation_cancelled");
+            if (!state.unlocked || state.generation !== generation || state.snapshotVersion !== version
+                || state.passwordVersion !== passwordVersion) throw new Error("session_changed");
+            return state;
+        };
+        const original = await validate();
+        await requireRelayAccess(true);
+        await validate();
+        const envelope = await getVaultEnvelope(context.token, context.vaultId);
+        if (!isCurrent()) return;
+        if (!envelope.envelope || envelope.meta.passwordVersion !== passwordVersion) throw new Error("envelope_changed");
+        vek = await unwrapEnvelope(base64ToBytes(envelope.envelope), authorization);
+        authorization = "";
+        await validate();
+        const modifiedMs = Date.now();
+        const xml = createLoginItemXml(draft, modifiedMs);
+        const body = await encryptItemBody(xml, vek, draft.id);
+        await validate();
+        const freshEnvelope = await getVaultEnvelope(context.token, context.vaultId);
+        if (!isCurrent()) return;
+        if (freshEnvelope.envelope !== envelope.envelope || freshEnvelope.meta.passwordVersion !== passwordVersion) throw new Error("envelope_changed");
+        await validate();
+        postStarted = true;
+        const saved = await createItem(context.token, context.vaultId, { uuid: draft.id, bodyB64: bytesToBase64(body), modifiedMs });
+        cloudSaved = true;
+        await validate();
+        const row = { uuid: draft.id.toLowerCase(), kind: 1, revision: saved.revision, bodyB64: bytesToBase64(body), modifiedMs };
+        const item = projectVaultFragment({ ...row, xml });
+        if (!item) throw new Error("created_item_unavailable");
+        const snapshot = await encryptedCache.commit({ ...cached, rows: [...cached.rows, row] }, cached.version);
+        if (!isCurrent()) return;
+        const items = [...original.items, item];
+        const refreshed = await sessionCommand("refresh", {
+            generation, expectedSnapshotVersion, snapshotVersion: snapshot.version,
+            passwordVersion: snapshot.passwordVersion, items,
+        }, context);
+        if (!isCurrent()) return;
+        if (!refreshed.unlocked || refreshed.generation !== generation) throw new Error("session_changed");
+        await validate(snapshot.version);
+        unlockedItems = items;
+        unlockedSnapshotVersion = snapshot.version;
+        unlockedExpiresAt = refreshed.expiresAt;
+        published = true;
+        clearNewLoginForm();
+        currentView = "vault";
+        siteFilter.value = "all";
+        searchInput.value = "";
+        await render();
+        status(t("登录已加密创建并同步。", "Login encrypted, created, and synced."));
+        console.info("[upw] login creation succeeded; ms:", Date.now() - startedAt);
+    } catch (error) {
+        if (!isCurrent()) return;
+        console.warn("[upw] login creation failed; code:", error?.code ?? error?.name);
+        if (error?.status === 401) {
+            await markCloudSessionExpired(context, operation, generation);
+            status(t("云端登录已过期；本地副本仍保留，请重新登录。", "Cloud sign-in expired. The local copy is preserved. Sign in again."), true);
+        } else if (cloudSaved || error?.message === "session_changed") {
+            await sessionCommand("lock", { generation }, context);
+            if (generation === unlockedGeneration) {
+                clearUnlockedView();
+                await render();
+                status(cloudSaved
+                    ? t("已保存到云端，请重新解锁同步，不要重复提交。", "Saved to the cloud. Unlock and sync; do not submit again.")
+                    : t("会话已改变，请重新解锁。", "The session changed. Unlock again."), true);
+            }
+        } else if (postStarted) {
+            newLoginUncertain = true;
+            status(t("无法确认创建结果，请返回并同步检查；不要重复提交。", "Could not confirm the save. Return to the vault and sync before creating again."), true);
+        } else if (error instanceof VaultCryptoError) {
+            status(t("主密码错误或条目格式无效，未创建。", "Wrong master password or invalid item data. Nothing was created."), true);
+        } else {
+            status(t("无法安全创建，请检查网络和主密码。", "Could not safely create the login. Check your connection and master password."), true);
+        }
+    } finally {
+        vek?.fill(0);
+        authorization = "";
+        for (const key of ["title", "username", "password", "url", "notes"]) draft[key] = "";
+        if (cloudSaved && !published) {
+            await sessionCommand("lock", { generation }, context).catch(() => console.warn("[upw] created item invalidation failed"));
+            if (generation === unlockedGeneration) {
+                clearUnlockedView();
+                await render();
+                status(t("已保存到云端，请重新解锁同步，不要重复提交。", "Saved to the cloud. Unlock and sync; do not submit again."), true);
+            }
+        }
+        if (operation === operationGeneration) {
+            newLoginSaving = false;
+            saveButton.disabled = newLoginUncertain;
+            for (const input of newLoginFields) input.readOnly = false;
+        }
+        console.info("[upw] login creation finished; ms:", Date.now() - startedAt);
+    }
+}
+
+function clearNewLoginForm() {
+    for (const input of newLoginFields) { input.value = ""; input.readOnly = false; }
+    document.getElementById("newLoginMasterPassword").value = "";
+    document.getElementById("createLoginSaveButton").disabled = false;
+    newLoginDirty = false;
+    newLoginSaving = false;
+    newLoginUncertain = false;
+    newLoginId = null;
+}
 
 // MARK: - 状态渲染
 
@@ -1176,15 +1545,29 @@ async function render() {
     if (currentView === "detail" && selectedItemId) {
         const item = unlockedItems.find(item => item.id === selectedItemId);
         if (item && detailGeneration === unlockedGeneration) {
-            // Session polling validates access without replacing DOM-backed unsaved edits.
-            show("detail");
+            // Preserve drafts, but refresh read-only controls when a remote item changes.
+            if (!detailEditing && (item.source?.revision !== detailItem?.source?.revision
+                || item.source?.xml !== detailItem?.source?.xml)) paintItemDetail(item, false);
+            else show("detail");
             return;
         }
         clearDetailView();
         currentView = "vault";
     }
+    updateSyncSummary();
+    if (currentView === "generator") {
+        show("generator");
+        return;
+    }
+    if (currentView === "new-login") {
+        show("new-login");
+        return;
+    }
     if (currentView === "settings") {
         show("settings");
+        const account = await storageGet([DRAFT_KEY]);
+        if (!isCurrent()) return;
+        document.getElementById("accountInfo").textContent = account[DRAFT_KEY]?.email ?? t("已登录账户", "Signed-in account");
         const settings = await storageGet([SETTINGS_KEY]);
         if (!isCurrent()) return;
         lockTimeout.value = String(settings[SETTINGS_KEY] ?? DEFAULT_LOCK_MINUTES);
@@ -1194,9 +1577,36 @@ async function render() {
     } else {
         show("items");
         renderCandidates(unlockedItems);
-        searchInput.focus();
+        document.querySelector("main").scrollTop = listScrollTop;
+        searchInput.focus({ preventScroll: true });
     }
     status("");
+}
+
+function confirmDiscard() {
+    if (detailSaving || newLoginSaving) return false;
+    const dirty = newLoginDirty || (currentView === "new-login" && newLoginFields.some(input => input.value)) || (detailEditing && [detailTitleInput, detailNotesInput, ...detailFieldInputs]
+        .some(input => input?.value !== input?.initialValue));
+    return !dirty || window.confirm(t("放弃尚未保存的修改？", "Discard unsaved changes?"));
+}
+
+async function navigate(view) {
+    if (!confirmDiscard()) return;
+    if (activePanel === "items") listScrollTop = document.querySelector("main").scrollTop;
+    leaveDetailView();
+    clearNewLoginForm();
+    currentView = view;
+    await render();
+}
+
+function updateSyncSummary() {
+    const text = syncInFlight ? t("正在同步…", "Syncing…")
+        : navigator.onLine === false ? t("离线 · 使用本地加密副本", "Offline · using local encrypted copy")
+        : syncFailed ? t("同步未完成 · 本地副本已保留", "Sync incomplete · local copy preserved")
+        : lastSyncSuccessAt ? t(`上次同步 ${new Date(lastSyncSuccessAt).toLocaleTimeString()}`, `Last synced ${new Date(lastSyncSuccessAt).toLocaleTimeString()}`)
+        : t("本地副本 · 尚未在此弹窗同步", "Local copy · not synced in this popup yet");
+    syncSummary.textContent = text;
+    document.getElementById("settingsSyncStatus").textContent = text;
 }
 
 async function saveDraft() {
@@ -1256,14 +1666,65 @@ lockNowButton.addEventListener("click", async () => {
     await lockSession();
     await render();
 });
-vaultTab.addEventListener("click", async () => {
-    leaveDetailView();
-    currentView = "vault";
-    await render();
+vaultTab.addEventListener("click", () => navigate("vault"));
+settingsTab.addEventListener("click", () => navigate("settings"));
+generatorTab.addEventListener("click", async () => {
+    await navigate("generator");
+    if (activePanel === "generator" && !generatedPassword) await regeneratePassword();
 });
-settingsTab.addEventListener("click", async () => {
-    leaveDetailView();
-    currentView = "settings";
+for (const control of [siteFilter, sortItems]) control.addEventListener("change", () => {
+    listScrollTop = 0;
+    if (unlockedItems !== null) renderCandidates(unlockedItems);
+});
+document.getElementById("newLoginButton").addEventListener("click", () => openNewLogin());
+document.getElementById("emptyNewLoginButton").addEventListener("click", () => openNewLogin());
+document.getElementById("newLoginBackButton").addEventListener("click", () => navigate("vault"));
+document.getElementById("createLoginSaveButton").addEventListener("click", createNewLogin);
+for (const input of newLoginFields) input.addEventListener("input", () => { newLoginDirty = true; });
+document.getElementById("regenerateButton").addEventListener("click", regeneratePassword);
+document.getElementById("revealGeneratedButton").addEventListener("click", async () => {
+    const operation = operationGeneration;
+    const generation = unlockedGeneration;
+    const state = await sessionCommand("read");
+    if (operation !== operationGeneration || generation !== unlockedGeneration
+        || !state.unlocked || state.generation !== generation) return;
+    generatedInput.type = generatedInput.type === "password" ? "text" : "password";
+    document.getElementById("revealGeneratedButton").textContent = generatedInput.type === "text" ? t("隐藏", "Hide") : t("显示", "Show");
+});
+document.getElementById("copyGeneratedButton").addEventListener("click", async () => {
+    const operation = operationGeneration;
+    const generation = unlockedGeneration;
+    try {
+        const state = await sessionCommand("read");
+        if (operation !== operationGeneration || generation !== unlockedGeneration
+            || !state.unlocked || state.generation !== generation || !generatedPassword) return;
+        await navigator.clipboard.writeText(generatedPassword);
+        status(t("已复制，请在使用后覆盖剪贴板。", "Copied. Overwrite the clipboard after use."));
+        console.info("[upw] generated password copied");
+    } catch {
+        status(t("复制失败，请检查权限。", "Copy failed. Check permissions."), true);
+        console.warn("[upw] generated password copy failed");
+    }
+});
+document.getElementById("useGeneratedButton").addEventListener("click", () => openNewLogin(generatedPassword));
+document.getElementById("switchVaultButton").addEventListener("click", async () => {
+    if (!confirmDiscard()) return;
+    const bag = await storageGet([SESSION_KEY]);
+    const session = bag[SESSION_KEY];
+    if (!session || session.expiresAt <= Date.now()) {
+        await lockSession();
+        show("login");
+        status(t("切换密码库需要重新登录。", "Sign in again to switch vaults."), true);
+        return;
+    }
+    await lockSession();
+    switchingVault = true;
+    console.info("[upw] vault switching started");
+    await showVaultPage(session.token);
+});
+document.getElementById("cancelVaultSwitchButton").addEventListener("click", async () => {
+    operationGeneration += 1;
+    switchingVault = false;
     await render();
 });
 lockTimeout.addEventListener("change", async () => {
@@ -1280,6 +1741,7 @@ lockTimeout.addEventListener("change", async () => {
     status(t("自动锁定设置已保存", "Auto-lock setting saved"));
 });
 lockButton.addEventListener("click", async () => {
+    if (!detailSaving && !newLoginSaving && !confirmDiscard()) return;
     const { [SESSION_KEY]: session } = await storageGet([SESSION_KEY]);
     await lockSession();
     await browser.storage.local.remove([SESSION_KEY, VAULT_KEY]);
@@ -1313,6 +1775,13 @@ async function sessionCommand(action, extra = {}, context) {
 
 function clearUnlockedView() {
     clearDetailView();
+    clearNewLoginForm();
+    generatedPassword = "";
+    generatedInput.value = "";
+    generatedInput.type = "password";
+    lastSyncSuccessAt = 0;
+    listScrollTop = 0;
+    lastSyncAttempt = 0;
     currentView = "vault";
     passwordInput.value = "";
     newVaultPassword.value = "";
@@ -1358,7 +1827,7 @@ async function restoreUnlockSession() {
             if (!cached || cached.version !== state.snapshotVersion
                 || cached.passwordVersion !== state.passwordVersion) {
                 // This popup publishes the session after the encrypted transaction completes.
-                if (syncInFlight || detailSaving) return;
+                if (syncInFlight || detailSaving || newLoginSaving) return;
                 const fresh = await sessionCommand("read");
                 if (operation !== operationGeneration) return;
                 if (fresh.unlocked && (fresh.generation !== state.generation
@@ -1372,9 +1841,8 @@ async function restoreUnlockSession() {
                 return;
             }
         }
-        if (unlockedGeneration !== state.generation && selectedItemId) {
-            clearDetailView();
-            currentView = "vault";
+        if (unlockedGeneration && unlockedGeneration !== state.generation) {
+            clearUnlockedView();
         }
         unlockedItems = state.items ?? [];
         unlockedGeneration = state.generation;

@@ -275,6 +275,7 @@ export function parseVaultXml(xml: string): ExtensionItem[] {
             symbol: card.getAttribute("symbol"),
             fields,
             host: website.trim(),
+            ...(card.getAttribute("favorite") === "true" ? { favorite: true } : {}),
         });
     }
     return items;

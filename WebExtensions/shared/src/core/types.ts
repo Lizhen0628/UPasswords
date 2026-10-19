@@ -50,6 +50,8 @@ export interface ExtensionItem {
     source?: { xml: string; revision: number };
     /** Plain-text/Markdown notes for an in-memory detail view. */
     notes?: string;
+    /** Native favorite flag for the unlocked vault's daily-workflow projection. */
+    favorite?: boolean;
 }
 
 /** Source XML and detail notes are forbidden even when assigning a structurally compatible session item. */

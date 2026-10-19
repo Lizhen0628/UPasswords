@@ -1,3 +1,4 @@
+import { safeWebsiteUrl } from "./domain.js";
 import type { ExtensionItem } from "./types.js";
 import { VaultCryptoError } from "./vault-crypto.js";
 
@@ -15,6 +16,67 @@ interface EditableCard {
     card: Element;
     fields: Element[];
     note: Element | undefined;
+}
+
+export interface NewLoginItem {
+    id: string;
+    title: string;
+    username: string;
+    password: string;
+    url: string;
+    notes: string;
+}
+
+/**
+ * Build a standalone native DatabaseItemCodec card with DOM escaping, stable database label keys,
+ * explicit fill tokens and millisecond timestamps. Empty credential fields remain editable.
+ * This is creation only; existing cards must use updateItemXml to preserve opaque metadata.
+ */
+export function createLoginItemXml(item: NewLoginItem, nowMs = Date.now()): string {
+    if (!item || typeof item.id !== "string" || !UUID_PATTERN.test(item.id)) {
+        throw new VaultCryptoError("bad_item_identity");
+    }
+    if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new VaultCryptoError("bad_item_time");
+    const values = [item.title, item.username, item.password, item.url, item.notes];
+    if (values.some((value) => typeof value !== "string" || INVALID_XML_TEXT.test(value))) {
+        throw new VaultCryptoError("bad_xml_text");
+    }
+    if (!item.title.trim()) throw new VaultCryptoError("bad_item_title");
+    const websiteUrl = item.url === "" ? "" : safeWebsiteUrl(item.url);
+    if (item.url !== "" && !websiteUrl) throw new VaultCryptoError("bad_item_url");
+    if (typeof DOMParser === "undefined" || typeof XMLSerializer === "undefined") {
+        throw new VaultCryptoError("dom_unavailable");
+    }
+    const document = new DOMParser().parseFromString("<card/>", "application/xml");
+    const card = document.documentElement;
+    card.setAttribute("id", item.id.toUpperCase());
+    card.setAttribute("title", item.title);
+    card.setAttribute("symbol", "key");
+    card.setAttribute("color", "gray");
+    card.setAttribute("autofill", "on");
+    card.setAttribute("created", String(nowMs));
+    card.setAttribute("modified", String(nowMs));
+    const fields = [
+        { name: "@string/login_field", type: "login", autofill: "username", value: item.username },
+        { name: "@string/password_field", type: "password", autofill: "current-password", value: item.password },
+        { name: "@string/url_field", type: "website", autofill: "url", value: websiteUrl },
+    ];
+    for (const { name, type, autofill, value } of fields) {
+        const field = document.createElement("field");
+        field.setAttribute("name", name);
+        field.setAttribute("type", type);
+        field.setAttribute("autofill", autofill);
+        field.textContent = value;
+        card.appendChild(field);
+    }
+    if (item.notes !== "") {
+        const note = document.createElement("note");
+        note.textContent = item.notes;
+        card.appendChild(note);
+    }
+    const xml = serializePreservingCarriageReturns(document);
+    console.info("[upw] login item XML created", { fields: fields.length });
+    return xml;
 }
 
 /** Parse only standalone card fragments; never expand entities or flatten unfamiliar value markup. */

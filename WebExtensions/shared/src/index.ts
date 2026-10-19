@@ -3,6 +3,7 @@ export * from "./core/domain.js";
 export * from "./core/crypto.js";
 export * from "./core/vault-crypto.js";
 export * from "./core/item-editor.js";
+export * from "./core/password-generator.js";
 export * from "./core/cached-items.js";
 export * from "./storage/encrypted-cache.js";
 export * from "./sync/vault-sync.js";
