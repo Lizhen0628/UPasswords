@@ -17,10 +17,19 @@ export function hostnameOf(url: string): string {
 
 /** Strips common wired/technical prefixes from a hostname. */
 export function canonicalizeHost(host: string): string {
-    if (!host) {
+    const value = host.trim().toLowerCase();
+    if (!value) return "";
+    let hostname = value;
+    if (value.includes("://")) {
+        try {
+            const url = new URL(value);
+            if (url.protocol !== "https:" && url.protocol !== "http:") return "";
+            hostname = url.hostname;
+        } catch { return ""; }
+    } else if (/[\s/@?#:]/.test(value)) {
         return "";
     }
-    const parts = host.split(".");
+    const parts = hostname.replace(/\.$/, "").split(".");
     while (parts.length > 2 && wiredHosts.has(parts[0])) {
         parts.shift();
     }

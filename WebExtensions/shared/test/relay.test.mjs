@@ -54,27 +54,28 @@ test("listVaultItems: 首页无 cursor,limit=500", async () => {
 });
 
 test("listAllVaultItems: 跟随 nextCursor 翻页直到拉平", async () => {
+    const uuids = [1, 2, 3].map(index => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`);
     const calls = mockFetch([
         {
             method: "GET", path: "/v2/vaults/v1/items",
             body: {
                 items: [
-                    { uuid: "a", kind: 1, revision: 1, bodyB64: "AAA", modifiedMs: 1 },
-                    { uuid: "b", kind: 2, revision: 1, bodyB64: "BBB", modifiedMs: 2 },
+                    { uuid: uuids[0], kind: 1, revision: 1, bodyB64: "AAAA", modifiedMs: 1 },
+                    { uuid: uuids[1], kind: 2, revision: 1, bodyB64: "BBBB", modifiedMs: 2 },
                 ],
-                nextCursor: { ms: 2, uuid: "b" }, headSeq: 9,
+                nextCursor: { ms: 2, uuid: uuids[1] }, headSeq: 9,
             },
         },
         {
             method: "GET", path: "/v2/vaults/v1/items",
-            body: { items: [{ uuid: "c", kind: 1, revision: 3, bodyB64: "CCC", modifiedMs: 3 }], nextCursor: null, headSeq: 9 },
+            body: { items: [{ uuid: uuids[2], kind: 1, revision: 3, bodyB64: "CCCC", modifiedMs: 3 }], nextCursor: null, headSeq: 9 },
         },
     ]);
     const rows = await listAllVaultItems("t", "v1");
     assert.equal(rows.length, 3);
-    assert.equal(rows[2].uuid, "c");
+    assert.equal(rows[2].uuid, uuids[2]);
     // 第二页请求带上游返回的 cursor(uuid 须经 URL 编码通道)
-    assert.equal(calls[1].search, "?cursorMs=2&cursorUuid=b&limit=500");
+    assert.equal(calls[1].search, `?cursorMs=2&cursorUuid=${uuids[1]}&limit=500`);
 });
 
 test("listAllVaultItems: 401 → RelayApiError(status=401)", async () => {

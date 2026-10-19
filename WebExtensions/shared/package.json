@@ -11,6 +11,8 @@
     "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {
+    "fake-indexeddb": "^6.2.6",
+    "jsdom": "^26.1.0",
     "typescript": "^5.5.0"
   }
 }

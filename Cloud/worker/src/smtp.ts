@@ -14,13 +14,17 @@ function wrap76(s: string): string {
   return lines.join("\r\n");
 }
 
-/// 构造 UTF-8 纯文本 MIME(纯函数,单测覆盖)。
+const ALT_BOUNDARY = "UPW-ALT-7F3A9C1D";
+
+/// 构造 multipart/alternative MIME(纯文本 + HTML,纯函数,单测覆盖):
+/// 不支持 HTML 的客户端回落纯文本,现代客户端渲染样式版。
 export function buildMail(opts: {
   from: string;
   replyTo: string;
   to: string;
   subject: string;
   body: string;
+  html: string;
 }): string {
   return [
     `From: ${opts.from}`,
@@ -29,12 +33,53 @@ export function buildMail(opts: {
     `Subject: =?UTF-8?B?${bytesToB64(utf8(opts.subject))}?=`,
     `Date: ${new Date().toUTCString()}`,
     "MIME-Version: 1.0",
+    `Content-Type: multipart/alternative; boundary="${ALT_BOUNDARY}"`,
+    "",
+    `--${ALT_BOUNDARY}`,
     "Content-Type: text/plain; charset=UTF-8",
     "Content-Transfer-Encoding: base64",
     "",
     wrap76(bytesToB64(utf8(opts.body))),
+    `--${ALT_BOUNDARY}`,
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    wrap76(bytesToB64(utf8(opts.html))),
+    `--${ALT_BOUNDARY}--`,
     "",
   ].join("\r\n");
+}
+
+/// 验证码 HTML 版:仅内联样式(邮件客户端不加载 <style>/外部资源),
+/// 验证码居中加大加粗置色块中;中英双语与纯文本版保持一致。
+/// 纯函数,单测覆盖。
+export function verificationMailHtml(code: string, sensitive: boolean, lang: "zh" | "en" = "en"): string {
+  const zh = lang === "zh";
+  const titleMain = sensitive
+    ? (zh ? "您的安全操作验证码" : "Your security code")
+    : (zh ? "您的登录验证码" : "Your sign-in code");
+  const footer = zh
+    ? "若非本人操作，请忽略本邮件，您的数据安全不受影响。<br>验证码 10 分钟内有效。"
+    : "If you did not request it, please ignore this email.<br>The code expires in 10 minutes.";
+  return [
+    '<!doctype html><html><body style="margin:0;padding:24px 12px;background:#f4f5f7;',
+    "font-family:-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif;\">",
+    '<div style="max-width:420px;margin:0 auto;background:#ffffff;border-radius:14px;',
+    'padding:32px 28px;text-align:center;">',
+    '<div style="font-size:20px;font-weight:700;color:#1d1d1f;letter-spacing:.5px;">UPasswords</div>',
+    `<div style="margin-top:16px;font-size:15px;color:#333333;">${titleMain}</div>`,
+    '<div style="margin:18px auto 10px;padding:14px 10px 14px 20px;display:table;',
+    'background:#eef4ff;border:1px solid #c9dcff;border-radius:10px;',
+    'font-size:36px;font-weight:800;letter-spacing:10px;color:#0a5bd3;',
+    'text-align:center;">',
+    code,
+    "</div>",
+    `<div style="font-size:13px;color:#666666;">${zh ? "验证码 10 分钟内有效，请勿泄露给任何人。" : "This code expires in 10 minutes. Do not share it with anyone."}</div>`,
+    '<div style="margin-top:22px;font-size:12px;color:#999999;line-height:1.7;">',
+    footer,
+    "</div>",
+    "</div></body></html>",
+  ].join("");
 }
 
 export async function sendVerificationMail(
@@ -42,23 +87,43 @@ export async function sendVerificationMail(
   to: string,
   code: string,
   purpose: string,
+  lang: "zh" | "en" = "en",
 ): Promise<void> {
   if (env.SMTP_MOCK === "1") {
-    console.log(JSON.stringify({ t: Date.now(), action: "smtp_mock", purpose }));
+    console.log(JSON.stringify({ t: Date.now(), action: "smtp_mock", purpose, lang }));
     return;
   }
-  const subject = purpose === "sensitive" ? "UPasswords 安全操作验证码" : "UPasswords 登录验证码";
-  const body = [
-    `您的 UPasswords 验证码:${code}`,
-    "验证码 10 分钟内有效。",
-    "若非本人操作,请忽略本邮件,您的数据安全不受影响。",
-    "",
-    `Your UPasswords verification code: ${code}`,
-    "It expires in 10 minutes.",
-    "If you did not request it, please ignore this email.",
-  ].join("\n");
-  const mail = buildMail({ from: env.SMTP_FROM, replyTo: env.SMTP_REPLY_TO, to, subject, body });
+  const { subject, body } = verificationMailText(code, purpose === "sensitive", lang);
+  const html = verificationMailHtml(code, purpose === "sensitive", lang);
+  const mail = buildMail({ from: env.SMTP_FROM, replyTo: env.SMTP_REPLY_TO, to, subject, body, html });
   await smtpDeliver(env, to, mail);
+}
+
+/// 纯文本版(主题 + 正文):默认英文,zh 为中文单语。
+/// 纯函数,单测覆盖。
+export function verificationMailText(
+  code: string,
+  sensitive: boolean,
+  lang: "zh" | "en",
+): { subject: string; body: string } {
+  if (lang === "zh") {
+    return {
+      subject: sensitive ? "UPasswords 安全操作验证码" : "UPasswords 登录验证码",
+      body: [
+        `您的 UPasswords 验证码:${code}`,
+        "验证码 10 分钟内有效。",
+        "若非本人操作,请忽略本邮件,您的数据安全不受影响。",
+      ].join("\n"),
+    };
+  }
+  return {
+    subject: sensitive ? "UPasswords security code" : "UPasswords sign-in code",
+    body: [
+      `Your UPasswords verification code: ${code}`,
+      "It expires in 10 minutes.",
+      "If you did not request it, please ignore this email.",
+    ].join("\n"),
+  };
 }
 
 async function smtpDeliver(env: Env, to: string, mail: string): Promise<void> {

@@ -2,73 +2,429 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://upasswords.local/contracts/extension-message.schema.json",
     "title": "UPasswords extension messaging",
-    "description": "Messages between the extension popup, background script and the native app bridge. TypeScript mirror: WebExtensions/shared/src/messaging/protocol.ts. Never carries plaintext secrets outside a fill request.",
+    "description": "Messages between extension popup, background, content script and native bridge. vault-session commands and responses are restricted to the trusted popup; secrets never go to a page except during an authorized fill.",
     "$defs": {
         "fieldLite": {
             "type": "object",
-            "required": ["name", "type", "value", "autofill"],
+            "required": [
+                "name",
+                "type",
+                "value",
+                "autofill"
+            ],
             "properties": {
-                "name": { "type": "string" },
-                "type": { "type": "string" },
-                "value": { "type": "string" },
-                "autofill": { "type": "string" }
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "string"
+                },
+                "autofill": {
+                    "type": "string"
+                }
             }
         },
         "item": {
             "type": "object",
-            "required": ["id", "title", "fields", "host"],
+            "required": [
+                "id",
+                "title",
+                "fields",
+                "host"
+            ],
             "properties": {
-                "id": { "type": "integer" },
-                "title": { "type": "string" },
-                "symbol": { "type": ["string", "null"] },
-                "fields": { "type": "array", "items": { "$ref": "#/$defs/fieldLite" } },
-                "host": { "type": "string", "description": "Canonical site host; empty = any origin." }
-            }
+                "id": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "symbol": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "fields": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/fieldLite"
+                    }
+                },
+                "host": {
+                    "type": "string",
+                    "description": "Website hostname or HTTP(S) URL; empty never matches a page."
+                }
+            },
+            "additionalProperties": false
         },
         "candidate": {
             "type": "object",
-            "required": ["item", "username", "password"],
+            "required": [
+                "item",
+                "username",
+                "password"
+            ],
             "properties": {
-                "item": { "$ref": "#/$defs/item" },
-                "username": { "type": "string" },
-                "password": { "type": "string" }
+                "item": {
+                    "$ref": "#/$defs/item"
+                },
+                "username": {
+                    "type": "string"
+                },
+                "password": {
+                    "type": "string"
+                }
             }
+        },
+        "sessionItem": {
+            "type": "object",
+            "required": [
+                "id",
+                "title",
+                "fields",
+                "host"
+            ],
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "symbol": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "fields": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/fieldLite"
+                    }
+                },
+                "host": {
+                    "type": "string",
+                    "description": "Website hostname or HTTP(S) URL; empty never matches a page."
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "object",
+                    "properties": {
+                        "xml": {
+                            "type": "string"
+                        },
+                        "revision": {
+                            "type": "integer",
+                            "minimum": 1
+                        }
+                    },
+                    "required": [
+                        "xml",
+                        "revision"
+                    ],
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false,
+            "description": "Trusted popup/background only; original XML must never be sent to content scripts."
+        },
+        "encryptedSessionRow": {
+            "type": "object",
+            "required": [
+                "uuid",
+                "kind",
+                "revision",
+                "bodyB64",
+                "modifiedMs"
+            ],
+            "properties": {
+                "uuid": {
+                    "type": "string"
+                },
+                "kind": {
+                    "enum": [1, 2]
+                },
+                "revision": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "bodyB64": {
+                    "type": "string"
+                },
+                "modifiedMs": {
+                    "type": "number"
+                }
+            },
+            "additionalProperties": false
+        },
+        "sessionFragment": {
+            "type": "object",
+            "required": [
+                "uuid",
+                "xml",
+                "kind",
+                "revision",
+                "modifiedMs"
+            ],
+            "properties": {
+                "uuid": {
+                    "type": "string"
+                },
+                "xml": {
+                    "type": "string"
+                },
+                "kind": {
+                    "enum": [1, 2]
+                },
+                "revision": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "modifiedMs": {
+                    "type": "number"
+                }
+            },
+            "additionalProperties": false,
+            "description": "Plaintext XML returned only in response to a decrypt request from the trusted popup. Background must enforce popup-only sender validation; JSON Schema cannot verify sender identity or correlate a response with its request. Never includes the vault key."
         }
     },
     "oneOf": [
         {
             "title": "Request",
             "type": "object",
-            "required": ["type"],
+            "required": [
+                "type"
+            ],
             "oneOf": [
                 {
                     "properties": {
-                        "type": { "const": "ping" }
+                        "type": {
+                            "const": "ping"
+                        }
                     },
                     "additionalProperties": false
                 },
                 {
                     "properties": {
-                        "type": { "const": "query" },
-                        "host": { "type": "string" }
+                        "type": {
+                            "const": "query"
+                        },
+                        "host": {
+                            "type": "string"
+                        }
                     },
-                    "required": ["host"],
+                    "required": [
+                        "host"
+                    ],
                     "additionalProperties": false
                 },
                 {
                     "properties": {
-                        "type": { "const": "fill" },
-                        "candidate": { "$ref": "#/$defs/candidate" }
+                        "type": {
+                            "const": "fill"
+                        },
+                        "candidate": {
+                            "$ref": "#/$defs/candidate"
+                        },
+                        "expectedOrigin": {
+                            "type": "string",
+                            "format": "uri"
+                        }
                     },
-                    "required": ["candidate"],
+                    "required": [
+                        "candidate",
+                        "expectedOrigin"
+                    ],
                     "additionalProperties": false
                 },
                 {
                     "properties": {
-                        "type": { "const": "unlock" },
-                        "password": { "type": "string" }
+                        "type": {
+                            "const": "unlock"
+                        },
+                        "password": {
+                            "type": "string"
+                        }
                     },
-                    "required": ["password"],
+                    "required": [
+                        "password"
+                    ],
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": {
+                            "const": "location"
+                        },
+                        "href": {
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "href"
+                    ],
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": {
+                            "const": "active-location"
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": {
+                            "const": "vault-session"
+                        },
+                        "action": {
+                            "enum": [
+                                "read",
+                                "begin",
+                                "commit",
+                                "touch",
+                                "replace",
+                                "lock",
+                                "decrypt",
+                                "refresh"
+                            ]
+                        },
+                        "context": {
+                            "type": "object",
+                            "properties": {
+                                "vaultId": {
+                                    "type": "string"
+                                },
+                                "token": {
+                                    "type": "string"
+                                },
+                                "userId": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "vaultId",
+                                "token"
+                            ],
+                            "additionalProperties": false
+                        },
+                        "generation": {
+                            "type": "string"
+                        },
+                        "items": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/$defs/sessionItem"
+                            }
+                        },
+                        "item": {
+                            "$ref": "#/$defs/sessionItem"
+                        },
+                        "vaultKey": {
+                            "type": "array",
+                            "items": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 255
+                            },
+                            "minItems": 32,
+                            "maxItems": 32
+                        },
+                        "passwordVersion": {
+                            "type": "integer",
+                            "minimum": 1
+                        },
+                        "expectedSnapshotVersion": {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        "snapshotVersion": {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        "rows": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/$defs/encryptedSessionRow"
+                            }
+                        }
+                    },
+                    "required": [
+                        "action"
+                    ],
+                    "allOf": [
+                        {
+                            "if": {
+                                "properties": {
+                                    "action": {
+                                        "const": "commit"
+                                    }
+                                }
+                            },
+                            "then": {
+                                "required": [
+                                    "vaultKey",
+                                    "passwordVersion",
+                                    "snapshotVersion"
+                                ]
+                            }
+                        },
+                        {
+                            "if": {
+                                "properties": {
+                                    "action": {
+                                        "const": "decrypt"
+                                    }
+                                }
+                            },
+                            "then": {
+                                "required": [
+                                    "rows"
+                                ]
+                            }
+                        },
+                        {
+                            "if": {
+                                "properties": {
+                                    "action": {
+                                        "const": "refresh"
+                                    }
+                                }
+                            },
+                            "then": {
+                                "required": [
+                                    "expectedSnapshotVersion",
+                                    "snapshotVersion",
+                                    "passwordVersion",
+                                    "items"
+                                ]
+                            }
+                        }
+                    ],
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": {
+                            "const": "site-hint"
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": {
+                            "const": "open-vault"
+                        }
+                    },
                     "additionalProperties": false
                 }
             ]
@@ -76,58 +432,198 @@
         {
             "title": "Response",
             "type": "object",
-            "required": ["type"],
+            "required": [
+                "type"
+            ],
             "oneOf": [
                 {
                     "properties": {
-                        "type": { "const": "pong" }
+                        "type": {
+                            "const": "pong"
+                        }
                     },
                     "additionalProperties": false
                 },
                 {
                     "properties": {
-                        "type": { "const": "items" },
-                        "candidates": { "type": "array", "items": { "$ref": "#/$defs/candidate" } }
+                        "type": {
+                            "const": "active-location"
+                        },
+                        "href": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        }
                     },
-                    "required": ["candidates"],
+                    "required": [
+                        "href"
+                    ],
                     "additionalProperties": false
                 },
                 {
                     "properties": {
-                        "type": { "const": "filled" },
-                        "ok": { "type": "boolean" }
+                        "type": {
+                            "const": "items"
+                        },
+                        "candidates": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/$defs/candidate"
+                            }
+                        }
                     },
-                    "required": ["ok"],
+                    "required": [
+                        "candidates"
+                    ],
                     "additionalProperties": false
                 },
                 {
                     "properties": {
-                        "type": { "const": "unlocked" },
-                        "ok": { "type": "boolean" },
-                        "count": { "type": "integer" },
-                        "reason": { "enum": ["notV2", "noEnvelope", "badPassword"] }
+                        "type": {
+                            "const": "filled"
+                        },
+                        "ok": {
+                            "type": "boolean"
+                        }
                     },
-                    "required": ["ok"],
+                    "required": [
+                        "ok"
+                    ],
                     "additionalProperties": false
                 },
                 {
                     "properties": {
-                        "type": { "const": "noVault" }
+                        "type": {
+                            "const": "unlocked"
+                        },
+                        "ok": {
+                            "type": "boolean"
+                        },
+                        "count": {
+                            "type": "integer"
+                        },
+                        "reason": {
+                            "enum": [
+                                "notV2",
+                                "noEnvelope",
+                                "badPassword"
+                            ]
+                        }
+                    },
+                    "required": [
+                        "ok"
+                    ],
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": {
+                            "const": "noVault"
+                        }
                     },
                     "additionalProperties": false
                 },
                 {
                     "properties": {
-                        "type": { "const": "locked" }
+                        "type": {
+                            "const": "locked"
+                        }
                     },
                     "additionalProperties": false
                 },
                 {
                     "properties": {
-                        "type": { "const": "error" },
-                        "message": { "type": "string" }
+                        "type": {
+                            "const": "error"
+                        },
+                        "message": {
+                            "type": "string"
+                        }
                     },
-                    "required": ["message"],
+                    "required": [
+                        "message"
+                    ],
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": {
+                            "const": "vault-session"
+                        },
+                        "unlocked": {
+                            "type": "boolean"
+                        },
+                        "items": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/$defs/sessionItem"
+                            }
+                        },
+                        "generation": {
+                            "type": "string"
+                        },
+                        "expiresAt": {
+                            "type": "number"
+                        },
+                        "persistent": {
+                            "type": "boolean"
+                        },
+                        "fragments": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/$defs/sessionFragment"
+                            },
+                            "description": "Plaintext fragments are permitted only for decrypt responses delivered to the trusted popup; never forward them to content scripts."
+                        },
+                        "snapshotVersion": {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        "passwordVersion": {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        "code": {
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "unlocked"
+                    ],
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": {
+                            "const": "site-hint"
+                        },
+                        "count": {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        "unlocked": {
+                            "type": "boolean"
+                        }
+                    },
+                    "required": [
+                        "count",
+                        "unlocked"
+                    ],
+                    "additionalProperties": false
+                },
+                {
+                    "properties": {
+                        "type": {
+                            "const": "vault-opened"
+                        },
+                        "ok": {
+                            "type": "boolean"
+                        }
+                    },
+                    "required": [
+                        "ok"
+                    ],
                     "additionalProperties": false
                 }
             ]

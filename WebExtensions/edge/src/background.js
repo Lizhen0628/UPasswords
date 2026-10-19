@@ -1,26 +1,31 @@
-// Chrome/Edge MV3 service worker: answers host queries from the popup using the
-// shared domain core (promise-wrapped chrome.* adapter shape).
-import { canonicalizeHost, credentialsOf, hostMatches, loadItems, clearItems, purgeIfStale } from "./shared/index.js";
+// Chrome/Edge MV3 service worker: owns the unlock session and count-only site hints.
+import { canonicalizeHost, installSessionBackground, installSiteHints } from "./shared/index.js";
 
-// query 返回含明文密码的候选,只服务扩展自身页面(popup);
-// content script 上下文与任何外部来源一律拒绝
-const ownOrigin = chrome.runtime.getURL("");
-const isOwnPage = (sender) => typeof sender.url === "string" && sender.url.startsWith(ownOrigin);
+// Session contents remain popup-only; pages receive safe counts through site hints.
+const session = installSessionBackground(chrome);
+installSiteHints(chrome, session);
+
+// 页面地址登记表:content script 在自身上下文可读 location(零权限),
+// popup 在 activeTab 拿不到 tab.url 时向这里回落取当前页地址
+const pageLocations = new Map();
+chrome.tabs.onRemoved.addListener((tabId) => { pageLocations.delete(tabId); });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message && message.type === "query") {
-        if (!isOwnPage(sender)) {
-            sendResponse({ type: "error", message: "forbidden sender" });
-            return false;
+    if (message && message.type === "location") {
+        if (sender.tab?.id != null) {
+            pageLocations.set(sender.tab.id, typeof message.href === "string" ? message.href : "");
         }
-        loadItems()
-            .then((items) => {
-                const candidates = items
-                    .filter((item) => hostMatches(message.host, item.host))
-                    .map((item) => ({ item, ...credentialsOf(item) }));
-                sendResponse({ type: "items", candidates });
-            })
-            .catch(() => sendResponse({ type: "error", message: "query failed" }));
+        return false;
+    }
+    if (message && message.type === "active-location") {
+        (async () => {
+            let href = null;
+            try {
+                const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                href = tab?.url ?? pageLocations.get(tab?.id) ?? null;
+            } catch { href = null; }
+            sendResponse({ type: "active-location", href });
+        })();
         return true;
     }
     if (message && message.type === "ping") {
@@ -28,14 +33,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     return false;
 });
-
-// 浏览器启动/扩展安装更新即视为锁定:清掉上次会话遗留的明文条目
-chrome.runtime.onStartup.addListener(() => { void clearItems(); });
-chrome.runtime.onInstalled.addListener(() => { void clearItems(); });
-
-// 周期闹钟主动擦除过期明文(不等下次读取;MV3 SW 挂起期间明文会静态驻留)
-chrome.alarms.create("upw-purge", { periodInMinutes: 1 });
-chrome.alarms.onAlarm.addListener(() => { void purgeIfStale(); });
 
 // 启动诊断:打印当前标签页的规范化 host,不携带任何凭据
 chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {

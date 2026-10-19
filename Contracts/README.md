@@ -13,10 +13,7 @@
 
 - 明文为 XML（见 schema），外层为 `DatabaseCipher` 加密容器：magic 头 + 随机盐 +
   PBKDF2 派生密钥 + AES-GCM；容器格式细节以 `SwiftPackages/Core/DatabaseCipher.swift` 为准。
-- **v2 信封加密（双密钥）**：数据库本体（`UPWDB2` magic）由随机生成的「库密钥」
-  （vault key, 256 位, 永不变）加密；主密码只加密 ~100 字节的信封文件
-  （`<名>.upwkey`, `UPWKEY1` magic, PBKDF2 派生密钥包裹库密钥 + 改密时间戳）。
-  改主密码只重写并同步信封，本体不动——改密传播零重写、无竞态窗口。
+- **v2 信封加密（双密钥）**：数据库本体（`UPWDB2` magic）由随机生成的库密钥（VEK，256 位）加密；主密码通过信封（`<名>.upwkey`，`UPWKEY1` magic）保护 VEK。改主密码会轮换 VEK、重加密数据库本体并更新信封；云同步提交将本体密文、信封与同步状态作为一致事务处理。改密后旧备份仍需对应的旧密码解密。
   v2 为唯一受支持的容器格式（v1 已下线，旧库需先用旧版应用打开迁移）。
 - 时间戳一律为 Unix epoch **毫秒**。
 - 条目标识 `id` 为 **UUID v4 字符串**（v7 行级同步的条目身份，客户端生成，
@@ -30,6 +27,13 @@
 
 ## 扩展消息
 
-扩展不接触主密钥：原生 App 按来源 host 过滤后，把可填充条目推给扩展
-（字段值仅在填充瞬间存在于内存）。消息形状见 `extension-message.schema.json`，
-TypeScript 定义见 `WebExtensions/shared/src/messaging/protocol.ts`。
+扩展按本地优先模型工作：IndexedDB 仅保存逐条密文、信封与同步游标，并通过事务原子提交密文数据和游标；不得在 `storage.local` 或 IndexedDB 保存明文或 VEK。解锁期间的 VEK 仅保留于扩展可信的 `storage.session` 或后台进程内存；锁定、会话退出或清理会删除该密钥。账户云端授权与本地解锁相互独立：授权过期时仍可用本地信封与主密码解锁，但同步需重新登录；退出登录清除账户缓存与授权状态，不应因此把本地密文库当作已解锁。
+
+`vault-session` 消息仅接受来自自身弹窗的请求。后台须验证发送者、账户/库绑定、期限和版本，并限制明文 `fragments` 只由 `decrypt` 请求返回给可信 popup；不得将明文 fragment 转发至网页或 content script。`vaultKey` 仅可出现在受信任的请求，不得出现在任何响应。JSON Schema 描述消息形状，不能代替运行时的 sender 与请求/响应动作校验。`context.userId` 可选。
+
+会话 actions 包含 `decrypt` 和 `refresh`。`commit` 必须包含 32 个 0…255 字节的 `vaultKey` 与正整数 `passwordVersion`；当前协议的 `snapshotVersion` 也要求提供且为非负整数，客户端为兼容旧调用可在迁移期间省略该字段。`decrypt` 携带密文行 `rows`，每行含 `uuid`、`kind`（1 或 2）、正整数 `revision`、`bodyB64` 和 `modifiedMs`；`refresh` 携带 `expectedSnapshotVersion`、`snapshotVersion`、`passwordVersion` 及既有形状的 `items`。`replace` 可携带 `expectedSnapshotVersion` 与 `snapshotVersion` 做版本对齐。响应可包含 `fragments`、`snapshotVersion`、`passwordVersion` 及 `code`；失败时允许 `unlocked: false` 同时返回 `code`。这里的 `code` 是 vault-session 业务错误标识，不影响通用 `{type: "error", message}` 响应。只有解密响应可含明文 fragment，fragment 结构见 schema。
+
+明文 XML 与服务端 revision 只在可信 popup 解密和处理，用于保留未知数据与执行联网 CAS 编辑。编辑继续要求重新认证且联网，版本冲突时拒绝覆盖。手动同步不再要求重复输入主密码。首次全量同步，以及 `cursorExpired` 或 rekey 后重建快照，是需要全量处理的例外；同步将密文、信封与游标按本地事务一致更新。
+
+`site-hint` 由后台按发送页和当前页的同源校验计算，仅返回匹配数量与解锁状态；`open-vault` 请求打开插件弹窗，不自动填充。只有显式选择、匹配当前网站的条目才可填充，填充负载排除原始 XML、笔记与无关字段，内容脚本还校验自身插件弹窗来源及 `expectedOrigin`。
+消息形状见 `extension-message.schema.json`，TypeScript 定义见 `WebExtensions/shared/src/messaging/protocol.ts`。

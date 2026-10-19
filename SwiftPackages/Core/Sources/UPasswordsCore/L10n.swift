@@ -60,6 +60,24 @@ public enum L10n {
         return .module
     }()
 
+    /// 对外文案(验证码邮件等)用的生效语言:App 内语言覆盖优先,
+    /// 其次设备系统首选语言(仅简体体系命中),兜底英文。
+    /// - Returns: "zh-Hans" 或 "en"(与本地化目录一致)
+    public static var effectiveLanguage: String {
+        let override = (UserDefaults.standard.string(forKey: "app.language") ?? "").lowercased()
+        if !override.isEmpty {
+            return override.hasPrefix("zh") ? "zh-Hans" : "en"
+        }
+        let simplifiedPrefixes = ["zh-hans", "zh-cn", "zh-sg", "zh_"]
+        for pref in Locale.preferredLanguages {
+            let tag = pref.lowercased()
+            if tag == "zh" || simplifiedPrefixes.contains(where: { tag.hasPrefix($0) }) {
+                return "zh-Hans"
+            }
+        }
+        return "en"
+    }
+
     /// Localizable.strings lookup.
     public static func t(_ key: String) -> String {
         let v = activeBundle.localizedString(forKey: key, value: key, table: "Localizable")

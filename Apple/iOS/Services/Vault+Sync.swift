@@ -24,15 +24,27 @@ extension Vault {
 
     // MARK: 行级同步状态
 
-    /// RowSyncKey 形态的会话 VEK(无密钥返回 nil,同步前置检查兜底)。
-    private var rowSyncKey: RowSyncKey? {
-        vaultKey.map { RowSyncKey(raw: $0.withUnsafeBytes { Data($0) }) }
+    /// await 后验证库名、密钥与会话代次;旧任务不得写入新会话。
+    /// - Throws: 会话已改变或任务取消。
+    func validateSyncSession(name: String, key: SymmetricKey?, sessionID: UUID) throws {
+        try Task.checkCancellation()
+        guard syncSessionID == sessionID, databaseName == name, vaultKey == key else {
+            Log.warn("sync", "ios discarding stale sync result after session changed")
+            throw CancellationError()
+        }
     }
 
     /// 绑定新库时重置行同步状态:快照基线清空 → 下轮 sync 把全部条目当脏上行。
     func resetRowSyncForFreshBinding() {
-        rowSync = RowSyncState()
-        store.saveSyncState(rowSync, for: databaseName)
+        guard let vaultKey else { return }
+        do {
+            let state = RowSyncState()
+            try commitSyncSnapshot(database, name: databaseName, vaultKey: vaultKey, state: state)
+            rowSync = state
+            Log.info("sync", "ios fresh binding snapshot committed")
+        } catch {
+            Log.error("sync", "ios reset row sync state failed: \(error)")
+        }
     }
 
     // MARK: 接管远端
@@ -48,9 +60,14 @@ extension Vault {
     func adoptRemotePassword(_ newPassword: String) async -> AdoptResult {
         guard let binding = relay.binding(database: databaseName),
               let token = relay.token(database: databaseName) else { return .wrongPassword }
+        let name = databaseName
+        let originalKey = vaultKey
+        let sessionID = syncSessionID
+        Log.info("sync", "ios adopt remote password started")
         do {
-            guard let registryRecord = await relayRegistryRecord(),
-                  let envelope = registryRecord.envelope else {
+            let registryRecord = try await relayClient.getVault(token: token, vaultId: binding.vaultId)
+            try validateSyncSession(name: name, key: originalKey, sessionID: sessionID)
+            guard let envelope = registryRecord.envelope else {
                 Log.warn("sync", "ios adopt failed: registry record or envelope unavailable")
                 return .wrongPassword
             }
@@ -58,26 +75,32 @@ extension Vault {
                 Log.warn("sync", "ios adopt: envelope unwrap failed with given password")
                 return .wrongPassword
             }
-            vaultKey = remoteVEK
-            password = newPassword
-            try store.rewrap(name: databaseName, vaultKey: remoteVEK, newPassword: newPassword)
-            PasswordStore.savePassword(newPassword, databaseName: databaseName)
-            if PasswordStore.hasBiometricItem(databaseName: databaseName) {
-                PasswordStore.savePasswordForBiometric(newPassword, databaseName: databaseName)
-            }
-            var state = rowSync
+            var state = RowSyncState()
             let rebuilt = try await RowSync.fullRebuild(
                 client: relayClient, token: token, vaultId: binding.vaultId,
                 key: RowSyncKey(raw: remoteVEK.withUnsafeBytes { Data($0) }), state: &state)
+            try validateSyncSession(name: name, key: originalKey, sessionID: sessionID)
+            try commitSyncSnapshot(
+                rebuilt, name: name, vaultKey: remoteVEK, state: state, envelope: envelope)
             database = rebuilt
-            try store.save(rebuilt, name: databaseName, vaultKey: remoteVEK)
             rowSync = state
-            store.saveSyncState(state, for: databaseName)
+            vaultKey = remoteVEK
+            password = newPassword
+            syncSessionID = UUID()
+            PasswordStore.savePassword(newPassword, databaseName: name)
+            if PasswordStore.hasBiometricItem(databaseName: name) {
+                PasswordStore.savePasswordForBiometric(newPassword, databaseName: name)
+            }
+            relay.recordPasswordVersion(registryRecord.passwordVersion, database: name)
             syncRemoteUnreadable = false
             Log.info("sync", "ios adopted new password via envelope (rows rebuilt: \(rebuilt.cards.count) cards)")
             return .success
         } catch {
-            Log.warn("sync", "ios adopt remote password failed: \(error)")
+            Log.error("sync", "ios adopt remote password failed: \(error)")
+            if syncSessionID == sessionID {
+                syncState = .failed(error.localizedDescription)
+                showToast(error.localizedDescription)
+            }
             return .wrongPassword
         }
     }
@@ -89,23 +112,33 @@ extension Vault {
               let token = relay.token(database: databaseName),
               let key = vaultKey,
               let envelope = store.envelopeData(for: databaseName) else { return }
+        let name = databaseName
+        let sessionID = syncSessionID
+        let snapshot = database
         syncState = .syncing
+        Log.info("sync", "ios overwrite unreadable remote started")
         do {
             var state = rowSync
             try await RowSync.rekey(
                 client: relayClient, token: token, vaultId: binding.vaultId,
-                database: database, newKey: RowSyncKey(raw: key.withUnsafeBytes { Data($0) }),
+                database: snapshot, newKey: RowSyncKey(raw: key.withUnsafeBytes { Data($0) }),
                 newEnvelope: envelope, state: &state)
+            try validateSyncSession(name: name, key: key, sessionID: sessionID)
+            state.recomputeDirty(database: database)
+            try commitSyncSnapshot(database, name: name, vaultKey: key, state: state, envelope: envelope)
             rowSync = state
-            store.saveSyncState(state, for: databaseName)
             syncRemoteUnreadable = false
+            let finished = Date()
+            d.set(finished.timeIntervalSince1970, forKey: DefaultsKey.lastSync(database: name))
+            lastSync = finished
             syncState = .idle
-            Log.info("sync", "ios sync \"\(databaseName)\": overwrote unreadable remote (rows re-keyed)")
+            Log.info("sync", "ios sync \"\(name)\": overwrote unreadable remote (rows re-keyed)")
             showToast(L10n.t("last_sync_completed_prompt") + " "
                 + (lastSync?.formatted(date: .abbreviated, time: .shortened) ?? ""))
         } catch {
-            syncState = .failed(error.localizedDescription)
             Log.error("sync", "ios overwrite unreadable remote failed: \(error)")
+            guard syncSessionID == sessionID else { return }
+            syncState = .failed(error.localizedDescription)
             showToast("\(L10n.t("sync_error")): \(error.localizedDescription)")
         }
     }
@@ -114,25 +147,33 @@ extension Vault {
 
     /// rekey 全量换入(§6.5)。本端即改密端,成功后清游标全量对账,失败下轮自愈。
     func relayRekeyUpload(newKey: SymmetricKey, new newPassword: String) async {
-        guard let binding = relay.binding(database: databaseName),
+        guard !locked, vaultKey == newKey,
+              let binding = relay.binding(database: databaseName),
               let token = relay.token(database: databaseName) else { return }
+        let name = databaseName
+        let sessionID = syncSessionID
+        let snapshot = database
+        let knownVersion = relay.knownPasswordVersion(database: name) ?? 1
+        Log.info("sync", "ios rekey upload started")
         do {
-            guard let envelope = try? DatabaseCipher.wrapVaultKey(newKey, password: newPassword) else {
-                throw DatabaseCipher.CipherError(message: L10n.t("sync_error"))
-            }
-            try store.saveEnvelope(envelope, for: databaseName)
+            let envelope = try DatabaseCipher.wrapVaultKey(newKey, password: newPassword)
             var state = rowSync
             try await RowSync.rekey(
                 client: relayClient, token: token, vaultId: binding.vaultId,
-                database: database, newKey: RowSyncKey(raw: newKey.withUnsafeBytes { Data($0) }),
+                database: snapshot, newKey: RowSyncKey(raw: newKey.withUnsafeBytes { Data($0) }),
                 newEnvelope: envelope, state: &state)
+            try validateSyncSession(name: name, key: newKey, sessionID: sessionID)
+            state.recomputeDirty(database: database)
+            try commitSyncSnapshot(database, name: name, vaultKey: newKey,
+                                   state: state, envelope: envelope)
             rowSync = state
-            store.saveSyncState(state, for: databaseName)
-            relay.recordPasswordVersion(relay.knownPasswordVersion(database: databaseName).map { $0 + 1 } ?? 2,
-                                        database: databaseName)
-            Log.info("sync", "ios rekey uploaded for \"\(databaseName)\"")
+            relay.recordPasswordVersion(knownVersion + 1, database: name)
+            Log.info("sync", "ios rekey upload and local snapshot committed")
         } catch {
-            Log.warn("sync", "ios rekey upload deferred (will retry via next sync): \(error)")
+            Log.error("sync", "ios rekey upload or snapshot commit failed: \(error)")
+            guard syncSessionID == sessionID else { return }
+            syncState = .failed(error.localizedDescription)
+            showToast(error.localizedDescription)
         }
     }
 
@@ -190,7 +231,7 @@ extension Vault {
             if !auto { showToast(L10n.t("sync_in_progress_toast")) }
             return nil
         }
-        guard let key = rowSyncKey else {
+        guard let snapshotKey = vaultKey else {
             syncState = .failed(L10n.t("sync_error"))
             Log.error("sync", "ios sync aborted: no vault key in session")
             return nil
@@ -199,26 +240,27 @@ extension Vault {
         syncState = .syncing
         lastSyncAttempt = Date()
         defer { syncInFlight = false }
-        Log.info("sync", "ios sync \"\(databaseName)\" started (rows\(auto ? ", auto" : ""))")
-        persist()
+        let name = databaseName
+        let sessionID = syncSessionID
+        let snapshot = database
+        let key = RowSyncKey(raw: snapshotKey.withUnsafeBytes { Data($0) })
+        Log.info("sync", "ios sync \"\(name)\" started (rows\(auto ? ", auto" : ""))")
         do {
-            // 改密版本检查(信封唯一入口 = 建库/rekey,版本前进即他端改密)
-            if let record = await relayRegistryRecord() {
-                let known = relay.knownPasswordVersion(database: databaseName) ?? record.passwordVersion
-                if record.passwordVersion > known, let envelope = record.envelope {
-                    if (try? DatabaseCipher.unwrapVaultKey(envelope, password: password)) != nil {
-                        try? store.saveEnvelope(envelope, for: databaseName)
-                        Log.info("sync", "ios relay envelope adopted (password version advanced by this device)")
-                    } else {
-                        Log.warn("sync", "ios sync detected remote password change (version → \(record.passwordVersion))")
-                        forceLockForRemotePasswordChange(envelope)
-                        return nil
-                    }
+            let record = try await relayClient.getVault(token: token, vaultId: binding.vaultId)
+            try validateSyncSession(name: name, key: snapshotKey, sessionID: sessionID)
+            let known = relay.knownPasswordVersion(database: name) ?? record.passwordVersion
+            var adoptedEnvelope: Data?
+            if record.passwordVersion > known, let envelope = record.envelope {
+                if (try? DatabaseCipher.unwrapVaultKey(envelope, password: password)) == snapshotKey {
+                    adoptedEnvelope = envelope
+                } else {
+                    forceLockForRemotePasswordChange(envelope)
+                    return nil
                 }
             }
             var state = rowSync
-            state.recomputeDirty(database: database)
-            var db = database
+            state.recomputeDirty(database: snapshot)
+            var db = snapshot
             var outcome = RowSyncOutcome()
             do {
                 let pulled = try await RowSync.pull(
@@ -226,6 +268,7 @@ extension Vault {
                     key: key, database: &db, state: &state)
                 outcome.pulledItems = pulled.pulledItems
             } catch RelayClient.RelayError.cursorExpired {
+                try validateSyncSession(name: name, key: snapshotKey, sessionID: sessionID)
                 // 游标落后越过保留地板:全量重建(快照+差量)
                 Log.warn("sync", "ios cursor expired — full rebuild")
                 db = try await RowSync.fullRebuild(
@@ -235,21 +278,29 @@ extension Vault {
             } catch let signal as RowSyncRekeySignal {
                 // 对端 rekey:旧 VEK 解不开新密文,强制锁定接管
                 Log.warn("sync", "ios peer rekey detected (version → \(signal.passwordVersion)) — force locking")
-                if let record = await relayRegistryRecord(), let envelope = record.envelope {
-                    forceLockForRemotePasswordChange(envelope)
-                }
-                syncState = .idle
+                try validateSyncSession(name: name, key: snapshotKey, sessionID: sessionID)
+                let record = try await relayClient.getVault(token: token, vaultId: binding.vaultId)
+                try validateSyncSession(name: name, key: snapshotKey, sessionID: sessionID)
+                guard let envelope = record.envelope else { throw SyncError.notConfigured }
+                forceLockForRemotePasswordChange(envelope)
                 return nil
             }
+            try validateSyncSession(name: name, key: snapshotKey, sessionID: sessionID)
             let pushed = try await RowSync.push(
                 client: relayClient, token: token, vaultId: binding.vaultId,
                 key: key, database: &db, state: &state)
             outcome.pushedItems = pushed.pushedItems
             outcome.conflictsResolved = pushed.conflictsResolved
+            try validateSyncSession(name: name, key: snapshotKey, sessionID: sessionID)
+            guard database == snapshot else {
+                Log.warn("sync", "ios sync snapshot discarded: local edits arrived during await")
+                throw DatabaseCipher.CipherError(message: L10n.t("sync_error"))
+            }
+            try commitSyncSnapshot(db, name: name, vaultKey: snapshotKey,
+                                   state: state, envelope: adoptedEnvelope)
             database = db
             rowSync = state
-            store.saveSyncState(state, for: databaseName)
-            persist()
+            relay.recordPasswordVersion(record.passwordVersion, database: name)
             syncRemoteUnreadable = false
             let finished = Date()
             d.set(finished.timeIntervalSince1970, forKey: DefaultsKey.lastSync(database: databaseName))
@@ -266,9 +317,11 @@ extension Vault {
             }
             return outcome
         } catch RelayClient.RelayError.unauthorized {
-            // 令牌过期/被撤销:清绑定转登录态,详见 Vault+Relay.handleSessionExpired
+            guard syncSessionID == sessionID, databaseName == name else { return nil }
             handleSessionExpired()
         } catch {
+            Log.error("sync", "ios row sync did not commit: \(error)")
+            guard syncSessionID == sessionID, databaseName == name else { return nil }
             // 调用任务被取消(下拉刷新中断/切页):静默收场,不作为失败上报
             if Task.isCancelled {
                 syncState = .idle

@@ -46,7 +46,7 @@ extension Vault {
     @discardableResult
     func relaySendCode(email: String) async -> Int {
         do {
-            try await relayClient.requestCode(email: email)
+            try await relayClient.requestCode(email: email, lang: L10n.effectiveLanguage)
             Log.info("sync", "ios relay code requested (email length \(email.count))")
             showToast(L10n.t("relay_code_sent_toast"))
             return 60
@@ -262,7 +262,7 @@ extension Vault {
     /// 向指定邮箱发送敏感操作验证码(换绑邮箱:码发往**新**邮箱)。
     func relaySendSensitiveCode(to email: String) async {
         do {
-            try await relayClient.requestCode(email: email, purpose: .sensitive)
+            try await relayClient.requestCode(email: email, purpose: .sensitive, lang: L10n.effectiveLanguage)
             Log.info("sync", "ios relay sensitive code sent (email length \(email.count))")
             showToast(L10n.t("relay_sensitive_code_sent"))
         } catch {
@@ -366,15 +366,19 @@ extension Vault {
     }
 
     /// 解锁后异步检查注册表密码版本:版本前进且会话密码解不开远端新信封 →
-    /// 他机改密,本机强制锁定并换入新信封,用户须以新密码解锁
+    /// 他机改密,本机强制锁定，待新密码验证后重建并提交配套文件
     /// (本机即改密端时会话密码可解新信封,仅追平本地副本,不锁)。
     func checkRelayPasswordVersion() async {
-        guard !locked, let binding = relay.binding(database: databaseName),
+        guard !locked, let key = vaultKey,
+              let binding = relay.binding(database: databaseName),
               let token = relay.token(database: databaseName) else { return }
+        let name = databaseName
+        let sessionID = syncSessionID
         let record: RelayClient.VaultRecord?
         do {
             record = try await relayClient.getVault(token: token, vaultId: binding.vaultId)
         } catch RelayClient.RelayError.unauthorized {
+            guard syncSessionID == sessionID, databaseName == name else { return }
             handleSessionExpired()
             return
         } catch {
@@ -383,29 +387,39 @@ extension Vault {
             return
         }
         guard let record else { return }
-        let known = relay.knownPasswordVersion(database: databaseName) ?? record.passwordVersion
-        relay.recordPasswordVersion(record.passwordVersion, database: databaseName)
-        guard record.passwordVersion > known, let envelope = record.envelope else { return }
-        Log.info("sync", "ios relay password version advanced \(known) → \(record.passwordVersion)")
-        if (try? DatabaseCipher.unwrapVaultKey(envelope, password: password)) != nil {
-            // 本机即改密端:本地信封已是新值,换入等价副本即可
-            try? store.saveEnvelope(envelope, for: databaseName)
-            return
+        do {
+            try validateSyncSession(name: name, key: key, sessionID: sessionID)
+            let known = relay.knownPasswordVersion(database: name) ?? record.passwordVersion
+            guard record.passwordVersion > known else {
+                relay.recordPasswordVersion(record.passwordVersion, database: name)
+                return
+            }
+            guard let envelope = record.envelope else { throw SyncError.notConfigured }
+            Log.info("sync", "ios relay password version advanced \(known) → \(record.passwordVersion)")
+            if (try? DatabaseCipher.unwrapVaultKey(envelope, password: password)) == key {
+                try commitSyncSnapshot(database, name: name, vaultKey: key,
+                                       state: rowSync, envelope: envelope)
+                relay.recordPasswordVersion(record.passwordVersion, database: name)
+                return
+            }
+            forceLockForRemotePasswordChange(envelope)
+        } catch {
+            Log.error("sync", "ios password-version adoption failed: \(error)")
+            guard syncSessionID == sessionID else { return }
+            syncState = .failed(error.localizedDescription)
+            showToast(error.localizedDescription)
         }
-        forceLockForRemotePasswordChange(envelope)
     }
 
-    /// 他机改密后的强制锁定:先落盘未保存修改,换入新信封(新密码可解锁),
-    /// 清除钥匙串旧密码副本(防预填/生物识别误导),锁屏等待新密码。
-    /// 换信封失败不锁定——旧密码仍可解锁本地,退回原接管提示路径。
+    /// 他机改密后保存配套的本地快照并锁定;远端新信封只能随新钥库体一起提交。
+    /// - Parameter envelope: 用于确认远端改密的有效信封，不替换本地旧钥信封。
     func forceLockForRemotePasswordChange(_ envelope: Data) {
-        persist()
+        guard let vaultKey, DatabaseCipher.envelopeChangedAt(envelope) != nil else { return }
         do {
-            try store.saveEnvelope(envelope, for: databaseName)
+            try commitSyncSnapshot(database, name: databaseName, vaultKey: vaultKey, state: rowSync)
         } catch {
-            Log.error("sync", "ios force-lock envelope swap failed: \(error)")
+            Log.error("sync", "ios force-lock local snapshot commit failed: \(error)")
             syncRemoteUnreadable = true
-            Log.warn("sync", "ios remote envelope unreadable — adopt prompt")
             return
         }
         PasswordStore.removePassword(databaseName: databaseName)

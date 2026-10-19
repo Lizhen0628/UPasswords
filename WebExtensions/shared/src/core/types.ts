@@ -44,12 +44,22 @@ export interface ExtensionItem {
     title: string;
     symbol: string | null;
     fields: ExtensionField[];
-    /** Canonical site this item belongs to (empty = any origin). */
+    /** Website hostname or HTTP(S) URL; empty never matches a page. */
     host: string;
+    /** Original decrypted fragment and CAS revision, kept only in the unlocked session; never send for filling. */
+    source?: { xml: string; revision: number };
+    /** Plain-text/Markdown notes for an in-memory detail view. */
+    notes?: string;
 }
 
+/** Source XML and detail notes are forbidden even when assigning a structurally compatible session item. */
+export type FillItem = Omit<ExtensionItem, "source" | "notes"> & {
+    source?: never;
+    notes?: never;
+};
+
 export interface FillCandidate {
-    item: ExtensionItem;
+    item: FillItem;
     username: string;
     password: string;
 }

@@ -24,6 +24,9 @@ public final class DatabaseStore {
 
     public let root: URL
     private let fm = FileManager.default
+    // 同一进程的多个 Store 实例也必须串行访问事务组件。
+    private static let syncTransactionLock = NSRecursiveLock()
+    var transactionFaultInjector: ((String) throws -> Void)?
 
     public init(root: URL? = nil) {
         if let root {
@@ -73,19 +76,159 @@ public final class DatabaseStore {
     /// v7 行级同步游标 sidecar 路径(<名>.upwsync;纯元数据,无敏感值)。
     public func syncStateURL(for name: String) -> URL { databasesDir.appendingPathComponent("\(name).upwsync") }
 
-    /// 读行级同步状态;无文件/损坏返回全新状态(全量对账自愈)。
-    public func loadSyncState(for name: String) -> RowSyncState {
-        guard let data = try? Data(contentsOf: syncStateURL(for: name)),
-              let state = try? JSONDecoder().decode(RowSyncState.self, from: data) else {
-            return RowSyncState()
+    private func syncTransactionURL(for name: String) -> URL {
+        databasesDir.appendingPathComponent("\(name).upwsync-transaction.json")
+    }
+
+    private struct SyncTransaction: Codable {
+        let id: UUID
+        let includesEnvelope: Bool
+        let bodyDigest: Data
+        let stateDigest: Data
+        let envelopeDigest: Data?
+    }
+
+    private func transactionStageURL(name: String, id: UUID, suffix: String) -> URL {
+        databasesDir.appendingPathComponent(".\(name).\(id.uuidString).\(suffix).stage")
+    }
+
+    /// 完成上次中断的同步提交，再允许读取任一组件。
+    /// - Parameter name: 本地数据库名。
+    /// - Throws: 事务清单或暂存文件损坏、缺失，或恢复写入失败。
+    public func recoverSyncTransaction(for name: String) throws {
+        Self.syncTransactionLock.lock()
+        defer { Self.syncTransactionLock.unlock() }
+        let transactionURL = syncTransactionURL(for: name)
+        guard fm.fileExists(atPath: transactionURL.path) else { return }
+        let transaction: SyncTransaction
+        do {
+            transaction = try JSONDecoder().decode(SyncTransaction.self, from: Data(contentsOf: transactionURL))
+        } catch {
+            Log.error("sync", "transaction journal for \"\(name)\" is unreadable: \(error)")
+            throw StoreError(L10n.t("sync_error"))
+        }
+        let bodyStage = transactionStageURL(name: name, id: transaction.id, suffix: "upw")
+        let stateStage = transactionStageURL(name: name, id: transaction.id, suffix: "upwsync")
+        let envelopeStage = transactionStageURL(name: name, id: transaction.id, suffix: "upwkey")
+        do {
+            guard fm.fileExists(atPath: bodyStage.path), fm.fileExists(atPath: stateStage.path),
+                  !transaction.includesEnvelope || fm.fileExists(atPath: envelopeStage.path) else {
+                throw StoreError(L10n.t("sync_error"))
+            }
+            let body = try Data(contentsOf: bodyStage)
+            let stateData = try Data(contentsOf: stateStage)
+            guard DatabaseCipher.isV2Container(body),
+                  Data(SHA256.hash(data: body)) == transaction.bodyDigest,
+                  Data(SHA256.hash(data: stateData)) == transaction.stateDigest,
+                  (try? JSONDecoder().decode(RowSyncState.self, from: stateData)) != nil else {
+                throw StoreError(L10n.t("sync_error"))
+            }
+            if transaction.includesEnvelope {
+                let envelope = try Data(contentsOf: envelopeStage)
+                guard DatabaseCipher.envelopeChangedAt(envelope) != nil,
+                      Data(SHA256.hash(data: envelope)) == transaction.envelopeDigest else {
+                    throw StoreError(L10n.t("sync_error"))
+                }
+            }
+            try body.write(to: url(for: name), options: .atomic)
+            try transactionFaultInjector?("body")
+            try stateData.write(to: syncStateURL(for: name), options: .atomic)
+            try transactionFaultInjector?("state")
+            if transaction.includesEnvelope {
+                let envelope = try Data(contentsOf: envelopeStage)
+                try envelope.write(to: keyURL(for: name), options: .atomic)
+                try transactionFaultInjector?("envelope")
+            }
+            try fm.removeItem(at: transactionURL)
+            try? fm.removeItem(at: bodyStage)
+            try? fm.removeItem(at: stateStage)
+            try? fm.removeItem(at: envelopeStage)
+            Log.info("sync", "recovered interrupted snapshot commit for \"\(name)\"")
+        } catch {
+            Log.error("sync", "transaction recovery for \"\(name)\" failed: \(error)")
+            throw error
+        }
+    }
+
+    /// 本体、信封和同步游标在一个恢复事务内提交。
+    /// - Parameters:
+    ///   - database: 与同步状态配套的数据库快照。
+    ///   - name: 本地数据库名。
+    ///   - vaultKey: 加密快照的库密钥。
+    ///   - state: 此快照的同步游标、修订及脏集合。
+    ///   - envelope: 更换库密钥或全量恢复时的配套信封。
+    /// - Throws: 加密或写入失败。事务标记写入后仅向前恢复，调用者必须失效旧会话。
+    public func commitSyncSnapshot(
+        _ database: PasswordDatabase,
+        name: String,
+        vaultKey: SymmetricKey,
+        state: RowSyncState,
+        envelope: Data? = nil
+    ) throws {
+        Self.syncTransactionLock.lock()
+        defer { Self.syncTransactionLock.unlock() }
+        try recoverSyncTransaction(for: name)
+        let body = try DatabaseCipher.encryptBody(database.xmlData(), vaultKey: vaultKey)
+        let stateData = try JSONEncoder().encode(state)
+        if let envelope, DatabaseCipher.envelopeChangedAt(envelope) == nil {
+            throw DatabaseCipher.CipherError(message: L10n.t("envelope_missing_error"))
+        }
+        let transaction = SyncTransaction(
+            id: UUID(),
+            includesEnvelope: envelope != nil,
+            bodyDigest: Data(SHA256.hash(data: body)),
+            stateDigest: Data(SHA256.hash(data: stateData)),
+            envelopeDigest: envelope.map { Data(SHA256.hash(data: $0)) }
+        )
+        let bodyStage = transactionStageURL(name: name, id: transaction.id, suffix: "upw")
+        let stateStage = transactionStageURL(name: name, id: transaction.id, suffix: "upwsync")
+        let envelopeStage = transactionStageURL(name: name, id: transaction.id, suffix: "upwkey")
+        let transactionURL = syncTransactionURL(for: name)
+        do {
+            try body.write(to: bodyStage, options: .atomic)
+            try transactionFaultInjector?("stageBody")
+            try stateData.write(to: stateStage, options: .atomic)
+            try transactionFaultInjector?("stageState")
+            if let envelope {
+                try envelope.write(to: envelopeStage, options: .atomic)
+                try transactionFaultInjector?("stageEnvelope")
+            }
+            try JSONEncoder().encode(transaction).write(to: transactionURL, options: .atomic)
+        } catch {
+            if !fm.fileExists(atPath: transactionURL.path) {
+                try? fm.removeItem(at: bodyStage)
+                try? fm.removeItem(at: stateStage)
+                try? fm.removeItem(at: envelopeStage)
+            }
+            Log.error("sync", "snapshot staging for \"\(name)\" failed: \(error)")
+            throw error
+        }
+        try transactionFaultInjector?("journal")
+        try recoverSyncTransaction(for: name)
+        Log.info("sync", "snapshot and sync state committed for \"\(name)\" (cursor=\(state.cursor))")
+    }
+
+    /// 读行级同步状态;事务损坏时抛错以避免以空状态覆盖同步基线。
+    public func loadSyncState(for name: String) throws -> RowSyncState {
+        Self.syncTransactionLock.lock()
+        defer { Self.syncTransactionLock.unlock() }
+        try recoverSyncTransactionIfPresent(for: name)
+        let stateURL = syncStateURL(for: name)
+        guard fm.fileExists(atPath: stateURL.path) else { return RowSyncState() }
+        let data = try Data(contentsOf: stateURL)
+        guard let state = try? JSONDecoder().decode(RowSyncState.self, from: data) else {
+            throw StoreError(L10n.t("sync_error"))
         }
         return state
     }
 
     /// 落盘行级同步状态(游标/revision 映射/脏集合/快照基线)。
-    public func saveSyncState(_ state: RowSyncState, for name: String) {
-        guard let data = try? JSONEncoder().encode(state) else { return }
-        try? data.write(to: syncStateURL(for: name), options: .atomic)
+    public func saveSyncState(_ state: RowSyncState, for name: String) throws {
+        Self.syncTransactionLock.lock()
+        defer { Self.syncTransactionLock.unlock() }
+        try recoverSyncTransaction(for: name)
+        let data = try JSONEncoder().encode(state)
+        try data.write(to: syncStateURL(for: name), options: .atomic)
     }
 
     public var mainDatabaseName: String {
@@ -119,7 +262,10 @@ public final class DatabaseStore {
 
     @discardableResult
     public func create(name: String, password: String, now: Date = Date()) throws -> DatabaseFile {
+        Self.syncTransactionLock.lock()
+        defer { Self.syncTransactionLock.unlock() }
         try validateName(name)
+        try recoverSyncTransaction(for: name)
         guard !exists(name) else { throw StoreError(L10n.t("database_already_exists_error")) }
         // 首库判定须在写入前取:写完后 list() 必然已含本库
         let isFirstDatabase = list().isEmpty
@@ -144,11 +290,19 @@ public final class DatabaseStore {
         return DatabaseFile(name: name, fileName: "\(name).upw", created: now, isMain: isFirstDatabase)
     }
 
+    private func recoverSyncTransactionIfPresent(for name: String) throws {
+        guard fm.fileExists(atPath: syncTransactionURL(for: name).path) else { return }
+        try recoverSyncTransaction(for: name)
+    }
+
     /// 解锁加载:v2 容器用主密码解信封拿到库密钥再解本体。
     /// - Returns: 数据库与库密钥(会话期持有,保存时直接使用)
     /// - Throws: 非 v2 容器抛 wrong_database_format_error;信封缺失抛
     ///   envelope_missing_error;主密码错误由 unwrapVaultKey 抛 wrong_password_error
     public func loadUnlocked(name: String, password: String) throws -> (PasswordDatabase, SymmetricKey) {
+        Self.syncTransactionLock.lock()
+        defer { Self.syncTransactionLock.unlock() }
+        try recoverSyncTransactionIfPresent(for: name)
         let t0 = Date()
         let data: Data
         do {
@@ -181,6 +335,9 @@ public final class DatabaseStore {
 
     /// v2 保存:仅需库密钥(与主密码无关,改密后保存不受影响)。
     public func save(_ db: PasswordDatabase, name: String, vaultKey: SymmetricKey) throws {
+        Self.syncTransactionLock.lock()
+        defer { Self.syncTransactionLock.unlock() }
+        try recoverSyncTransaction(for: name)
         let t0 = Date()
         let enc = try DatabaseCipher.encryptBody(db.xmlData(), vaultKey: vaultKey)
         try enc.write(to: url(for: name), options: .atomic)
@@ -191,6 +348,9 @@ public final class DatabaseStore {
     /// 保留原始 changedAt,避免误触发改密时间戳判定。
     /// - Throws: 字节不是合法信封时抛 envelope_missing_error
     public func saveEnvelope(_ data: Data, for name: String) throws {
+        Self.syncTransactionLock.lock()
+        defer { Self.syncTransactionLock.unlock() }
+        try recoverSyncTransaction(for: name)
         guard DatabaseCipher.envelopeChangedAt(data) != nil else {
             Log.error("db", "saveEnvelope \"\(name)\" rejected: not a valid envelope")
             throw DatabaseCipher.CipherError(message: L10n.t("envelope_missing_error"))
@@ -200,6 +360,9 @@ public final class DatabaseStore {
 
     /// v2 改密:只重写信封(本体不动);调用方负责更新钥匙串。
     public func rewrap(name: String, vaultKey: SymmetricKey, newPassword: String) throws {
+        Self.syncTransactionLock.lock()
+        defer { Self.syncTransactionLock.unlock() }
+        try recoverSyncTransaction(for: name)
         let envelope = try DatabaseCipher.wrapVaultKey(vaultKey, password: newPassword)
         try envelope.write(to: keyURL(for: name), options: .atomic)
         Log.info("db", "rewrapped \"\(name).upwkey\" (envelope only, body untouched)")
@@ -207,10 +370,22 @@ public final class DatabaseStore {
 
     /// 读本地信封(同步上传信封时用)。
     public func envelopeData(for name: String) -> Data? {
-        try? Data(contentsOf: keyURL(for: name))
+        Self.syncTransactionLock.lock()
+        defer { Self.syncTransactionLock.unlock() }
+        do {
+            try recoverSyncTransaction(for: name)
+            return try Data(contentsOf: keyURL(for: name))
+        } catch {
+            Log.error("db", "read envelope for \"\(name)\" failed: \(error)")
+            return nil
+        }
     }
 
     public func rename(_ old: String, to new: String) throws {
+        Self.syncTransactionLock.lock()
+        defer { Self.syncTransactionLock.unlock() }
+        try recoverSyncTransaction(for: old)
+        try recoverSyncTransaction(for: new)
         guard exists(old) else { throw StoreError(L10n.t("database_not_found_error")) }
         guard !exists(new) else { throw StoreError(L10n.t("database_already_exists_error")) }
         try validateName(new)
@@ -222,6 +397,13 @@ public final class DatabaseStore {
             } catch {
                 // 本体已改名、信封遗留旧名:下次解锁会报 envelope_missing,留痕供排查
                 Log.error("db", "rename envelope \"\(old).upwkey\" → \"\(new).upwkey\" failed: \(error)")
+            }
+        }
+        if fm.fileExists(atPath: syncStateURL(for: old).path) {
+            do {
+                try fm.moveItem(at: syncStateURL(for: old), to: syncStateURL(for: new))
+            } catch {
+                Log.error("db", "rename sync state \"\(old).upwsync\" → \"\(new).upwsync\" failed: \(error)")
             }
         }
         if let pw = PasswordStore.loadPassword(databaseName: old) {
@@ -236,10 +418,14 @@ public final class DatabaseStore {
     }
 
     public func delete(name: String, alsoBackups: Bool = true) throws {
+        Self.syncTransactionLock.lock()
+        defer { Self.syncTransactionLock.unlock() }
+        try recoverSyncTransaction(for: name)
         guard exists(name) else { return }
         Log.warn("db", "delete \"\(name).upw\" (alsoBackups=\(alsoBackups))")
         try fm.removeItem(at: url(for: name))
         try? fm.removeItem(at: keyURL(for: name))
+        try? fm.removeItem(at: syncStateURL(for: name))
         PasswordStore.eraseData(databaseName: name)
         if alsoBackups {
             let dir = backupsDir.appendingPathComponent(name, isDirectory: true)
@@ -261,6 +447,9 @@ public final class DatabaseStore {
     public func backupDir(for name: String) -> URL { backupsDir.appendingPathComponent(name, isDirectory: true) }
 
     public func backup(name: String, now: Date = Date()) throws {
+        Self.syncTransactionLock.lock()
+        defer { Self.syncTransactionLock.unlock() }
+        try recoverSyncTransaction(for: name)
         let dir = backupDir(for: name)
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let data = try Data(contentsOf: url(for: name))
@@ -310,6 +499,9 @@ public final class DatabaseStore {
     }
 
     public func restore(backup: URL, to name: String) throws {
+        Self.syncTransactionLock.lock()
+        defer { Self.syncTransactionLock.unlock() }
+        try recoverSyncTransaction(for: name)
         Log.info("backup", "restore \(backup.lastPathComponent) → \"\(name).upw\"")
         let data = try Data(contentsOf: backup)
         guard DatabaseCipher.isV2Container(data) else {
@@ -340,7 +532,10 @@ public final class DatabaseStore {
     ///   格式/信封/主密码错误同 loadUnlocked
     @discardableResult
     public func restore(body: URL, envelope: URL, name: String, password: String) throws -> DatabaseFile {
+        Self.syncTransactionLock.lock()
+        defer { Self.syncTransactionLock.unlock() }
         try validateName(name)
+        try recoverSyncTransaction(for: name)
         guard !exists(name) else { throw StoreError(L10n.t("database_already_exists_error")) }
         let data: Data
         let keyData: Data

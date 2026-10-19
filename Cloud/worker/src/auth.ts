@@ -50,6 +50,12 @@ const PLATFORMS = new Set([
   "other",
 ]);
 
+/// 邮件语言:客户端上报(App 内语言优先、系统语言其次),仅认 zh*/en,
+/// 缺省与未知值一律英文。
+function normalizeLang(input: unknown): "zh" | "en" {
+  return typeof input === "string" && input.toLowerCase().startsWith("zh") ? "zh" : "en";
+}
+
 function sanitizeDeviceName(input: unknown): string {
   if (typeof input !== "string") return "";
   return input.replace(/[\u0000-\u001f]/g, "").trim().slice(0, 64);
@@ -78,6 +84,7 @@ export async function handleCodeRequest(
   const email = normalizeEmail(body.email);
   if (!email) throw new ApiError(400, "invalid_email");
   const purpose = body.purpose === "sensitive" ? "sensitive" : "login";
+  const lang = normalizeLang(body.lang);
 
   const now = nowMs();
   const cooldownMs = numVar(env, "CODE_RESEND_COOLDOWN_SECONDS", 60) * 1000;
@@ -127,7 +134,7 @@ export async function handleCodeRequest(
 
   // 发码尽力而为:失败不改变响应(响应恒定防枚举),靠监控发现
   try {
-    await sendVerificationMail(env, email, code, purpose);
+    await sendVerificationMail(env, email, code, purpose, lang);
   } catch (error) {
     console.log(
       JSON.stringify({

@@ -24,12 +24,16 @@ final class AppContext: ObservableObject {
 
     // MARK: - Published state
     @Published var phase: Phase = .setup {
-        didSet { Log.info("lifecycle", "phase \(oldValue) → \(phase)") }
+        didSet {
+            syncSessionID = UUID()
+            Log.info("lifecycle", "phase \(oldValue) → \(phase)")
+        }
     }
     @Published var database = PasswordDatabase()
     @Published var databaseName: String = "" {
         didSet {
             guard oldValue != databaseName else { return }
+            syncSessionID = UUID()
             Log.info("lifecycle", "databaseName \"\(oldValue.isEmpty ? "∅" : oldValue)\" → \"\(databaseName.isEmpty ? "∅" : databaseName)\"")
         }
     }
@@ -86,6 +90,8 @@ final class AppContext: ObservableObject {
     /// 行级同步状态(游标/revision/脏集合/快照基线);解锁时按库装载。
     /// 故意不用 @Published:同步状态呈现走 syncState,这里高频读写不驱动逐条 UI。
     var rowSync = RowSyncState()
+    /// 跨文件同步扩展捕获此标识,锁定/解锁/切库后旧异步任务不得提交。
+    var syncSessionID = UUID()
     // 空闲追踪用,不进 UI。故意不用 @Published:活动监视器把每次键盘/鼠标
     // 事件都算作活动,若发布会在打字时逐键触发整棵视图树重渲染(输入卡顿)。
     var lastActivity: Date = Date()
@@ -306,15 +312,20 @@ final class AppContext: ObservableObject {
 
     func unlock(name: String, password: String) throws {
         Log.info("lifecycle", "unlock \"\(name)\"")
+        let loaded: (PasswordDatabase, SymmetricKey, RowSyncState)
         do {
             let (db, vek) = try store.loadUnlocked(name: name, password: password)
-            database = db
-            vaultKey = vek
+            let state = try store.loadSyncState(for: name)
+            loaded = (db, vek, state)
         } catch {
             Log.warn("lifecycle", "unlock \"\(name)\" failed: \(error)")
             throw error
         }
+        database = loaded.0
+        vaultKey = loaded.1
         databaseName = name
+        rowSync = loaded.2
+        Log.info("sync", "restored row sync state for \"\(name)\" (cursor=\(rowSync.cursor), pending=\(rowSync.dirtyUpserts.count + rowSync.dirtyDeletes.count))")
         self.password = password
         phase = .unlocked
         lastActivity = Date() // otherwise the idle timer re-locks right after unlocking
@@ -364,8 +375,8 @@ final class AppContext: ObservableObject {
     }
 
     /// 解锁(带远端兜底):本地解不开时拉远端信封+本体收敛后重试。
-    /// 场景:他机改密(始终轮换库密钥)后本机被强制锁定——本地信封已换新,
-    /// 但本体还是旧钥密文,新/旧密码都解不开本地副本;远端才是新全套。
+    /// 他机轮换库密钥后，本地仍保留旧钥配套文件；以新密码验证远端信封，
+    /// 重建后一次提交新库体、同步状态和新信封。
     /// 密码真错时远端信封同样解不开 → 仍是密码错误,不误导。
     @discardableResult
     func unlockWithRemoteFallback(name: String, password: String) async -> UnlockOutcome {
@@ -377,15 +388,29 @@ final class AppContext: ObservableObject {
                   let token = relay.token(database: name) else {
                 return Self.isPasswordRejection(error) ? .wrongPassword : .unavailable
             }
+            let sessionID = syncSessionID
+            let currentName = databaseName
+            let originalKey = vaultKey
             do {
                 let detail = try await relayClient.getVault(token: token, vaultId: binding.vaultId)
+                guard syncSessionID == sessionID, databaseName == currentName,
+                      vaultKey == originalKey, !Task.isCancelled else {
+                    Log.warn("sync", "remote unlock result discarded after session changed")
+                    return .unavailable
+                }
                 guard let envelopeBytes = detail.envelope,
                       let vek = try? DatabaseCipher.unwrapVaultKey(envelopeBytes, password: password) else {
                     Log.warn("lifecycle", "remote unlock fallback: password rejected by remote envelope")
                     return .wrongPassword
                 }
                 // v7:远端是行级密文,走全量重建收敛本地(他机改密后本体随新 VEK 重加密)
-                var state = store.loadSyncState(for: name)
+                var state: RowSyncState
+                do {
+                    state = try store.loadSyncState(for: name)
+                } catch {
+                    Log.error("sync", "remote unlock fallback state load failed: \(error)")
+                    return .unavailable
+                }
                 let db: PasswordDatabase
                 do {
                     db = try await RowSync.fullRebuild(
@@ -395,9 +420,12 @@ final class AppContext: ObservableObject {
                     Log.warn("sync", "remote unlock fallback: rows not reachable yet (\(error))")
                     return .unavailable
                 }
-                try store.save(db, name: name, vaultKey: vek)
-                try store.saveEnvelope(envelopeBytes, for: name)
-                store.saveSyncState(state, for: name)
+                guard syncSessionID == sessionID, databaseName == currentName,
+                      vaultKey == originalKey, !Task.isCancelled else {
+                    Log.warn("sync", "remote unlock rebuild discarded after session changed")
+                    return .unavailable
+                }
+                try commitSyncSnapshot(db, name: name, vaultKey: vek, state: state, envelope: envelopeBytes)
                 Log.info("lifecycle", "remote unlock fallback converged local vault \"\(name)\" (rows rebuilt)")
                 do {
                     try unlock(name: name, password: password)
@@ -433,6 +461,7 @@ final class AppContext: ObservableObject {
         password = ""
         vaultKey = nil
         phase = .locked
+        syncState = .idle
         activeSheet = nil
         editDraft = nil
         // 未决冲突现场随之作废:下次解锁后的同步会重新检测
@@ -522,6 +551,26 @@ final class AppContext: ObservableObject {
     }
 
     // MARK: - Persistence
+
+    /// 提交配套本体/状态/信封;失败可能已落 journal,必须废弃旧会话防止覆盖前滚结果。
+    /// - Throws: 事务持久化错误。
+    func commitSyncSnapshot(_ snapshot: PasswordDatabase, name: String, vaultKey: SymmetricKey,
+                            state: RowSyncState, envelope: Data? = nil) throws {
+        do {
+            try store.commitSyncSnapshot(snapshot, name: name, vaultKey: vaultKey,
+                                         state: state, envelope: envelope)
+        } catch {
+            saveDebounce?.cancel()
+            syncSessionID = UUID()
+            lock()
+            password = ""
+            self.vaultKey = nil
+            syncState = .error(error.localizedDescription)
+            Log.error("sync", "snapshot commit failed; session invalidated: \(error)")
+            AppToast.shared.show(error.localizedDescription)
+            throw error
+        }
+    }
 
     func save() {
         guard phase == .unlocked else { return }

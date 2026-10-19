@@ -14,6 +14,22 @@ final class StoreTests: XCTestCase {
         try? FileManager.default.removeItem(at: tempDir)
     }
 
+    func testSyncStatePersistsCursorAndDirtyBaselinePerDatabase() throws {
+        let store = DatabaseStore(root: tempDir)
+        var state = RowSyncState()
+        let id = UUID()
+        state.cursor = 42
+        state.revisions[id] = 3
+        state.dirtyUpserts[id] = 1_700_000_000_000
+        state.syncedMtimes[id] = 1_699_999_000_000
+
+        try store.saveSyncState(state, for: "Alpha")
+
+        XCTAssertEqual(try store.loadSyncState(for: "Alpha"), state)
+        XCTAssertEqual(try store.loadSyncState(for: "Beta"), RowSyncState())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.syncStateURL(for: "Alpha").path))
+    }
+
     func testCreateLoadSaveBackupRestoreRenameDelete() throws {
         let store = DatabaseStore(root: tempDir)
         try store.create(name: "Alpha", password: "pw1", now: Date(timeIntervalSince1970: 0))
@@ -22,7 +38,7 @@ final class StoreTests: XCTestCase {
         let (loaded, vek) = try store.loadUnlocked(name: "Alpha", password: "pw1")
         var db = loaded
         XCTAssertEqual(db.templateCards.count, 16)
-        var card = Card(title: "Added")
+        let card = Card(title: "Added")
         db.cards.append(card)
         try store.save(db, name: "Alpha", vaultKey: vek)
 
@@ -34,12 +50,20 @@ final class StoreTests: XCTestCase {
         try store.backup(name: "Alpha", now: Date(timeIntervalSince1970: 100))
         XCTAssertEqual(store.backups(name: "Alpha").count, 1)
 
+        var initialState = RowSyncState()
+        initialState.cursor = 1
+        try store.saveSyncState(initialState, for: "Alpha")
         try store.rename("Alpha", to: "Beta")
         XCTAssertFalse(store.exists("Alpha"))
         XCTAssertTrue(store.exists("Beta"))
+        var expectedState = RowSyncState()
+        expectedState.cursor = 1
+        XCTAssertEqual(try store.loadSyncState(for: "Beta"), expectedState)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.syncStateURL(for: "Alpha").path))
 
         try store.delete(name: "Beta")
         XCTAssertFalse(store.exists("Beta"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.syncStateURL(for: "Beta").path))
     }
 
     func testInvalidNamesRejected() {

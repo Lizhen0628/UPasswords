@@ -179,11 +179,12 @@ public struct RelayClient {
     // MARK: - 账户(注册=登录)
 
     /// 请求发送验证码(202 恒定;限速抛 rateLimited)。
-    public func requestCode(email: String, purpose: Purpose = .login) async throws {
+    /// - Parameter lang: 生效语言(邮件文案按它渲染;缺省英文)
+    public func requestCode(email: String, purpose: Purpose = .login, lang: String = "en") async throws {
         struct Empty: Decodable {}
         let _: Empty = try await send(
             "POST", "/v2/auth/code",
-            body: ["email": email, "purpose": purpose.rawValue],
+            body: ["email": email, "purpose": purpose.rawValue, "lang": lang],
             token: nil)
     }
 

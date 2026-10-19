@@ -38,7 +38,13 @@ function u32LE(bytes: Uint8Array, offset: number): number {
 
 /** PBKDF2-SHA256(password, salt, iterations) → 32 bytes, mirrors deriveKey(). */
 async function deriveKeyBytes(password: string, salt: Uint8Array, iterations: number): Promise<Uint8Array> {
-    const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+    const passwordBytes = new TextEncoder().encode(password);
+    let material: CryptoKey;
+    try {
+        material = await crypto.subtle.importKey("raw", passwordBytes, "PBKDF2", false, ["deriveBits"]);
+    } finally {
+        passwordBytes.fill(0);
+    }
     const bits = await crypto.subtle.deriveBits(
         { name: "PBKDF2", hash: "SHA-256", salt: salt as BufferSource, iterations },
         material,
@@ -63,9 +69,9 @@ export async function unwrapEnvelope(envelope: Uint8Array, password: string): Pr
     }
     const salt = envelope.slice(16, 32);
     const keyBytes = await deriveKeyBytes(password, salt, iterations);
-    const key = await crypto.subtle.importKey("raw", keyBytes as BufferSource, "AES-GCM", false, ["decrypt"]);
     // combined = nonce(12) + ct(32) + tag(16); WebCrypto takes ct||tag with the nonce as iv
     try {
+        const key = await importVaultDecryptKey(keyBytes);
         const plain = await crypto.subtle.decrypt(
             { name: "AES-GCM", iv: envelope.slice(32, 44) as BufferSource },
             key,
@@ -74,6 +80,8 @@ export async function unwrapEnvelope(envelope: Uint8Array, password: string): Pr
         return new Uint8Array(plain);
     } catch {
         throw new VaultCryptoError("wrong_password");
+    } finally {
+        keyBytes.fill(0);
     }
 }
 
@@ -105,21 +113,27 @@ export async function decryptBody(body: Uint8Array, vaultKey: Uint8Array): Promi
 export async function wrapEnvelope(password: string, iterations = 600_000): Promise<{ envelope: Uint8Array; vek: Uint8Array }> {
     const vek = crypto.getRandomValues(new Uint8Array(32));
     const salt = crypto.getRandomValues(new Uint8Array(16));
-    const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
-    const kek = new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, material, 256));
-    const wrapKey = await crypto.subtle.importKey("raw", kek, "AES-GCM", false, ["encrypt"]);
-    const nonce = crypto.getRandomValues(new Uint8Array(12));
-    const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, wrapKey, vek));
-    const envelope = new Uint8Array(100);
-    envelope.set(ENVELOPE_MAGIC, 0);
-    const view = new DataView(envelope.buffer);
-    view.setUint32(8, 1, true);
-    view.setUint32(12, iterations, true);
-    envelope.set(salt, 16);
-    envelope.set(nonce, 32);
-    envelope.set(sealed, 44);
-    view.setFloat64(92, Date.now() / 1000, true);
-    return { envelope, vek };
+    const kek = await deriveKeyBytes(password, salt, iterations);
+    try {
+        const wrapKey = await crypto.subtle.importKey("raw", kek as BufferSource, "AES-GCM", false, ["encrypt"]);
+        const nonce = crypto.getRandomValues(new Uint8Array(12));
+        const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, wrapKey, vek));
+        const envelope = new Uint8Array(100);
+        envelope.set(ENVELOPE_MAGIC, 0);
+        const view = new DataView(envelope.buffer);
+        view.setUint32(8, 1, true);
+        view.setUint32(12, iterations, true);
+        envelope.set(salt, 16);
+        envelope.set(nonce, 32);
+        envelope.set(sealed, 44);
+        view.setFloat64(92, Date.now() / 1000, true);
+        return { envelope, vek };
+    } catch (error) {
+        vek.fill(0);
+        throw error;
+    } finally {
+        kek.fill(0);
+    }
 }
 
 /** changedAt recorded in the envelope (password-change propagation hint). */
@@ -138,12 +152,25 @@ export function envelopeChangedAt(envelope: Uint8Array): number | null {
  * Throws VaultCryptoError("item_decrypt_failed") on mismatch.
  */
 export async function decryptItemBody(body: Uint8Array, vaultKey: Uint8Array, uuid: string): Promise<string> {
-    if (body.length < 28 || !uuid) {
+    try {
+        return await decryptItemBodyWithKey(body, await importVaultDecryptKey(vaultKey), uuid);
+    } catch {
         throw new VaultCryptoError("item_decrypt_failed");
     }
-    const key = await crypto.subtle.importKey("raw", vaultKey as BufferSource, "AES-GCM", false, ["decrypt"]);
+}
+
+/** Import once per batch; the decrypt-only AES-256 key cannot be exported. */
+export async function importVaultDecryptKey(vaultKey: Uint8Array): Promise<CryptoKey> {
+    if (vaultKey.length !== 32) throw new VaultCryptoError("invalid_vault_key");
+    return crypto.subtle.importKey("raw", vaultKey as BufferSource, "AES-GCM", false, ["decrypt"]);
+}
+
+/** Decrypt one row with a previously imported key, preserving UUID AAD binding. */
+export async function decryptItemBodyWithKey(body: Uint8Array, key: CryptoKey, uuid: string): Promise<string> {
+    if (body.length < 28 || !uuid) throw new VaultCryptoError("item_decrypt_failed");
+    let plain: Uint8Array | undefined;
     try {
-        const plain = await crypto.subtle.decrypt(
+        plain = new Uint8Array(await crypto.subtle.decrypt(
             {
                 name: "AES-GCM",
                 iv: body.slice(0, 12) as BufferSource,
@@ -151,10 +178,43 @@ export async function decryptItemBody(body: Uint8Array, vaultKey: Uint8Array, uu
             },
             key,
             body.slice(12) as BufferSource,
-        );
-        return new TextDecoder().decode(plain);
+        ));
+        return new TextDecoder("utf-8", { fatal: true }).decode(plain);
     } catch {
         throw new VaultCryptoError("item_decrypt_failed");
+    } finally {
+        plain?.fill(0);
+    }
+}
+
+/**
+ * Encrypt a row-sync fragment with a fresh 12-byte nonce and the uppercase canonical UUID as AAD.
+ * Output is nonce || ciphertext || 16-byte tag, matching decryptItemBody and Swift RowSyncCipher.
+ * The caller owns reauthentication and clearing the raw vault key; this helper never persists it.
+ */
+export async function encryptItemBody(xml: string, vaultKey: Uint8Array, uuid: string): Promise<Uint8Array> {
+    const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!canonicalUuid.test(uuid) || vaultKey.length !== 32) {
+        throw new VaultCryptoError("item_encrypt_failed");
+    }
+    try {
+        const key = await crypto.subtle.importKey("raw", vaultKey as BufferSource, "AES-GCM", false, ["encrypt"]);
+        const nonce = crypto.getRandomValues(new Uint8Array(12));
+        const sealed = new Uint8Array(await crypto.subtle.encrypt(
+            {
+                name: "AES-GCM",
+                iv: nonce,
+                additionalData: new TextEncoder().encode(uuid.toUpperCase()),
+            },
+            key,
+            new TextEncoder().encode(xml),
+        ));
+        const body = new Uint8Array(nonce.length + sealed.length);
+        body.set(nonce);
+        body.set(sealed, nonce.length);
+        return body;
+    } catch {
+        throw new VaultCryptoError("item_encrypt_failed");
     }
 }
 
@@ -195,7 +255,9 @@ export function parseVaultXml(xml: string): ExtensionItem[] {
         if (card.getAttribute("trashed") === "true" || card.getAttribute("archived") === "true" || card.getAttribute("template") === "true") {
             continue;
         }
-        const fields = Array.from(card.querySelectorAll("field")).map((field) => {
+        // Keep opaque future subtrees out of the editable field projection, matching item-editor.
+        const directFields = Array.from(card.children).filter((element) => element.tagName === "field" && !element.namespaceURI);
+        const fields = directFields.map((field) => {
             const type = field.getAttribute("type") ?? "text";
             const autofill = field.getAttribute("autofill") ?? "off";
             return {

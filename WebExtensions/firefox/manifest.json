@@ -6,7 +6,8 @@
     "permissions": [
         "activeTab",
         "storage",
-        "alarms"
+        "alarms",
+        "tabs"
     ],
     "host_permissions": [
         "https://api.upasswords.com/*"
