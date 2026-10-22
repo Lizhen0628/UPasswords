@@ -47,10 +47,19 @@ function cursorExpired(error: unknown): boolean {
     return error instanceof RelayApiError && error.status === 410 && error.code === "cursor_expired";
 }
 
+/** 失败诊断摘要:只含错误类型/状态/阶段,不含令牌与密文。 */
+function describeSyncError(error: unknown): string {
+    if (error instanceof RelayApiError) return `relay=${error.status}:${error.code}`;
+    if (error instanceof VaultSyncError) return `sync=${error.code}`;
+    if (error instanceof Error) return `error=${error.name}`;
+    return "error=unknown";
+}
+
 /** All network/decryption work stays outside the single atomic cache transaction. */
 export async function synchronizeVault(options: SynchronizeVaultOptions): Promise<SyncResult> {
     const { token, scope, cache, validate, verifyRows } = options;
     const startedAt = Date.now();
+    let stage = "cache-read";
     console.info("[upw] vault sync started");
     try {
         const initialEpoch = await checked(validate, () => cache.getEpoch(scope));
@@ -60,6 +69,7 @@ export async function synchronizeVault(options: SynchronizeVaultOptions): Promis
         const expectedVersion = cached?.version ?? null;
         let forceRebuild = false;
         for (let attempt = 0; attempt <= MAX_RESTARTS; attempt++) {
+            stage = "seq";
             const initial = await checked(validate, () => getVaultSeq(token, scope.vaultId));
             const expectedKeyVersion = options.keyVersion ?? cached?.passwordVersion;
             if (expectedKeyVersion !== undefined && expectedKeyVersion !== initial.passwordVersion) {
@@ -70,6 +80,7 @@ export async function synchronizeVault(options: SynchronizeVaultOptions): Promis
             let envelope = cached?.envelope;
             let initialHead = initial.headSeq;
             if (rebuilt) {
+                stage = "envelope";
                 const detail = await checked(validate, () => getVaultEnvelope(token, scope.vaultId));
                 if (detail.meta.vaultId !== scope.vaultId) throw new VaultSyncError("bad_vault_response");
                 if (detail.meta.passwordVersion !== initial.passwordVersion) {
@@ -86,6 +97,7 @@ export async function synchronizeVault(options: SynchronizeVaultOptions): Promis
             let rows: Map<string, RelayItemRow>;
             let cursor = rebuilt ? initialHead : cached?.cursor ?? initialHead;
             try {
+                stage = rebuilt ? "snapshot" : "changes";
                 rows = rebuilt
                     ? await fetchFullSnapshot(token, scope.vaultId, validate)
                     : new Map((cached?.rows ?? []).map((row) => [row.uuid.toLowerCase(), row]));
@@ -99,6 +111,7 @@ export async function synchronizeVault(options: SynchronizeVaultOptions): Promis
                 if (attempt === MAX_RESTARTS) throw new VaultSyncError("sync_incomplete");
                 continue;
             }
+            stage = "final-seq";
             const final = await checked(validate, () => getVaultSeq(token, scope.vaultId));
             if (final.passwordVersion !== initial.passwordVersion) {
                 throw new VaultSyncError("password_changed");
@@ -116,7 +129,10 @@ export async function synchronizeVault(options: SynchronizeVaultOptions): Promis
             const deletedIds = [...oldRows.keys()].filter((uuid) => !rows.has(uuid));
             const changedRows = rebuilt ? nextRows : differences;
             // Rebuilds always authenticate the complete final snapshot, including unchanged rows.
-            if (changedRows.length) await checked(validate, () => verifyRows(changedRows));
+            if (changedRows.length) {
+                stage = "verify";
+                await checked(validate, () => verifyRows(changedRows));
+            }
             const unchanged = cached !== null && !rebuilt && differences.length === 0
                 && deletedIds.length === 0 && cursor === cached.cursor && envelope === cached.envelope;
             await validate();
@@ -125,6 +141,7 @@ export async function synchronizeVault(options: SynchronizeVaultOptions): Promis
                 return { snapshot: cached, changedRows: [], deletedIds: [], rebuilt: false, changedCount: 0 };
             }
             // No post-commit validator: the caller must receive the persisted result before invalidating UI.
+            stage = "commit";
             const snapshot = await cache.commit({
                 scope,
                 envelope,
@@ -139,7 +156,7 @@ export async function synchronizeVault(options: SynchronizeVaultOptions): Promis
         }
         throw new VaultSyncError("sync_incomplete");
     } catch (error) {
-        console.warn(`[upw] vault sync failed elapsedMs=${Date.now() - startedAt}`);
+        console.warn(`[upw] vault sync failed stage=${stage} elapsedMs=${Date.now() - startedAt} ${describeSyncError(error)}`);
         throw error;
     }
 }

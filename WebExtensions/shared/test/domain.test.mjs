@@ -39,6 +39,10 @@ test('website fields accept full HTTP URLs without matching deceptive origins', 
     assert.equal(hostMatches('login.example.com', 'https://www.example.com/sign-in'), true)
     assert.equal(hostMatches('example.com.evil.org', 'https://example.com'), false)
     assert.equal(hostMatches('example.com', 'https://example.com@evil.org'), false)
+    assert.equal(hostMatches('example.com', 'https://example.com/login'), true)
+    for (const value of ['ftp://example.com/login', 'javascript://example.com/login']) {
+        assert.equal(hostMatches('example.com', value), false)
+    }
     for (const value of ['javascript://example.com', 'ftp://example.com', 'example.com/path', 'not a host']) {
         assert.equal(canonicalizeHost(value), '')
     }

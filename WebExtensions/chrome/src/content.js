@@ -85,7 +85,7 @@
             host.style.cssText = "all:initial;position:fixed;z-index:2147483647;max-width:280px;";
             const shadow = host.attachShadow({ mode: "closed" });
             const style = document.createElement("style");
-            style.textContent = ":host{font:12px/1.4 system-ui,sans-serif;color-scheme:light dark}button{font:inherit;color:#24574d;background:#f2f8f6;border:1px solid #b9d1c9;border-radius:7px;padding:5px 9px;cursor:pointer;max-width:280px;text-align:start;box-shadow:0 1px 4px #0001}button:focus-visible{outline:2px solid #356b62;outline-offset:2px}p{font:inherit;color:#24574d;background:#f2f8f6;border:1px solid #b9d1c9;border-radius:7px;padding:6px 9px;margin:3px 0 0;max-width:260px}";
+            style.textContent = ":host{font:12px/1.4 system-ui,sans-serif;color-scheme:light dark}button{font:inherit;font-weight:600;color:#2f6cc0;background:#fff;border:1px solid #cfdff2;border-radius:10px;padding:7px 12px;cursor:pointer;max-width:280px;text-align:start;box-shadow:0 4px 14px rgb(31 68 120/.14)}button:focus-visible{outline:2px solid #3f7fd4;outline-offset:2px}p{font:inherit;color:#2f6cc0;background:#fff;border:1px solid #cfdff2;border-radius:10px;padding:7px 11px;margin:4px 0 0;max-width:260px;box-shadow:0 4px 14px rgb(31 68 120/.12)}@media(prefers-color-scheme:dark){button,p{color:#8fbcee;background:#2b2c28;border-color:#465870}button{box-shadow:0 4px 14px rgb(0 0 0/.4)}}";
             button = document.createElement("button");
             button.type = "button";
             fallback = document.createElement("p");

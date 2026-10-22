@@ -32,6 +32,7 @@ import {
     VaultCryptoError,
 } from "./shared/index.js";
 
+console.info("[upw] popup build: r7-click-probe");
 const zh = (navigator.language || "").toLowerCase().startsWith("zh");
 const t = (zhText, enText) => (zh ? zhText : enText);
 
@@ -768,12 +769,17 @@ function renderCandidates(items) {
 function appendCandidate(candidate, list) {
     const li = document.createElement("li");
     li.className = "item";
+    li.dataset.itemId = candidate.item.id;
     const button = document.createElement("button");
     button.type = "button";
     const canFill = Boolean(host && hostMatches(host, candidate.item.host));
     const avatar = document.createElement("span");
     avatar.className = "item-avatar";
     avatar.setAttribute("aria-hidden", "true");
+    // 头像按标题字符和取色,无需网络图标即可视觉区分条目
+    let tint = 0;
+    for (const ch of candidate.item.title) tint = (tint + (ch.codePointAt(0) ?? 0)) % 6;
+    avatar.dataset.tint = String(tint);
     avatar.textContent = Array.from(candidate.item.title.trim())[0]?.toLocaleUpperCase() || "U";
     const copy = document.createElement("span");
     copy.className = "item-copy";
@@ -785,7 +791,14 @@ function appendCandidate(candidate, list) {
     user.textContent = candidate.username || candidate.item.host || t("无用户名", "No username");
     copy.append(title, user);
     button.append(avatar, copy);
-    button.addEventListener("click", () => { void openItemDetail(candidate.item.id); });
+    // 匹配当前网站的条目点击即填充(主路径);其余条目点击进详情
+    if (canFill) button.title = t("点击填充到当前页面", "Click to fill this page");
+    button.addEventListener("click", () => {
+        // 入口探针:区分"点击没触发"与"走了某分支"(测试 vm 无 console,用 globalThis 守卫)
+        globalThis.console?.info?.("[upw] item row click; canFill:", canFill);
+        if (canFill) void fill(candidate, li);
+        else void openItemDetail(candidate.item.id);
+    });
     li.appendChild(button);
     const actions = document.createElement("div");
     actions.className = "item-actions";
@@ -802,6 +815,11 @@ function appendCandidate(candidate, list) {
         actions.appendChild(copyPassword);
     }
     if (canFill) {
+        const detailButton = document.createElement("button");
+        detailButton.type = "button";
+        detailButton.textContent = t("详情", "Detail");
+        detailButton.addEventListener("click", () => { void openItemDetail(candidate.item.id); });
+        actions.appendChild(detailButton);
         const fillButton = document.createElement("button");
         fillButton.type = "button";
         fillButton.className = "fill-action";
@@ -809,6 +827,7 @@ function appendCandidate(candidate, list) {
         fillButton.addEventListener("click", () => { void fill(candidate, li); });
         actions.appendChild(fillButton);
     }
+    if (canFill) li.classList.add("match");
     li.appendChild(actions);
     list.appendChild(li);
 }
@@ -843,8 +862,49 @@ async function copyText(value) {
 }
 
 
+async function quickFillCurrentSite() {
+    console.info("[upw] site banner quick fill requested");
+    status(t("正在查找当前网站的匹配项…", "Finding a matching item for this site…"));
+    try {
+        const state = await sessionCommand("read");
+        if (!state.unlocked || state.generation !== unlockedGeneration) {
+            await render();
+            status(t("密码库已锁定，请重新解锁后重试。", "Your vault is locked. Unlock it again and retry."), true);
+            return;
+        }
+        const currentItems = state.items ?? [];
+        const candidatesFor = items => items
+            .filter(item => hostMatches(host, item.host) && Boolean(credentialsOf(item).password))
+            .map(item => ({ item, ...credentialsOf(item) }))
+            .sort((left, right) => left.item.title.localeCompare(right.item.title)
+                * (sortItems.value === "title-desc" ? -1 : 1));
+        const candidate = candidatesFor(unlockedItems ?? currentItems)[0] ?? candidatesFor(currentItems)[0];
+        if (!candidate) {
+            const hostMatchesCount = currentItems.filter(item => hostMatches(host, item.host)).length;
+            const passwordItemCount = currentItems.filter(item => Boolean(credentialsOf(item).password)).length;
+            console.warn("[upw] site banner quick fill unavailable:", {
+                sessionItems: currentItems.length,
+                hostMatches: hostMatchesCount,
+                passwordItems: passwordItemCount,
+            });
+            status(t("当前解锁会话中没有找到此网站的密码项。请重新同步密码库；若仍不行，请检查条目中的网站地址和密码字段。", "No password entry for this site was found in the current unlocked session. Sync the vault, then check the item's website and password field if needed."), true);
+            return;
+        }
+        const row = [...itemsEl.children].find(element => element.dataset.itemId === candidate.item.id) ?? null;
+        await fill(candidate, row);
+    } catch {
+        console.warn("[upw] site banner quick fill failed: session unavailable");
+        status(t("无法读取密码库，请重新打开扩展后重试。", "Could not read the vault. Reopen the extension and try again."), true);
+    }
+}
+
 async function fill(candidate, li) {
-    if (!tab?.id || !/^https?:\/\//i.test(pageUrl) || !hostMatches(host, candidate.item.host)) return;
+    if (!tab?.id || !/^https?:\/\//i.test(pageUrl) || !hostMatches(host, candidate.item.host)) {
+        console.warn("[upw] fill skipped: page context not fillable");
+        status(t("当前页面不可填充，请重新打开扩展后重试。", "This page cannot be filled. Reopen the extension and try again."), true);
+        return;
+    }
+    console.info("[upw] fill started");
     const operation = operationGeneration;
     const generation = unlockedGeneration;
     const isCurrent = () => operation === operationGeneration && generation === unlockedGeneration;
@@ -857,11 +917,16 @@ async function fill(candidate, li) {
             return;
         }
         const current = state.items?.find(item => item.id === candidate.item.id);
-        if (!current || !hostMatches(host, current.host)) return;
+        if (!current || !hostMatches(host, current.host)) {
+            console.warn("[upw] fill aborted: item missing or host mismatch in session");
+            status(t("条目已变化或与当前网站不匹配，请刷新后重试。", "The item changed or no longer matches this site. Refresh and try again."), true);
+            return;
+        }
         const touched = await sessionCommand("touch");
         if (!isCurrent()) return;
         if (!touched.unlocked || touched.generation !== unlockedGeneration) {
             await render();
+            status(t("密码库已锁定，请重新解锁后重试。", "Your vault is locked. Unlock it again and retry."), true);
             return;
         }
         unlockedExpiresAt = touched.expiresAt;
@@ -869,7 +934,8 @@ async function fill(candidate, li) {
         if (!isCurrent()) return;
         if (activeTab?.id !== tab.id || !/^https?:\/\//i.test(activeTab.url ?? "")
             || canonicalizeHost(hostnameOf(activeTab.url ?? "")) !== host) {
-            status(t("页面已切换，请重新打开插件", "The page changed. Reopen the extension."), true);
+            console.warn("[upw] fill aborted: active tab changed");
+            status(t("页面已切换，请重新打开插件后重试。", "The page changed. Reopen the extension and try again."), true);
             return;
         }
         if (new URL(activeTab.url).protocol === "http:" && !window.confirm(t(
@@ -893,17 +959,19 @@ async function fill(candidate, li) {
             const mark = document.createElement("span");
             mark.className = "ok";
             mark.textContent = t(" ✓ 已填充", " ✓ Filled");
-            li.querySelector(".ok")?.remove();
-            li.appendChild(mark);
+            li?.querySelector(".ok")?.remove();
+            li?.appendChild(mark);
             console.info("[upw] popup fill succeeded");
+            // 填充完成自动收起弹窗;测试环境无 close 时跳过
+            window.close?.();
         } else {
             console.warn("[upw] popup fill: no form");
-            status(t("页面上没找到登录表单", "No login form found on the page"), true);
+            status(t("页面上没找到可填充的登录表单，请确认页面表单可见后重试。", "No fillable login form was found. Make sure the login form is visible and try again."), true);
         }
     } catch {
         if (!isCurrent()) return;
         console.warn("[upw] popup fill: page unavailable");
-        status(t("无法访问该页面", "Can't reach this page"), true);
+        status(t("无法访问该页面，请刷新页面或重新加载扩展后重试。", "Can't access this page. Refresh it or reload the extension and try again."), true);
     }
 }
 
@@ -1049,6 +1117,7 @@ function paintItemDetail(item, editing) {
 }
 
 async function openItemDetail(id, editing = false) {
+    console.info("[upw] detail open requested");
     if (detailSaving) return;
     const operation = operationGeneration;
     const rendering = ++renderGeneration;
@@ -1082,6 +1151,7 @@ async function openItemDetail(id, editing = false) {
         if (!isCurrent()) return;
         clearUnlockedView();
         await render();
+        console.warn("[upw] detail open failed");
         status(t("无法读取解锁会话，请重新解锁", "Unlock session is unavailable. Unlock again."), true);
     }
 }
@@ -1670,6 +1740,11 @@ generatorTab.addEventListener("click", async () => {
 for (const control of [siteFilter, sortItems]) control.addEventListener("change", () => {
     listScrollTop = 0;
     if (unlockedItems !== null) renderCandidates(unlockedItems);
+});
+// 站点横幅即快速填充入口:点击填充当前列表第一个匹配项(复用行内填充按钮的完整链路)
+// 站点横幅快速填充:从解锁会话重新解析匹配项,不依赖当前渲染列表/筛选状态
+document.getElementById("siteContext").addEventListener("click", () => {
+    void quickFillCurrentSite();
 });
 document.getElementById("newLoginButton").addEventListener("click", () => openNewLogin());
 document.getElementById("emptyNewLoginButton").addEventListener("click", () => openNewLogin());

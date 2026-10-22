@@ -60,12 +60,19 @@ async function call(
     const headers: Record<string, string> = {};
     if (body !== undefined) headers["content-type"] = "application/json";
     if (token) headers.authorization = `Bearer ${token}`;
-    const response = await fetch(RELAY_BASE_URL + path, {
-        method,
-        headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
+    let response: Response;
+    try {
+        response = await fetch(RELAY_BASE_URL + path, {
+            method,
+            headers,
+            body: body === undefined ? undefined : JSON.stringify(body),
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+    } catch (error) {
+        // 网络黑洞/超时定位:只记方法与路径(含库 ID),不记令牌与请求体
+        console.warn(`[upw] relay request failed ${method} ${path} error=${error instanceof Error ? error.name : "unknown"}`);
+        throw error;
+    }
     if (!response.ok) {
         let code = `http_${response.status}`;
         try {

@@ -276,12 +276,13 @@ async function popup(browserName, {
         querySelector: selector => selector === 'main' ? main : null,
         querySelectorAll: () => [], addEventListener() {},
     }
+    const window = { confirm }
     const start = source.indexOf('const zh = ')
-    const api = await runInNewContext(`(async () => { ${source.slice(start)}; return { render, fill, unlock, syncVault, openItemDetail, saveItemDetail, clearUnlockedView, copyText, createNewLogin, regeneratePassword }; })()`, {
+    const api = await runInNewContext(`(async () => { ${source.slice(start)}; return { render, fill, quickFillCurrentSite, unlock, syncVault, openItemDetail, saveItemDetail, clearUnlockedView, copyText, createNewLogin, regeneratePassword }; })()`, {
         browser, chrome: browser, document, navigator: { language: 'en', clipboard: {
             writeText: async text => { clipboard.push(text) },
         } },
-        window: { confirm }, confirm, crypto: webcrypto,
+        window, confirm, crypto: webcrypto,
         canonicalizeHost: host => host, hostnameOf: url => new URL(url).hostname,
         hostMatches, credentialsOf, generatePassword, safeWebsiteUrl,
         createLoginItemXml: (input, nowMs) => {
@@ -344,7 +345,7 @@ async function popup(browserName, {
     // Let startup's intentionally unawaited automatic sync settle before each test takes control.
     await new Promise(setImmediate)
     return {
-        api, elements, document, commands, fills, storage, saves, keys, edits, intervals,
+        api, elements, document, window, commands, fills, storage, saves, keys, edits, intervals,
         cache, cacheCalls, syncCalls, envelopeCalls, events, creations, confirmations, clipboard,
         get snapshot() { return structuredClone(snapshot) },
         get state() { return response() },
@@ -407,14 +408,16 @@ for (const browser of browsers) {
         assert.equal(button.disabled, false)
         assert.equal(button.children[1].children[0].textContent, 'Work')
         button.listeners.click()
-        assert.deepEqual(view.calls[0], ['detail', 'Work-Alice'])
+        assert.equal(view.calls[0][0], 'fill', 'clicking a site-matching row fills the page')
         workRow.children[1].children.find(button => button.textContent === 'Fill').listeners.click()
         assert.equal(view.calls[1][0], 'fill')
+        workRow.children[1].children.find(button => button.textContent === 'Detail').listeners.click()
+        assert.deepEqual(view.calls[2], ['detail', 'Work-Alice'])
         const otherRow = view.itemsEl.children.find(row => row.children[0].children[1].children[0].textContent === 'Other')
         const other = otherRow.children[0]
         assert.equal(other.disabled, false)
         other.listeners.click()
-        assert.deepEqual(view.calls[2], ['detail', 'Other-Alice'])
+        assert.deepEqual(view.calls[3], ['detail', 'Other-Alice'])
         assert.equal(otherRow.children[1].children.some(button => button.textContent === 'Fill'), false)
         view.render([])
         assert.equal(view.itemsEl.children.length, 0)
@@ -683,6 +686,64 @@ for (const browser of browsers) {
         assert.equal(commit.items.length, 1)
         assert.equal(commit.items[0].source.revision, 8)
         assert.equal(commit.items[0].source.xml, '<card/>')
+    })
+
+    test(`Popup ${browser}: failed fill preconditions always give visible feedback`, async () => {
+        const entry = editableItem()
+        const view = await popup(browser, { items: [entry] })
+        await view.api.fill({ item: { ...entry, host: 'different.example' } }, element())
+        assert.equal(view.elements.status.className, 'error')
+        assert.match(view.elements.status.textContent, /页面不可填充|cannot be filled/)
+
+        view.setState({ items: [] })
+        await view.api.fill({ item: entry }, element())
+        assert.equal(view.elements.status.className, 'error')
+        assert.match(view.elements.status.textContent, /条目已变化|item changed/)
+    })
+
+    test(`Popup ${browser}: site banner quick fill resolves matches from the unlocked session, not rendered filters`, async () => {
+        const entry = editableItem()
+        const view = await popup(browser, { items: [entry] })
+        view.elements.searchItems.value = 'no match'
+        await view.api.quickFillCurrentSite()
+        await new Promise(setImmediate)
+        assert.equal(view.fills.length, 1)
+        assert.equal(view.fills[0].candidate.item.id, entry.id)
+        assert.equal(view.fills[0].candidate.username, 'Alice')
+    })
+
+    test(`Popup ${browser}: matching row waits for fill success before closing`, async () => {
+        const entry = editableItem()
+        let finishFill
+        const pendingFill = new Promise(resolve => { finishFill = resolve })
+        const view = await popup(browser, { items: [entry], hooks: {
+            fillResponse: () => pendingFill,
+        } })
+        let closes = 0
+        view.window.close = () => { closes += 1 }
+        const row = view.elements.items.children.find(row => row.dataset.itemId === entry.id)
+        assert.ok(row)
+        row.children[0].listeners.click()
+        await new Promise(setImmediate)
+        assert.equal(view.fills.length, 1)
+        assert.equal(view.fills[0].candidate.item.id, entry.id)
+        assert.equal(closes, 0, 'wait for the page to acknowledge filling')
+        finishFill({ type: 'filled', ok: true })
+        await new Promise(setImmediate)
+        assert.equal(closes, 1)
+    })
+
+    test(`Popup ${browser}: matching row reports missing forms without closing`, async () => {
+        const view = await popup(browser, { items: [editableItem()], hooks: {
+            fillResponse: async () => ({ type: 'filled', ok: false }),
+        } })
+        let closes = 0
+        view.window.close = () => { closes += 1 }
+        view.elements.items.children[0].children[0].listeners.click()
+        await new Promise(setImmediate)
+        assert.equal(closes, 0)
+        assert.equal(view.elements.status.className, 'error')
+        assert.match(view.elements.status.textContent, /No fillable login form/)
     })
 
     test(`Popup ${browser}: fill sends only selected credentials with exact origin and no raw XML`, async () => {
