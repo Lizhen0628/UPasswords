@@ -6,6 +6,31 @@ on:
   pull_request:
 
 jobs:
+  api-test:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: "1"
+          MARIADB_DATABASE: upasswords_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      UPW_TEST_DSN: root@tcp(127.0.0.1:3306)/upasswords_test?multiStatements=true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: Cloud/api/go.sum
+      - name: Test Go API
+        working-directory: Cloud/api
+        run: go test -race -count=1 ./... && go vet ./...
+
   worker-test:
     runs-on: ubuntu-latest
     services:

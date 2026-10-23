@@ -8,14 +8,21 @@ HIBP(k-匿名,密码永不出设备)。
 
 ## 组成
 
+云 API 的当前生产运行目标是 Go + chi，部署于香港 `service-admin` 主机，并由
+Docker Compose 管理；MariaDB 继续使用内网数据库服务器，附件与站点图标继续存放在 R2。
+部署文件、环境模板及隔离集成测试位于 [`Cloud/api`](api/README.md)。Cloudflare
+代理负责 `api.upasswords.com` 的 TLS 与源站证书校验，Nginx 转发到仅绑定回环地址的 API。
+邮件暂由现有 163 SMTP 账号发送，注册和验证邮件分别设置回复地址。
+
 | 组件 | 说明 |
 |---|---|
-| Cloudflare Worker(TypeScript,唯一运行时依赖 mysql2) | `worker/src/{index,auth,vaults,items,rekey,attachments,sites,breach,stats,maintenance,smtp,db,util}.ts` |
+| Go + chi API(当前生产运行时) | `api/{cmd,internal}`；保留 `/v2` 契约，由香港服务器上的 Docker Compose 管理 |
+| Cloudflare Worker(TypeScript,兼容/回退运行时) | `worker/src/{index,auth,vaults,items,rekey,attachments,sites,breach,stats,maintenance,smtp,db,util}.ts` |
 | MariaDB 11.4(自管 `kvm-database`,库 `upasswords`) | users / email_codes / sessions / vaults / vault_items / item_changes / attachments / rekeys / rekey_staging / audit_log + websites / website_domains(`worker/sql/0001_init.sql`) |
 | R2(桶 `upasswords`) | 附件密文 `vaults/<id>/attachments/…` + 网站目录图标 `sites/icons/<sha256>` |
-| Hyperdrive | Worker → MariaDB 连接池(`[[hyperdrive.configs]]`,**待 `wrangler login` 后创建回填 id**) |
-| SMTP(smtp.163.com:465) | 验证码邮件(`cloudflare:sockets` 直连) |
-| 每日 cron 04:00 UTC | 注销到期清除、变更日志 90 天保留+地板推进、rekey 过期清理、附件孤儿清扫、staging 清扫、计数对账、审计 180 天 |
+| MariaDB 连接 | Go API 经私网 TLS 连接；Worker 回退时使用现有 Hyperdrive 配置 |
+| SMTP(smtp.163.com:465) | Go API 经 TLS 发送验证码邮件；回复地址按邮件用途设置 |
+| 每日维护 04:00 UTC | Go Compose scheduler 执行注销到期清除、变更日志保留+地板推进、rekey 过期清理、附件孤儿清扫、计数对账、审计保留；Worker 回退时恢复对应 Cron |
 
 ## 零知识要点
 
@@ -76,7 +83,13 @@ UPW_TEST_DB_SSL=1 npm test     # 19 用例:登录/限速/CAS/游标/rekey/附件
 # 见 .github/workflows/ci.yml 与 test/apply-schema.ts)
 ```
 
-## 部署(待完成:需先 `npx wrangler login`)
+## Go API 部署
+
+生产入口与服务器操作说明见 [`api/README.md`](api/README.md)。Cloudflare Worker
+代码和绑定保留用于回退；其 Cron 已在 Go 服务开始维护后停用。Worker 部署不再是
+当前 API 发布流程。
+
+## Worker 回退部署
 
 ```bash
 cd Cloud/worker

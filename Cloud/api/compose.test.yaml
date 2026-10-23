@@ -1,0 +1,30 @@
+name: upasswords-api-test
+services:
+  db:
+    image: mariadb:11.4
+    environment:
+      MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: "1"
+      MARIADB_DATABASE: upasswords_test
+    tmpfs:
+      - /var/lib/mysql:size=512m
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  test:
+    image: golang:1.26-bookworm
+    working_dir: /src/Cloud/api
+    volumes:
+      - ../..:/src
+      - go-mod:/go/pkg/mod
+      - go-build:/root/.cache/go-build
+    environment:
+      UPW_TEST_DSN: root@tcp(db:3306)/upasswords_test?multiStatements=true
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "go test -race -count=1 ./... && go vet ./..."]
+volumes:
+  go-mod:
+  go-build:

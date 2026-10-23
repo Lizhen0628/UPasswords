@@ -1,6 +1,6 @@
 # UPasswords 功能文档
 
-> 基线：当前工作树（v7 行级同步，含未提交改动）。本文描述当前代码的实际功能面，
+> 基线：当前工作树（v7 行级同步与 Go 服务端）。本文描述当前代码的实际功能面，
 > 不代表所有能力均已完成部署或本轮运行验收。架构细节见 `Cloud/DESIGN.md`，
 > 仓库结构见 `README.md`，开发规范见 `AGENTS.md`。
 > §9 汇总 Bitwarden、1Password、SafeInCloud／Safe 的个人／家庭功能覆盖；
@@ -17,7 +17,7 @@
 | iOS 自动填充扩展 | `Apple/iOS/AutoFill` | 密码、Passkey 注册／登录；验证码填充要求 iOS 18+ |
 | 浏览器扩展 ×4 | `WebExtensions` | Safari / Chrome / Edge / Firefox，密码库工作台、生成器、手动新建／编辑及用户名／密码填充 |
 
-云端协调服务 `api.upasswords.com` 使用 Cloudflare Worker + Hyperdrive + MariaDB，
+云端协调服务 `api.upasswords.com` 当前使用香港服务器上的 Go + chi API + MariaDB，
 承担账户、信封与行级加密条目存储；R2 提供独立附件密文存储接口。
 当前原生 App 的条目附件仍内嵌卡片，并非已完整接入独立附件服务；服务器不解密库内容。
 尚无 Windows／Android／Linux 原生客户端、独立网页密码库或用户密码管理 CLI。
@@ -154,7 +154,7 @@
 - **账户与会话**：邮箱验证码登录，首次登录即注册；账户授权与主密码解密分开。
   会话 90 天滑动有效，原生设置页可查看设备／当前会话并撤销；401 引导重新登录。
   邮箱验证码不是可叠加的 TOTP／硬件安全钥匙第二因素。
-- **数据存储**：Worker 经 Hyperdrive 访问 MariaDB，保存账户、会话、信封、
+- **数据存储**：Go API 经私网 TLS 访问 MariaDB，保存账户、会话、信封、
   卡片／标签密文行与变更日志。信封另由 APP_KEK 应用层加密保护；
   日常同步不再上传整个 `.upw` 或依赖 v6 双哈希短路／R2 库体镜像。
 - **同步协议**：客户端保存 revision、游标与脏集合，经 `/v2` 按游标增量拉取、

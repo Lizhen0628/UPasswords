@@ -1,12 +1,11 @@
 # UPasswords 云同步设计 v7（MariaDB 行级存储 + local-first 同步）
 
-状态：**v7 · 已实施**（Worker /v2 + MariaDB DDL + Core/Persistence/macOS/iOS/扩展客户端，
-2026-10-18；云端上线仅剩 Hyperdrive 创建 + deploy，需 `npx wrangler login`）。
+状态：**v7 · 已实施**（`/v2` + MariaDB DDL + Core/Persistence/macOS/iOS/扩展客户端；
+生产 API 已由 Go + chi 在香港服务器承载，Cloudflare Worker 保留为回退实现）。
 取代 v6「库体单文件 + R2 密文副本」方案；
 v6 全文见 git 历史（`922e335`）。本文是目标架构的完整规格，实施顺序见 §10。
 
-> 应用处于开发期、未上架：**不承载任何存量用户数据**，所有格式（条目标识、
-> 同步协议、API 版本）直接切到 v7 形态，不写兼容迁移。
+> 客户端及数据格式的历史设计背景；当前部署状态见 `Cloud/api/README.md`。
 
 ## 0. 变更总览（v6 → v7）
 
