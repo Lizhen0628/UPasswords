@@ -125,12 +125,12 @@ async function route(ctx: RouteCtx): Promise<Response> {
   const method = ctx.request.method;
   const auth = () => authenticate(ctx);
 
-  // "/" 与 "/v2" → 能力协商
-  if (segments.length === 0 || (segments.length === 1 && segments[0] === "v2")) {
+  // Both route prefixes expose the same row-sync protocol during migration.
+  if (segments.length === 0 || (segments.length === 1 && ["v1", "v2"].includes(segments[0]))) {
     if (method !== "GET") throw methodNotAllowed();
     return capabilities();
   }
-  const rest = segments[0] === "v2" ? segments.slice(1) : null;
+  const rest = ["v1", "v2"].includes(segments[0]) ? segments.slice(1) : null;
   if (!rest) throw new ApiError(404, "not_found");
 
   if (rest[0] === "auth") {

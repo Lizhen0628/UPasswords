@@ -1,0 +1,49 @@
+name: upasswords
+services:
+  api: &api
+    image: upasswords-api:local
+    build: .
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        format: raw
+    volumes:
+      - ./secrets/mariadb.pem:/run/secrets/mariadb.pem:ro
+    expose:
+      - "8080"
+    ports:
+      - "127.0.0.1:18080:8080"
+    networks:
+      - proxy
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    cpus: 2.0
+    pids_limit: 128
+    stop_grace_period: 25s
+    healthcheck:
+      test: ["CMD", "upasswords-api", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  maintenance:
+    <<: *api
+    command: ["schedule"]
+    ports: []
+    healthcheck:
+      disable: true
+networks:
+  proxy:
+    external: true
+    name: ipv6bridge
