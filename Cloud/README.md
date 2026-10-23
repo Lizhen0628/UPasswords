@@ -3,7 +3,7 @@
 架构与安全模型详见 [DESIGN.md](DESIGN.md)(**v7 已实施**:MariaDB 行级密文
 条目 + R2 附件 + Hyperdrive;测试验收见 [TESTING.md](TESTING.md))。
 服务端对库内容零知识:密码项以**单条目 AES-GCM 密文行**存于自管 MariaDB,
-条目标识为 UUID,编辑只改行;附件密文 blob 在 R2;`/v2/breach/range` 代理
+条目标识为 UUID,编辑只改行;附件密文 blob 在 R2;`/v1/breach/range` 代理
 HIBP(k-匿名,密码永不出设备)。
 
 ## 组成
@@ -16,7 +16,7 @@ Docker Compose 管理；MariaDB 继续使用内网数据库服务器，附件与
 
 | 组件 | 说明 |
 |---|---|
-| Go + chi API(当前生产运行时) | `api/{cmd,internal}`；保留 `/v2` 契约，由香港服务器上的 Docker Compose 管理 |
+| Go + chi API(当前生产运行时) | `api/{cmd,internal}`；主路径 `/v1`，兼容 `/v2`，由香港服务器上的 Docker Compose 管理 |
 | Cloudflare Worker(TypeScript,兼容/回退运行时) | `worker/src/{index,auth,vaults,items,rekey,attachments,sites,breach,stats,maintenance,smtp,db,util}.ts` |
 | MariaDB 11.4(自管 `kvm-database`,库 `upasswords`) | users / email_codes / sessions / vaults / vault_items / item_changes / attachments / rekeys / rekey_staging / audit_log + websites / website_domains(`worker/sql/0001_init.sql`) |
 | R2(桶 `upasswords`) | 附件密文 `vaults/<id>/attachments/…` + 网站目录图标 `sites/icons/<sha256>` |
@@ -34,39 +34,42 @@ Docker Compose 管理；MariaDB 继续使用内网数据库服务器，附件与
 - 泄漏检测经自有端点代理 HIBP(HIBP 不见用户 IP);站点查询域名/泄漏
   查询前缀一律不进日志。
 
-## 接口(/v2,整体取代 v1)
+## 接口
+
+客户端当前使用 `/v1/` 路径；`/v2/` 同时保留兼容旧客户端。能力协商返回的 `version: 2`
+表示行级同步协议版本，两种路径访问同一协议与数据。
 
 ```
-GET  /v2/                                      能力协商 {version:2, rowSync:true,…}
-POST /v2/auth/code        {email, purpose?}    发验证码(login|sensitive) 202 恒定
-POST /v2/auth/verify      {email, code, deviceName?, platform?} → {token, expiresAt, userId}
-GET  /v2/auth/sessions    Bearer               设备列表(含 platform;发起方会话标 current)
-DELETE /v2/auth/sessions/{id}                  撤销设备
-PATCH /v2/auth/session    {deviceName}         会话自命名
-DELETE /v2/auth/session   Bearer               自撤销(登出/重登收尾)
-DELETE /v2/account        {code=sensitive 码}  注销(级联清行+R2+撤会话)
-POST /v2/vaults           {name, envelope}     登记(创建即携带初始信封) → {vaultId}
-GET  /v2/vaults                                库列表(元数据)
-GET  /v2/vaults/{id}                           单库(含信封 b64)
-GET  /v2/vaults/{id}/seq                       {headSeq, passwordVersion}(便宜轮询)
-PATCH /v2/vaults/{id}     {name}               改名
-POST /v2/vaults/{id}/transfer {email,code,currentCode,deviceName?}  换绑邮箱
-DELETE /v2/vaults/{id}    {code}               解绑(清行+R2 前缀)
-POST /v2/vaults/{id}/items    {items:[{uuid,kind,op,baseRevision,bodyB64?,sha256?,modifiedMs}]}
+GET  /v1/                                      能力协商 {version:2, rowSync:true,…}
+POST /v1/auth/code        {email, purpose?}    发验证码(login|sensitive) 202 恒定
+POST /v1/auth/verify      {email, code, deviceName?, platform?} → {token, expiresAt, userId}
+GET  /v1/auth/sessions    Bearer               设备列表(含 platform;发起方会话标 current)
+DELETE /v1/auth/sessions/{id}                  撤销设备
+PATCH /v1/auth/session    {deviceName}         会话自命名
+DELETE /v1/auth/session   Bearer               自撤销(登出/重登收尾)
+DELETE /v1/account        {code=sensitive 码}  注销(级联清行+R2+撤会话)
+POST /v1/vaults           {name, envelope}     登记(创建即携带初始信封) → {vaultId}
+GET  /v1/vaults                                库列表(元数据)
+GET  /v1/vaults/{id}                           单库(含信封 b64)
+GET  /v1/vaults/{id}/seq                       {headSeq, passwordVersion}(便宜轮询)
+PATCH /v1/vaults/{id}     {name}               改名
+POST /v1/vaults/{id}/transfer {email,code,currentCode,deviceName?}  换绑邮箱
+DELETE /v1/vaults/{id}    {code}               解绑(清行+R2 前缀)
+POST /v1/vaults/{id}/items    {items:[{uuid,kind,op,baseRevision,bodyB64?,sha256?,modifiedMs}]}
                                                批量 CAS 上行 → 逐条 ok|conflict|not_found
-GET  /v2/vaults/{id}/changes?since=&limit=     游标增量下行(410 cursor_expired)
-GET  /v2/vaults/{id}/items?cursorMs=&cursorUuid=&limit=   全量重建 keyset 分页
-PUT  /v2/vaults/{id}/attachments/{uuid}?upload=UID        附件密文暂存(octet-stream)
-POST /v2/vaults/{id}/attachments/{uuid}/commit {uploadId,sha256,cardUuid,dekWrapped}
-GET  /v2/vaults/{id}/attachments/{uuid}                    拉取密文流
-DELETE /v2/vaults/{id}/attachments/{uuid}                  删行+删 blob
-POST /v2/vaults/{id}/rekey/begin → /rekey/{rekeyId}/chunk → /commit(DELETE 放弃)
+GET  /v1/vaults/{id}/changes?since=&limit=     游标增量下行(410 cursor_expired)
+GET  /v1/vaults/{id}/items?cursorMs=&cursorUuid=&limit=   全量重建 keyset 分页
+PUT  /v1/vaults/{id}/attachments/{uuid}?upload=UID        附件密文暂存(octet-stream)
+POST /v1/vaults/{id}/attachments/{uuid}/commit {uploadId,sha256,cardUuid,dekWrapped}
+GET  /v1/vaults/{id}/attachments/{uuid}                    拉取密文流
+DELETE /v1/vaults/{id}/attachments/{uuid}                  删行+删 blob
+POST /v1/vaults/{id}/rekey/begin → /rekey/{rekeyId}/chunk → /commit(DELETE 放弃)
                                                改密 VEK 轮换(全部行 revision+1)
-GET  /v2/sites/lookup?domain=                   网站目录(名称+图标 b64)
-GET  /v2/sites/icon/{sha256}                    图标字节流(ETag 强缓存)
-POST /v2/admin/sites        X-Admin-Token       目录批量 upsert
-GET  /v2/breach/range/{5位hex前缀}              泄漏检测代理(与 HIBP 同形)
-GET  /v2/admin/stats        X-Admin-Token       只读统计
+GET  /v1/sites/lookup?domain=                   网站目录(名称+图标 b64)
+GET  /v1/sites/icon/{sha256}                    图标字节流(ETag 强缓存)
+POST /v1/admin/sites        X-Admin-Token       目录批量 upsert
+GET  /v1/breach/range/{5位hex前缀}              泄漏检测代理(与 HIBP 同形)
+GET  /v1/admin/stats        X-Admin-Token       只读统计
 ```
 
 ## 本地测试(直连真实 MariaDB)

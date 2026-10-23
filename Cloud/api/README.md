@@ -1,6 +1,8 @@
 # Go API Deployment
 
-The `/v2` API runs on the Hong Kong origin. Nginx runs in the existing `nginxui`
+The canonical API prefix is `/v1/`; `/v2/` remains available as a compatibility alias
+for already-installed clients. Both prefixes expose the same row-sync protocol
+(capability version 2), handlers, and data. Nginx runs in the existing `nginxui`
 container and forwards requests to the API over the existing Docker network. MariaDB
 remains on the private network and encrypted attachments remain in the Cloudflare R2
 bucket.

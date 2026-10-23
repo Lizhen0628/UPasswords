@@ -3,7 +3,7 @@ import CryptoKit
 import UPasswordsCore
 import UPasswordsPersistence
 
-/// 修改密码、备份、行级云同步(api.upasswords.com /v2,见 Cloud/DESIGN.md §6):
+/// 修改密码、备份、行级云同步(api.upasswords.com /v1,见 Cloud/DESIGN.md §6):
 /// 拉取(游标增量) → 上行(脏集合 CAS);冲突逐条 LWW 自动收敛,无整库弹窗。
 extension AppContext {
 

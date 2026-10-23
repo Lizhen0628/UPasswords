@@ -48,7 +48,7 @@ final class RelayClientTests: XCTestCase {
     func testVerifyParsesSession() async throws {
         let token = String(repeating: "a", count: 64)
         MockURLProtocol.handler = { [token] request in
-            XCTAssertEqual(request.url?.path, "/v2/auth/verify")
+            XCTAssertEqual(request.url?.path, "/v1/auth/verify")
             XCTAssertEqual(request.httpMethod, "POST")
             let body = """
             {"token":"\(token)","expiresAt":1900000000000,"userId":"u1"}
@@ -65,11 +65,11 @@ final class RelayClientTests: XCTestCase {
 
     func testListSessionsParsesCurrentFlagAndSelfRevoke() async throws {
         MockURLProtocol.handler = { request in
-            if request.url?.path == "/v2/auth/session", request.httpMethod == "DELETE" {
+            if request.url?.path == "/v1/auth/session", request.httpMethod == "DELETE" {
                 return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
                         Data(#"{"ok":true}"#.utf8))
             }
-            XCTAssertEqual(request.url?.path, "/v2/auth/sessions")
+            XCTAssertEqual(request.url?.path, "/v1/auth/sessions")
             let body = """
             {"sessions":[
               {"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","deviceName":"iPhone 18 Pro · iPhone","platform":"ios","current":true,"lastSeenAt":1000.0},
@@ -85,7 +85,7 @@ final class RelayClientTests: XCTestCase {
         XCTAssertEqual(sessions[0].platform, "ios")
         XCTAssertEqual(sessions[0].lastSeenAt?.timeIntervalSince1970 ?? 0, 1, accuracy: 0.001)
         XCTAssertFalse(sessions[1].isCurrent)
-        // 自撤销:DELETE /v2/auth/session(鉴权即身份,不带会话号)
+        // 自撤销:DELETE /v1/auth/session(鉴权即身份,不带会话号)
         try await client.revokeOwnSession(token: "t")
     }
 
@@ -93,7 +93,7 @@ final class RelayClientTests: XCTestCase {
         let envelope = Data([0x55, 0x50, 0x57, 0x4b, 0x45, 0x59, 0x31, 0x00] + Array(repeating: 7, count: 112))
         let b64 = envelope.base64EncodedString()
         MockURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v2/vaults/abc123")
+            XCTAssertEqual(request.url?.path, "/v1/vaults/abc123")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer t1")
             let body = """
             {"vaultId":"abc123","name":"Main","passwordVersion":3,"passwordChangedAt":100.0,
@@ -112,7 +112,7 @@ final class RelayClientTests: XCTestCase {
 
     func testVaultSeq() async throws {
         MockURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v2/vaults/vv/seq")
+            XCTAssertEqual(request.url?.path, "/v1/vaults/vv/seq")
             return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
                     Data(#"{"headSeq":99,"passwordVersion":1}"#.utf8))
         }
@@ -124,14 +124,14 @@ final class RelayClientTests: XCTestCase {
     func testPostItemsAndChangesParse() async throws {
         let uuid = UUID()
         MockURLProtocol.handler = { request in
-            if request.url?.path == "/v2/vaults/vv/items", request.httpMethod == "POST" {
+            if request.url?.path == "/v1/vaults/vv/items", request.httpMethod == "POST" {
                 let body = """
                 {"results":[{"uuid":"\(uuid.uuidString)","status":"ok","revision":1}]}
                 """
                 return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
                         Data(body.utf8))
             }
-            XCTAssertEqual(request.url?.path, "/v2/vaults/vv/changes")
+            XCTAssertEqual(request.url?.path, "/v1/vaults/vv/changes")
             let body = """
             {"headSeq":5,"changes":[{"seq":5,"uuid":"\(uuid.uuidString)","op":"upsert","revision":1,
              "bodyB64":"AAAA","kind":1,"modifiedMs":123.0}]}
@@ -261,7 +261,7 @@ final class RowSyncTests: XCTestCase {
         state.markDirty(uuid: label.id, modifiedMs: 900)
 
         MockURLProtocol.handler = { [card, label] request in
-            XCTAssertEqual(request.url?.path, "/v2/vaults/v1/items")
+            XCTAssertEqual(request.url?.path, "/v1/vaults/v1/items")
             let body = """
             {"results":[{"uuid":"\(card.id.uuidString)","status":"ok","revision":1},
                          {"uuid":"\(label.id.uuidString)","status":"ok","revision":1}]}
@@ -285,7 +285,7 @@ final class RowSyncTests: XCTestCase {
         let sealed = try sealedBody(.card(remote))
 
         MockURLProtocol.handler = { [remote, sealed] request in
-            XCTAssertEqual(request.url?.path, "/v2/vaults/v1/changes")
+            XCTAssertEqual(request.url?.path, "/v1/vaults/v1/changes")
             let body = """
             {"headSeq":7,"changes":[{"seq":7,"uuid":"\(remote.id.uuidString)","op":"upsert","revision":1,
              "bodyB64":"\(sealed)","kind":1,"modifiedMs":5000.0}]}

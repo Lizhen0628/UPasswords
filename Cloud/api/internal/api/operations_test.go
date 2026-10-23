@@ -3,6 +3,8 @@ package api
 import (
 	"bytes"
 	"database/sql"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -45,5 +47,22 @@ func TestMaintenanceSchedule(t *testing.T) {
 	}
 	if nextMaintenance(ts.Add(-time.Minute)) != ts {
 		t.Fatal("schedule before boundary")
+	}
+}
+
+func TestVersionedRouteCompatibility(t *testing.T) {
+	s := &Server{Log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
+	h := s.Handler()
+	for _, path := range []string{"/v1/", "/v2/"} {
+		status, body := call(t, h, "GET", path, "", nil)
+		if status != 200 || body["version"] != float64(2) {
+			t.Errorf("capability route %s returned %d", path, status)
+		}
+	}
+	for _, path := range []string{"/v1/vaults", "/v2/vaults"} {
+		status, _ := call(t, h, "GET", path, "", nil)
+		if status != 401 {
+			t.Errorf("protected route %s returned %d without a token", path, status)
+		}
 	}
 }

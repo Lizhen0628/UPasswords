@@ -183,7 +183,7 @@ public struct RelayClient {
     public func requestCode(email: String, purpose: Purpose = .login, lang: String = "en") async throws {
         struct Empty: Decodable {}
         let _: Empty = try await send(
-            "POST", "/v2/auth/code",
+            "POST", "/v1/auth/code",
             body: ["email": email, "purpose": purpose.rawValue, "lang": lang],
             token: nil)
     }
@@ -197,7 +197,7 @@ public struct RelayClient {
             let userId: String
         }
         let response: Response = try await send(
-            "POST", "/v2/auth/verify",
+            "POST", "/v1/auth/verify",
             body: ["email": email, "code": code, "deviceName": deviceName, "platform": platform.rawValue],
             token: nil)
         return Session(
@@ -218,7 +218,7 @@ public struct RelayClient {
             }
             let sessions: [Item]
         }
-        let response: Response = try await send("GET", "/v2/auth/sessions", body: nil, token: token)
+        let response: Response = try await send("GET", "/v1/auth/sessions", body: nil, token: token)
         return response.sessions.map {
             DeviceSession(id: $0.id, deviceName: $0.deviceName, platform: $0.platform ?? "other",
                           isCurrent: $0.current ?? false,
@@ -229,20 +229,20 @@ public struct RelayClient {
     /// 撤销指定设备会话。
     public func revokeSession(token: String, id: String) async throws {
         struct Empty: Decodable {}
-        let _: Empty = try await send("DELETE", "/v2/auth/sessions/\(id)", body: nil, token: token)
+        let _: Empty = try await send("DELETE", "/v1/auth/sessions/\(id)", body: nil, token: token)
     }
 
     /// 自撤销:吊销调用方令牌自己的会话(登出/重登收尾,鉴权即身份)。
     public func revokeOwnSession(token: String) async throws {
         struct Empty: Decodable {}
-        let _: Empty = try await send("DELETE", "/v2/auth/session", body: nil, token: token)
+        let _: Empty = try await send("DELETE", "/v1/auth/session", body: nil, token: token)
     }
 
     /// 会话自命名:调用方会话更新自己的设备名(解锁后刷新)。
     public func renameSession(token: String, deviceName: String) async throws {
         struct Empty: Decodable {}
         let _: Empty = try await send(
-            "PATCH", "/v2/auth/session",
+            "PATCH", "/v1/auth/session",
             body: ["deviceName": deviceName],
             token: token)
     }
@@ -250,7 +250,7 @@ public struct RelayClient {
     /// 注销账户(需 sensitive 验证码;立即清空服务端数据并吊销全部会话)。
     public func deregister(token: String, code: String) async throws {
         struct Empty: Decodable {}
-        let _: Empty = try await send("DELETE", "/v2/account", body: ["code": code], token: token)
+        let _: Empty = try await send("DELETE", "/v1/account", body: ["code": code], token: token)
     }
 
     // MARK: - 库注册表
@@ -259,7 +259,7 @@ public struct RelayClient {
     public func createVault(token: String, name: String, envelope: Data?) async throws -> String {
         struct Response: Decodable { let vaultId: String }
         let response: Response = try await send(
-            "POST", "/v2/vaults",
+            "POST", "/v1/vaults",
             body: ["name": name, "envelope": envelope?.base64EncodedString() as Any? ?? NSNull()],
             token: token)
         Log.info("sync", "relay vault registered id=\(response.vaultId.prefix(8))… name-length=\(name.count)")
@@ -279,7 +279,7 @@ public struct RelayClient {
             let headSeq: Int?
             let itemCount: Int?
         }
-        let response: Response = try await send("GET", "/v2/vaults", body: nil, token: token)
+        let response: Response = try await send("GET", "/v1/vaults", body: nil, token: token)
         return response.vaults.map {
             VaultRecord(
                 vaultId: $0.vaultId, name: $0.name, passwordVersion: $0.passwordVersion,
@@ -303,7 +303,7 @@ public struct RelayClient {
             let headSeq: Int?
             let itemCount: Int?
         }
-        let item: Item = try await send("GET", "/v2/vaults/\(vaultId)", body: nil, token: token)
+        let item: Item = try await send("GET", "/v1/vaults/\(vaultId)", body: nil, token: token)
         return VaultRecord(
             vaultId: item.vaultId, name: item.name, passwordVersion: item.passwordVersion,
             passwordChangedAt: item.passwordChangedAt.map(Self.dateFromServerMs),
@@ -316,7 +316,7 @@ public struct RelayClient {
     /// 便宜轮询:库变更高水位 + 改密版本(活跃设备每 60s 打一次)。
     public func vaultSeq(token: String, vaultId: String) async throws -> (headSeq: Int, passwordVersion: Int) {
         struct Response: Decodable { let headSeq: Int; let passwordVersion: Int }
-        let response: Response = try await send("GET", "/v2/vaults/\(vaultId)/seq", body: nil, token: token)
+        let response: Response = try await send("GET", "/v1/vaults/\(vaultId)/seq", body: nil, token: token)
         return (response.headSeq, response.passwordVersion)
     }
 
@@ -324,14 +324,14 @@ public struct RelayClient {
     public func deleteVault(token: String, vaultId: String, code: String) async throws {
         struct Empty: Decodable {}
         let _: Empty = try await send(
-            "DELETE", "/v2/vaults/\(vaultId)", body: ["code": code], token: token)
+            "DELETE", "/v1/vaults/\(vaultId)", body: ["code": code], token: token)
     }
 
     /// 库改名(vaultId 不变)。
     public func renameVault(token: String, vaultId: String, name: String) async throws {
         struct Empty: Decodable {}
         let _: Empty = try await send(
-            "PATCH", "/v2/vaults/\(vaultId)", body: ["name": name], token: token)
+            "PATCH", "/v1/vaults/\(vaultId)", body: ["name": name], token: token)
         Log.info("sync", "relay vault renamed id=\(vaultId.prefix(8))… name-length=\(name.count)")
     }
 
@@ -345,7 +345,7 @@ public struct RelayClient {
             let userId: String
         }
         let response: Response = try await send(
-            "POST", "/v2/vaults/\(vaultId)/transfer",
+            "POST", "/v1/vaults/\(vaultId)/transfer",
             body: ["email": email, "code": code, "currentCode": currentCode,
                    "deviceName": deviceName, "platform": platform.rawValue],
             token: token)
@@ -389,7 +389,7 @@ public struct RelayClient {
             return entry
         }
         let response: Response = try await send(
-            "POST", "/v2/vaults/\(vaultId)/items",
+            "POST", "/v1/vaults/\(vaultId)/items",
             body: ["items": payload], token: token)
         var out: [UUID: ItemOutcome] = [:]
         for r in response.results {
@@ -424,7 +424,7 @@ public struct RelayClient {
             let changes: [Entry]
         }
         let response: Response = try await send(
-            "GET", "/v2/vaults/\(vaultId)/changes?since=\(since)&limit=\(limit)",
+            "GET", "/v1/vaults/\(vaultId)/changes?since=\(since)&limit=\(limit)",
             body: nil, token: token)
         let entries = response.changes.compactMap { e -> ChangeEntry? in
             // 库级 op=rekey 条目 uuid 为空串(无条目归属),映射全零 UUID
@@ -460,7 +460,7 @@ public struct RelayClient {
             }
         }
         let response: Response = try await send(
-            "GET", "/v2/vaults/\(vaultId)/items?cursorMs=\(cursorMs)&cursorUuid=\(cursorUuid)&limit=\(limit)",
+            "GET", "/v1/vaults/\(vaultId)/items?cursorMs=\(cursorMs)&cursorUuid=\(cursorUuid)&limit=\(limit)",
             body: nil, token: token)
         let items = response.items.compactMap { i -> ListedItem? in
             guard let uuid = UUID(uuidString: i.uuid) else { return nil }
@@ -478,7 +478,7 @@ public struct RelayClient {
         let uploadId = Self.randomUploadId()
         let sha = SyncConflict.sha256Hex(cipher)
         guard let url = URL(
-            string: "/v2/vaults/\(vaultId)/attachments/\(attachUuid.uuidString)?upload=\(uploadId)",
+            string: "/v1/vaults/\(vaultId)/attachments/\(attachUuid.uuidString)?upload=\(uploadId)",
             relativeTo: baseURL) else {
             throw RelayError.network("bad url")
         }
@@ -490,7 +490,7 @@ public struct RelayClient {
         _ = try await runRaw(request)
         struct Empty: Decodable {}
         let _: Empty = try await send(
-            "POST", "/v2/vaults/\(vaultId)/attachments/\(attachUuid.uuidString)/commit",
+            "POST", "/v1/vaults/\(vaultId)/attachments/\(attachUuid.uuidString)/commit",
             body: ["uploadId": uploadId, "sha256": sha, "cardUuid": cardUuid.uuidString,
                    "dekWrapped": dekWrapped.base64EncodedString()],
             token: token)
@@ -500,7 +500,7 @@ public struct RelayClient {
     /// 附件密文拉取(懒拉取;无副本抛 notFound)。
     public func getAttachment(token: String, vaultId: String, attachUuid: UUID) async throws -> Data {
         guard let url = URL(
-            string: "/v2/vaults/\(vaultId)/attachments/\(attachUuid.uuidString)",
+            string: "/v1/vaults/\(vaultId)/attachments/\(attachUuid.uuidString)",
             relativeTo: baseURL) else {
             throw RelayError.network("bad url")
         }
@@ -515,7 +515,7 @@ public struct RelayClient {
     public func deleteAttachment(token: String, vaultId: String, attachUuid: UUID) async throws {
         struct Empty: Decodable {}
         let _: Empty = try await send(
-            "DELETE", "/v2/vaults/\(vaultId)/attachments/\(attachUuid.uuidString)",
+            "DELETE", "/v1/vaults/\(vaultId)/attachments/\(attachUuid.uuidString)",
             body: nil, token: token)
     }
 
@@ -526,7 +526,7 @@ public struct RelayClient {
                            itemCount: Int, dekCount: Int) async throws -> (rekeyId: String, passwordVersion: Int) {
         struct Response: Decodable { let rekeyId: String; let passwordVersion: Int }
         let response: Response = try await send(
-            "POST", "/v2/vaults/\(vaultId)/rekey/begin",
+            "POST", "/v1/vaults/\(vaultId)/rekey/begin",
             body: ["envelope": envelope.base64EncodedString(),
                    "itemCount": itemCount, "dekCount": dekCount],
             token: token)
@@ -543,7 +543,7 @@ public struct RelayClient {
             "sha256": $0.sha256,
         ] as [String: Any] }
         let _: Empty = try await send(
-            "POST", "/v2/vaults/\(vaultId)/rekey/\(rekeyId)/chunk",
+            "POST", "/v1/vaults/\(vaultId)/rekey/\(rekeyId)/chunk",
             body: ["items": payload], token: token)
     }
 
@@ -551,7 +551,7 @@ public struct RelayClient {
     public func rekeyCommit(token: String, vaultId: String, rekeyId: String) async throws {
         struct Empty: Decodable {}
         let _: Empty = try await send(
-            "POST", "/v2/vaults/\(vaultId)/rekey/\(rekeyId)/commit",
+            "POST", "/v1/vaults/\(vaultId)/rekey/\(rekeyId)/commit",
             body: [:], token: token)
     }
 
@@ -559,7 +559,7 @@ public struct RelayClient {
     public func rekeyAbort(token: String, vaultId: String, rekeyId: String) async throws {
         struct Empty: Decodable {}
         let _: Empty = try await send(
-            "DELETE", "/v2/vaults/\(vaultId)/rekey/\(rekeyId)",
+            "DELETE", "/v1/vaults/\(vaultId)/rekey/\(rekeyId)",
             body: nil, token: token)
     }
 

@@ -110,7 +110,7 @@ func testServer(t *testing.T) (*Server, *testMailer) {
 	}
 	db.SetMaxOpenConns(16)
 	mail := &testMailer{Codes: map[string]string{}}
-	s := &Server{DB: db, Config: Config{KEK: bytes.Repeat([]byte{0x11}, 32), AdminToken: "test-only-admin-token", Limits: map[string]int64{}, TrustedProxy: "172.104.1.2"}, Objects: &memoryStore{Objects: map[string]memoryObject{}}, Mailer: mail, Log: slog.New(slog.NewJSONHandler(io.Discard, nil)), HTTP: &http.Client{Timeout: time.Second}}
+	s := &Server{DB: db, Config: Config{KEK: bytes.Repeat([]byte{0x11}, 32), AdminToken: "test-only-admin-token", Limits: map[string]int64{"CODE_HOURLY_PER_IP": 1000}, TrustedProxy: "172.104.1.2"}, Objects: &memoryStore{Objects: map[string]memoryObject{}}, Mailer: mail, Log: slog.New(slog.NewJSONHandler(io.Discard, nil)), HTTP: &http.Client{Timeout: time.Second}}
 	return s, mail
 }
 func call(t *testing.T, h http.Handler, method, path, token string, v any) (int, map[string]any) {
@@ -140,11 +140,11 @@ func call(t *testing.T, h http.Handler, method, path, token string, v any) (int,
 func login(t *testing.T, s *Server, m *testMailer, em string) (string, string) {
 	t.Helper()
 	h := s.Handler()
-	code, _ := call(t, h, "POST", "/v2/auth/code", "", map[string]any{"email": em})
+	code, _ := call(t, h, "POST", "/v1/auth/code", "", map[string]any{"email": em})
 	if code != 202 {
 		t.Fatalf("code status %d", code)
 	}
-	code, out := call(t, h, "POST", "/v2/auth/verify", "", map[string]any{"email": em, "code": m.get(em, "login"), "platform": "macos", "deviceName": "test"})
+	code, out := call(t, h, "POST", "/v1/auth/verify", "", map[string]any{"email": em, "code": m.get(em, "login"), "platform": "macos", "deviceName": "test"})
 	if code != 200 {
 		t.Fatalf("login %d %v", code, out)
 	}
@@ -153,7 +153,7 @@ func login(t *testing.T, s *Server, m *testMailer, em string) (string, string) {
 func fakeEnvelope() string { b := make([]byte, 120); copy(b, []byte("UPWKEY1\x00")); return b64(b) }
 func newVault(t *testing.T, h http.Handler, token string) string {
 	t.Helper()
-	status, v := call(t, h, "POST", "/v2/vaults", token, map[string]any{"name": "Test-" + randomHex(4), "envelope": fakeEnvelope()})
+	status, v := call(t, h, "POST", "/v1/vaults", token, map[string]any{"name": "Test-" + randomHex(4), "envelope": fakeEnvelope()})
 	if status != 201 {
 		t.Fatalf("create vault %d %v", status, v)
 	}
@@ -215,7 +215,7 @@ func TestSyncIsolationCASAndRekey(t *testing.T) {
 	token, uid := login(t, s, m, "sync-"+randomHex(5)+"@example.com")
 	other, _ := login(t, s, m, "other-"+randomHex(5)+"@example.com")
 	vid := newVault(t, h, token)
-	base := "/v2/vaults/" + vid
+	base := "/v1/vaults/" + vid
 	id := "12345678-1234-4234-8234-123456789abc"
 	label := "22345678-1234-4234-8234-123456789abc"
 	for _, path := range []string{base, base + "/seq", base + "/items", base + "/changes?since=0", base + "/attachments/" + id} {

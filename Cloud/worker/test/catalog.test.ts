@@ -115,15 +115,17 @@ describe("breach range proxy", () => {
 });
 
 describe("capabilities & stats", () => {
-  it("GET /v2 advertises row_sync and v2 capabilities", async () => {
+  it("GET /v1 and /v2 expose the same row-sync capability document", async () => {
     const env = workerEnv();
-    const res = await call(env, "GET", "/v2");
-    expect(res.status).toBe(200);
-    expect(res.headers.get("strict-transport-security")).toContain("max-age");
-    const data = (await res.json()) as { version: number; capabilities: string[] };
-    expect(data.version).toBe(2);
-    expect(data.capabilities).toContain("vaults.row_sync");
-    expect(data.capabilities).toContain("breach.range");
+    for (const path of ["/v1/", "/v2"]) {
+      const res = await call(env, "GET", path);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("strict-transport-security")).toContain("max-age");
+      const data = (await res.json()) as { version: number; capabilities: string[] };
+      expect(data.version).toBe(2);
+      expect(data.capabilities).toContain("vaults.row_sync");
+      expect(data.capabilities).toContain("breach.range");
+    }
   });
 
   it("admin stats require token and aggregate counters", async () => {

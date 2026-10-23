@@ -16,7 +16,7 @@ func TestAttachmentOwnershipAndCommitFailure(t *testing.T) {
 	other, _ := login(t, s, m, "attother-"+randomHex(5)+"@example.com")
 	vid := newVault(t, h, token)
 	id := "32345678-1234-4234-8234-123456789abc"
-	path := "/v2/vaults/" + vid + "/attachments/" + id
+	path := "/v1/vaults/" + vid + "/attachments/" + id
 	upload := randomHex(16)
 	raw := []byte("encrypted-attachment")
 	req := httptest.NewRequest("PUT", path+"?upload="+upload, bytes.NewReader(raw))
@@ -60,7 +60,7 @@ func TestCodeAttemptsReplayAndSessionRevocation(t *testing.T) {
 	s, m := testServer(t)
 	h := s.Handler()
 	em := "code-" + randomHex(5) + "@example.com"
-	if code, _ := call(t, h, "POST", "/v2/auth/code", "", map[string]any{"email": em}); code != 202 {
+	if code, _ := call(t, h, "POST", "/v1/auth/code", "", map[string]any{"email": em}); code != 202 {
 		t.Fatal(code)
 	}
 	correct := m.get(em, "login")
@@ -69,22 +69,22 @@ func TestCodeAttemptsReplayAndSessionRevocation(t *testing.T) {
 		wrong = "000001"
 	}
 	for i := 0; i < 5; i++ {
-		if code, _ := call(t, h, "POST", "/v2/auth/verify", "", map[string]any{"email": em, "code": wrong}); code != 400 {
+		if code, _ := call(t, h, "POST", "/v1/auth/verify", "", map[string]any{"email": em, "code": wrong}); code != 400 {
 			t.Fatal("wrong code accepted")
 		}
 	}
-	if code, _ := call(t, h, "POST", "/v2/auth/verify", "", map[string]any{"email": em, "code": correct}); code != 400 {
+	if code, _ := call(t, h, "POST", "/v1/auth/verify", "", map[string]any{"email": em, "code": correct}); code != 400 {
 		t.Fatal("attempt limit bypassed")
 	}
 	em = "replay-" + randomHex(5) + "@example.com"
 	token, _ := login(t, s, m, em)
-	if code, _ := call(t, h, "POST", "/v2/auth/verify", "", map[string]any{"email": em, "code": m.get(em, "login")}); code != 400 {
+	if code, _ := call(t, h, "POST", "/v1/auth/verify", "", map[string]any{"email": em, "code": m.get(em, "login")}); code != 400 {
 		t.Fatal("code replay accepted")
 	}
-	if code, _ := call(t, h, "DELETE", "/v2/auth/session", token, nil); code != 200 {
+	if code, _ := call(t, h, "DELETE", "/v1/auth/session", token, nil); code != 200 {
 		t.Fatal("revoke failed")
 	}
-	if code, _ := call(t, h, "GET", "/v2/vaults", token, nil); code != 401 {
+	if code, _ := call(t, h, "GET", "/v1/vaults", token, nil); code != 401 {
 		t.Fatal("revoked token accepted")
 	}
 }
@@ -94,7 +94,7 @@ func TestCodeHourlyQuota(t *testing.T) {
 	s.Config.Limits["CODE_HOURLY_PER_EMAIL"] = 2
 	em := "quota-" + randomHex(5) + "@example.com"
 	for i := 0; i < 2; i++ {
-		if code, out := call(t, h, "POST", "/v2/auth/code", "", map[string]any{"email": em}); code != 202 {
+		if code, out := call(t, h, "POST", "/v1/auth/code", "", map[string]any{"email": em}); code != 202 {
 			t.Fatalf("send %d %v", code, out)
 		}
 		if m.get(em, "login") == "" {
@@ -104,7 +104,7 @@ func TestCodeHourlyQuota(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	if code, _ := call(t, h, "POST", "/v2/auth/code", "", map[string]any{"email": em}); code != 429 {
+	if code, _ := call(t, h, "POST", "/v1/auth/code", "", map[string]any{"email": em}); code != 429 {
 		t.Fatalf("hourly quota not enforced: %d", code)
 	}
 }
@@ -114,7 +114,7 @@ func TestRekeyRejectsWrongUUIDSetAndOtherVault(t *testing.T) {
 	token, _ := login(t, s, m, "wrongset-"+randomHex(5)+"@example.com")
 	other, _ := login(t, s, m, "wrongother-"+randomHex(5)+"@example.com")
 	vid := newVault(t, h, token)
-	base := "/v2/vaults/" + vid
+	base := "/v1/vaults/" + vid
 	id := "42345678-1234-4234-8234-123456789abc"
 	call(t, h, "POST", base+"/items", token, map[string]any{"items": []any{incoming(id, 1, 0, "one")}})
 	code, out := call(t, h, "POST", base+"/rekey/begin", token, map[string]any{"envelope": fakeEnvelope(), "itemCount": 1, "dekCount": 0})
@@ -135,13 +135,13 @@ func TestSensitiveDeleteAndTransfer(t *testing.T) {
 	em := "transfer-" + randomHex(5) + "@example.com"
 	token, _ := login(t, s, m, em)
 	vid := newVault(t, h, token)
-	base := "/v2/vaults/" + vid
+	base := "/v1/vaults/" + vid
 	if code, _ := call(t, h, "DELETE", base, token, map[string]any{"code": "000000"}); code != 403 {
 		t.Fatal("delete without sensitive code")
 	}
 	target := "target-" + randomHex(5) + "@example.com"
 	for _, e := range []string{em, target} {
-		if code, out := call(t, h, "POST", "/v2/auth/code", "", map[string]any{"email": e, "purpose": "sensitive"}); code != 202 {
+		if code, out := call(t, h, "POST", "/v1/auth/code", "", map[string]any{"email": e, "purpose": "sensitive"}); code != 202 {
 			t.Fatal(code, out)
 		}
 	}
@@ -163,12 +163,12 @@ func TestSafeLogsAndMalformedInput(t *testing.T) {
 	_ = m
 	h := s.Handler()
 	secret := "ABCDE"
-	call(t, h, "GET", "/v2/breach/range/"+secret, "", nil)
+	call(t, h, "GET", "/v1/breach/range/"+secret, "", nil)
 	if strings.Contains(logs.String(), secret) {
 		t.Fatal("query prefix leaked")
 	}
 	for _, input := range []string{"null", "[]", "{} {}"} {
-		r := httptest.NewRequest("POST", "/v2/auth/code", strings.NewReader(input))
+		r := httptest.NewRequest("POST", "/v1/auth/code", strings.NewReader(input))
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		if w.Code != 400 {
@@ -182,7 +182,7 @@ func TestMaintenanceGraceAndFloor(t *testing.T) {
 	token, _ := login(t, s, m, "maintenance-"+randomHex(5)+"@example.com")
 	vid := newVault(t, h, token)
 	id := "62345678-1234-4234-8234-123456789abc"
-	call(t, h, "POST", "/v2/vaults/"+vid+"/items", token, map[string]any{"items": []any{incoming(id, 1, 0, "x")}})
+	call(t, h, "POST", "/v1/vaults/"+vid+"/items", token, map[string]any{"items": []any{incoming(id, 1, 0, "x")}})
 	var seq int64
 	s.DB.QueryRow("SELECT head_seq FROM vaults WHERE vault_id=?", vid).Scan(&seq)
 	if _, e := s.DB.Exec("UPDATE item_changes SET created_ms=? WHERE vault_id=?", now()-100*dayMS, vid); e != nil {

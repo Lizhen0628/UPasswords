@@ -1,4 +1,4 @@
-// 入口:/v2 路由、Bearer 会话鉴权、能力协商、统一错误/日志、cron 维护。
+// 入口:/v1 路由(兼容 /v2)、Bearer 会话鉴权、能力协商、统一错误/日志、cron 维护。
 // 日志只含方法/路径/状态/耗时/用户 ID 前缀,不含任何请求体与凭据。
 
 import {
@@ -125,12 +125,12 @@ async function route(ctx: RouteCtx): Promise<Response> {
   const method = ctx.request.method;
   const auth = () => authenticate(ctx);
 
-  // "/" 与 "/v2" → 能力协商
-  if (segments.length === 0 || (segments.length === 1 && segments[0] === "v2")) {
+  // Both route prefixes expose the same row-sync protocol during migration.
+  if (segments.length === 0 || (segments.length === 1 && ["v1", "v2"].includes(segments[0]))) {
     if (method !== "GET") throw methodNotAllowed();
     return capabilities();
   }
-  const rest = segments[0] === "v2" ? segments.slice(1) : null;
+  const rest = ["v1", "v2"].includes(segments[0]) ? segments.slice(1) : null;
   if (!rest) throw new ApiError(404, "not_found");
 
   if (rest[0] === "auth") {

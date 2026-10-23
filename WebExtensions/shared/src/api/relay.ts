@@ -5,7 +5,7 @@
  * browser.storage.local managed by the caller.
  *
  * 协议注意(与 Swift 端对齐,曾踩坑):
- * - 全部走 /v2(v1 已下线);条目是行级密文,不是整库 body 副本;
+ * - 请求走 /v1(服务端兼容旧 /v2 路径);条目是行级密文,不是整库 body 副本;
  * - 服务端时间戳一律 Unix epoch 毫秒(expiresAt 直接与 Date.now() 比较);
  * - 服务端会把条目 uuid 归一化为小写,解密 AAD 需还原大写(Swift uuidString)。
  */
@@ -93,7 +93,7 @@ export function bytesToBase64(bytes: Uint8Array): string {
 
 /** Register a new vault (creation carries the initial key envelope). */
 export async function createVault(token: string, name: string, envelopeB64: string): Promise<string> {
-    const response = (await call("POST", "/v2/vaults", token, { name, envelope: envelopeB64 })) as { vaultId: string };
+    const response = (await call("POST", "/v1/vaults", token, { name, envelope: envelopeB64 })) as { vaultId: string };
     return response.vaultId;
 }
 
@@ -108,7 +108,7 @@ export function base64ToBytes(b64: string): Uint8Array {
  * 邮件语言跟随浏览器语言(navigator.language),缺省英文。 */
 export async function requestCode(email: string, purpose: "login" | "sensitive" = "login"): Promise<void> {
     const lang = typeof navigator !== "undefined" ? navigator.language : "en";
-    await call("POST", "/v2/auth/code", null, { email, purpose, lang });
+    await call("POST", "/v1/auth/code", null, { email, purpose, lang });
 }
 
 /** Verify the code; registers the account on first login, returns a session. */
@@ -118,7 +118,7 @@ export async function verifyCode(
     deviceName: string,
     platform = "ext-chrome",
 ): Promise<RelaySession> {
-    return (await call("POST", "/v2/auth/verify", null, {
+    return (await call("POST", "/v1/auth/verify", null, {
         email,
         code,
         deviceName,
@@ -128,7 +128,7 @@ export async function verifyCode(
 
 /** Vaults of the logged-in account. */
 export async function listVaults(token: string): Promise<RelayVaultMeta[]> {
-    const response = (await call("GET", "/v2/vaults", token)) as { vaults: RelayVaultMeta[] };
+    const response = (await call("GET", "/v1/vaults", token)) as { vaults: RelayVaultMeta[] };
     return response.vaults ?? [];
 }
 
@@ -138,7 +138,7 @@ export async function listVaults(token: string): Promise<RelayVaultMeta[]> {
  */
 export async function getVaultEnvelope(token: string, vaultId: string): Promise<{ envelope: string | null; meta: RelayVaultMeta }> {
     const detail: unknown = await call(
-        "GET", `/v2/vaults/${encodeURIComponent(vaultId)}`, token,
+        "GET", `/v1/vaults/${encodeURIComponent(vaultId)}`, token,
     );
     if (!isRecord(detail) || typeof detail.envelope !== "string" && detail.envelope !== null
         || typeof detail.vaultId !== "string" || typeof detail.name !== "string"
@@ -174,7 +174,7 @@ export async function getVaultSeq(
     vaultId: string,
 ): Promise<{ headSeq: number; passwordVersion: number }> {
     const response: unknown = await call(
-        "GET", `/v2/vaults/${encodeURIComponent(vaultId)}/seq`, token,
+        "GET", `/v1/vaults/${encodeURIComponent(vaultId)}/seq`, token,
     );
     if (!isRecord(response) || !isSafeNonNegativeInteger(response.headSeq)
         || !isSafeNonNegativeInteger(response.passwordVersion)) {
@@ -195,7 +195,7 @@ export async function getVaultChanges(
     }
     const response: unknown = await call(
         "GET",
-        `/v2/vaults/${encodeURIComponent(vaultId)}/changes?since=${since}&limit=${limit}`,
+        `/v1/vaults/${encodeURIComponent(vaultId)}/changes?since=${since}&limit=${limit}`,
         token,
     );
     if (!isRecord(response) || !isSafeNonNegativeInteger(response.headSeq)
@@ -282,7 +282,7 @@ export async function listVaultItems(
     const query = cursor
         ? `?cursorMs=${cursor.ms}&cursorUuid=${encodeURIComponent(cursor.uuid)}&limit=500`
         : "?limit=500";
-    const response: unknown = await call("GET", `/v2/vaults/${encodeURIComponent(vaultId)}/items${query}`, token);
+    const response: unknown = await call("GET", `/v1/vaults/${encodeURIComponent(vaultId)}/items${query}`, token);
     if (!isRecord(response) || !Array.isArray(response.items)
         || !isSafeNonNegativeInteger(response.headSeq)
         || response.nextCursor !== null && (!isRecord(response.nextCursor)
@@ -381,7 +381,7 @@ async function putItem(
     item: NewVaultItem,
     baseRevision: number,
 ): Promise<{ revision: number }> {
-    const response = await call("POST", `/v2/vaults/${encodeURIComponent(vaultId)}/items`, token, {
+    const response = await call("POST", `/v1/vaults/${encodeURIComponent(vaultId)}/items`, token, {
         items: [{
             uuid: item.uuid,
             kind: 1,
@@ -414,5 +414,5 @@ async function putItem(
 
 /** Self-revoke the caller's own session (sign-out hygiene; best-effort). */
 export async function revokeOwnSession(token: string): Promise<void> {
-    await call("DELETE", "/v2/auth/session", token);
+    await call("DELETE", "/v1/auth/session", token);
 }

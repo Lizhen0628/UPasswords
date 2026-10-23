@@ -31,10 +31,10 @@ function mockFetch(routes) {
     return calls;
 }
 
-test("verifyCode: POST /v2/auth/verify 携带 platform;expiresAt 毫秒原样透传", async () => {
+test("verifyCode: POST /v1/auth/verify 携带 platform;expiresAt 毫秒原样透传", async () => {
     const expiresAt = Date.now() + 86_400_000;
     const calls = mockFetch([
-        { method: "POST", path: "/v2/auth/verify", body: { token: "t1", expiresAt, userId: "u1" } },
+        { method: "POST", path: "/v1/auth/verify", body: { token: "t1", expiresAt, userId: "u1" } },
     ]);
     const session = await verifyCode("a@b.c", "123456", "Chrome 扩展", "ext-chrome");
     assert.equal(session.token, "t1");
@@ -47,7 +47,7 @@ test("verifyCode: POST /v2/auth/verify 携带 platform;expiresAt 毫秒原样透
 
 test("listVaultItems: 首页无 cursor,limit=500", async () => {
     const calls = mockFetch([
-        { method: "GET", path: "/v2/vaults/v1/items", body: { items: [], nextCursor: null, headSeq: 0 } },
+        { method: "GET", path: "/v1/vaults/v1/items", body: { items: [], nextCursor: null, headSeq: 0 } },
     ]);
     await listVaultItems("t", "v1");
     assert.equal(calls[0].search, "?limit=500");
@@ -57,7 +57,7 @@ test("listAllVaultItems: 跟随 nextCursor 翻页直到拉平", async () => {
     const uuids = [1, 2, 3].map(index => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`);
     const calls = mockFetch([
         {
-            method: "GET", path: "/v2/vaults/v1/items",
+            method: "GET", path: "/v1/vaults/v1/items",
             body: {
                 items: [
                     { uuid: uuids[0], kind: 1, revision: 1, bodyB64: "AAAA", modifiedMs: 1 },
@@ -67,7 +67,7 @@ test("listAllVaultItems: 跟随 nextCursor 翻页直到拉平", async () => {
             },
         },
         {
-            method: "GET", path: "/v2/vaults/v1/items",
+            method: "GET", path: "/v1/vaults/v1/items",
             body: { items: [{ uuid: uuids[2], kind: 1, revision: 3, bodyB64: "CCCC", modifiedMs: 3 }], nextCursor: null, headSeq: 9 },
         },
     ]);
@@ -79,15 +79,15 @@ test("listAllVaultItems: 跟随 nextCursor 翻页直到拉平", async () => {
 });
 
 test("listAllVaultItems: 401 → RelayApiError(status=401)", async () => {
-    mockFetch([{ method: "GET", path: "/v2/vaults/v1/items", status: 401, error: "unauthorized" }]);
+    mockFetch([{ method: "GET", path: "/v1/vaults/v1/items", status: 401, error: "unauthorized" }]);
     await assert.rejects(
         () => listAllVaultItems("t", "v1"),
         (error) => error instanceof RelayApiError && error.status === 401,
     );
 });
 
-test("revokeOwnSession: DELETE /v2/auth/session(鉴权即身份,无会话号)", async () => {
-    const calls = mockFetch([{ method: "DELETE", path: "/v2/auth/session" }]);
+test("revokeOwnSession: DELETE /v1/auth/session(鉴权即身份,无会话号)", async () => {
+    const calls = mockFetch([{ method: "DELETE", path: "/v1/auth/session" }]);
     await revokeOwnSession("t");
     assert.equal(calls[0].init.headers.authorization, "Bearer t");
 });

@@ -1,6 +1,7 @@
 # UPasswords 云同步设计 v7（MariaDB 行级存储 + local-first 同步）
 
-状态：**v7 · 已实施**（`/v2` + MariaDB DDL + Core/Persistence/macOS/iOS/扩展客户端；
+状态：**v7 · 已实施**（行级同步协议 v2；客户端主路径 `/v1`，`/v2` 保留兼容；
+MariaDB DDL + Core/Persistence/macOS/iOS/扩展客户端；
 生产 API 已由 Go + chi 在香港服务器承载，Cloudflare Worker 保留为回退实现）。
 取代 v6「库体单文件 + R2 密文副本」方案；
 v6 全文见 git 历史（`922e335`）。本文是目标架构的完整规格，实施顺序见 §10。
@@ -16,7 +17,7 @@ v6 全文见 git 历史（`922e335`）。本文是目标架构的完整规格，
 | 同步粒度 | 整库读-改-写 + 双哈希短路 | **条目级增量**（变更日志 + 游标） |
 | 附件 | base64 内嵌库体 XML | 元数据随条目体，密文 blob 存 **R2**，路径登记在附件表 |
 | 网站名称/图标 | 无目录（运行时抓 favicon / host 作名称） | **全局网站目录表**（中英文名 + R2 内容寻址图标，§4.4） |
-| 泄漏密码检测 | HIBP 直查 + 本地动态清单 | **Worker 代理 + 边缘缓存**：统一 `/v2/breach/range` 端点转发 HIBP，HIBP 不再见用户 IP（k-匿名不变，密码不出设备，§4.5） |
+| 泄漏密码检测 | HIBP 直查 + 本地动态清单 | **Worker 代理 + 边缘缓存**：统一 `/v1/breach/range` 端点转发 HIBP，HIBP 不再见用户 IP（k-匿名不变，密码不出设备，§4.5） |
 | 条目标识 | Int 自增 id（max+1，跨设备可撞） | **UUID v4**（客户端生成，离线无碰撞） |
 | 本地文件 | `.upw` 整库密文 + `.upwkey` 信封 | 不变，新增 `.upwsync` 同步游标 sidecar |
 | 账户层 / 信封决胜 / 改密轮换 / 零知识 / 拖库三层防御 | —— | **语义全部沿用 v6**（见 §2.2、§3、§6.5） |
@@ -47,9 +48,9 @@ flowchart LR
     subgraph dc ["自管服务器 kvm-database"]
         DB[("MariaDB 11.4 · upasswords 库<br/>行级密文 + 账户/会话/变更日志")]
     end
-    MAC -->|HTTPS /v2| W
-    IOS -->|HTTPS /v2| W
-    EXT -->|HTTPS /v2| W
+    MAC -->|HTTPS /v1| W
+    IOS -->|HTTPS /v1| W
+    EXT -->|HTTPS /v1| W
     W --> HD
     HD -->|TLS| DB
     W --> R2
@@ -409,7 +410,7 @@ envelope_enc / envelope_changed_ms` 承载改密传播（**信封唯一写入入
 理由；真正要修的是第三方依赖面：客户端直连 HIBP 会暴露用户 IP 与查询
 时机、HIBP 域名可达性不受我们控制。v7 采用 **Worker 代理**：
 
-- 客户端统一查自有端点 `GET /v2/breach/range/<前缀>`（§7.7），仅依赖
+- 客户端统一查自有端点 `GET /v1/breach/range/<前缀>`（§7.7），仅依赖
   api.upasswords.com 可达（同步本来就依赖它）；
 - Worker 转发 HIBP range API 并按前缀做 **Cache API 边缘缓存**（语料
   变更低频，TTL 24h，缓存命中零外呼）；HIBP 从此只见 Worker 聚合流量，
@@ -453,7 +454,7 @@ sites/icons/<sha256>                                 网站图标（公开品牌
 
 ```
 触发: 编辑后防抖 30s / 锁屏与退后台立即 / 手动立即同步
-载荷: POST /v2/vaults/{id}/items
+载荷: POST /v1/vaults/{id}/items
       {items:[{uuid, kind, op, baseRevision, bodyB64, sha256, modifiedMs}]}
       —— 只含脏条目；新建条目 baseRevision=0；op ∈ upsert|delete
 服务端(单事务): 逐条 CAS（按 baseRevision 对比现行行 revision）
@@ -473,12 +474,12 @@ sites/icons/<sha256>                                 网站图标（公开品牌
 ### 6.3 下行（对端，游标增量）
 
 ```
-发现: GET /v2/vaults/{id}/seq → {headSeq}  (三档轮询, §6.4)
-拉取: GET /v2/vaults/{id}/changes?since=<cursor>&limit=200
+发现: GET /v1/vaults/{id}/seq → {headSeq}  (三档轮询, §6.4)
+拉取: GET /v1/vaults/{id}/changes?since=<cursor>&limit=200
       → {headSeq, changes:[{seq, uuid, kind, op, revision, bodyB64?, sha256}]}
 应用: 端上 VEK 解密 → 与本地按 revision/mtime 决胜应用(含删除标记) → 落 .upw
       → cursor=本批最大 seq → 循环直至追平 headSeq
-全量重建(快照+差量): 先记当前 headSeq → GET /v2/vaults/{id}/items 按
+全量重建(快照+差量): 先记当前 headSeq → GET /v1/vaults/{id}/items 按
       (updated_ms, item_uuid) keyset 分页 → 重建 PasswordDatabase → 落 .upw
       → 增量拉平至最新 headSeq 后置 cursor(差量补齐兜住重建期间的并发写)
 触发: 新设备恢复 / 游标过期(cursor_expired) / 手动修复
@@ -503,7 +504,7 @@ sites/icons/<sha256>                                 网站图标（公开品牌
 
 ```
 1. 端上: 新 VEK → 全部条目重加密(端上已有全量明文) + 全部附件 DEK 重裹
-2. POST /v2/vaults/{id}/rekey/begin {envelope, itemCount, dekCount}
+2. POST /v1/vaults/{id}/rekey/begin {envelope, itemCount, dekCount}
    → {rekeyId}   —— 此后该库普通条目写 409(写锁)
    写锁按 expires_ms **惰性判定**: TTL 1 小时, 发起端每次 chunk 即续期;
    发起端崩溃后锁自然过期被写入路径顺带清理——不会把库锁死到 cron 才解锁
@@ -562,19 +563,22 @@ sequenceDiagram
     participant DB as MariaDB（经 Hyperdrive）
     participant I as iOS / 浏览器扩展（对端）
     M->>M: 编辑 → 落盘 .upw → 脏集合防抖 30s
-    M->>W: POST /v2/vaults/{id}/items（批量 CAS）
+    M->>W: POST /v1/vaults/{id}/items（批量 CAS）
     W->>DB: 单事务: 行 upsert + item_changes + head_seq
     W-->>M: ok{revision} × N（conflict 条目端上合并重试）
-    I->>W: GET /v2/vaults/{id}/seq（前台 60s / 激活时）
+    I->>W: GET /v1/vaults/{id}/seq（前台 60s / 激活时）
     W-->>I: {headSeq}（前进）
-    I->>W: GET /v2/vaults/{id}/changes?since=cursor
+    I->>W: GET /v1/vaults/{id}/changes?since=cursor
     W-->>I: {changes:[{uuid, bodyB64 密文, revision}]}
     I->>I: VEK 解密 → 应用 → 落 .upw / 扩展快照
 ```
 
-## 7. API 规范（/v2，整体取代 /v1）
+## 7. API 规范（行级同步协议 v2）
 
-通用约定沿用 v6：Bearer 会话、`{error, message}` 错误体、`GET /v2/` 能力
+客户端主路径使用 `/v1`；服务端也接受 `/v2` 作为旧版客户端兼容别名。路径前缀调整不改变
+协议字段、数据库内容或加密格式。
+
+通用约定沿用 v6：Bearer 会话、`{error, message}` 错误体、`GET /v1/` 能力
 协商（`{rowSync:true}`）、HSTS、日志红线；JSON 载荷上限**分端点**：
 `/items` 批量与 rekey chunk ≤ 8MB（单条目密文体仍受 §4.2 的 256KB 约束），
 其余 ≤ 64KB；附件走 octet-stream 端点。
@@ -583,20 +587,20 @@ sequenceDiagram
 
 | 端点 | 说明 |
 |---|---|
-| `POST /v2/auth/code` `{email, purpose?}` | 发验证码（login/sensitive），单活跃、限速、恒定响应 |
-| `POST /v2/auth/verify` `{email, code, deviceName?, platform?}` | `{token, expiresAt, userId}`（不存在自动建户） |
-| `GET /v2/auth/sessions` / `DELETE …/sessions/{id}` / `PATCH /v2/auth/session` | 设备列表（发起方会话标 `current`，客户端识别"本机"）/ 撤销 / 自命名 |
-| `DELETE /v2/auth/session` | 自撤销（登出/重登收尾；客户端登录成功后先自撤销旧令牌会话，同一设备不堆积重复会话） |
-| `DELETE /v2/account` `{code}` | 注销（清行 + R2 前缀 + 撤会话，30 天物理清除） |
-| `POST /v2/vaults/{id}/transfer` `{email, code, currentCode}` | 换绑邮箱（注册表整体迁移） |
+| `POST /v1/auth/code` `{email, purpose?}` | 发验证码（login/sensitive），单活跃、限速、恒定响应 |
+| `POST /v1/auth/verify` `{email, code, deviceName?, platform?}` | `{token, expiresAt, userId}`（不存在自动建户） |
+| `GET /v1/auth/sessions` / `DELETE …/sessions/{id}` / `PATCH /v1/auth/session` | 设备列表（发起方会话标 `current`，客户端识别"本机"）/ 撤销 / 自命名 |
+| `DELETE /v1/auth/session` | 自撤销（登出/重登收尾；客户端登录成功后先自撤销旧令牌会话，同一设备不堆积重复会话） |
+| `DELETE /v1/account` `{code}` | 注销（清行 + R2 前缀 + 撤会话，30 天物理清除） |
+| `POST /v1/vaults/{id}/transfer` `{email, code, currentCode}` | 换绑邮箱（注册表整体迁移） |
 
 ### 7.2 库注册表与信封
 
 | 端点 | 说明 |
 |---|---|
-| `POST /v2/vaults` `{name, envelope}` / `GET /v2/vaults` / `GET /v2/vaults/{id}` | 登记（创建即携带初始信封）/ 列表 / 单条（含信封 b64） |
-| `PATCH /v2/vaults/{id}` `{name}` / `DELETE /v2/vaults/{id}` `{code}` | 改名 / 解绑（sensitive 码；清行 + R2 前缀） |
-| `GET /v2/vaults/{id}/seq` | `{headSeq, passwordVersion}`（便宜轮询） |
+| `POST /v1/vaults` `{name, envelope}` / `GET /v1/vaults` / `GET /v1/vaults/{id}` | 登记（创建即携带初始信封）/ 列表 / 单条（含信封 b64） |
+| `PATCH /v1/vaults/{id}` `{name}` / `DELETE /v1/vaults/{id}` `{code}` | 改名 / 解绑（sensitive 码；清行 + R2 前缀） |
+| `GET /v1/vaults/{id}/seq` | `{headSeq, passwordVersion}`（便宜轮询） |
 
 注：**信封唯一写入入口 = 建库与 rekey commit**。v6 的独立
 `PUT /envelope` 端点取消——双入口会出现「信封已换、条目未重加密」的
@@ -607,33 +611,33 @@ sequenceDiagram
 
 | 端点 | 说明 |
 |---|---|
-| `POST /v2/vaults/{id}/items` | 批量上行（CAS；逐条 ok/conflict，§6.2） |
-| `GET /v2/vaults/{id}/changes?since=&limit=` | 增量下行（§6.3；`cursor_expired` 410） |
-| `GET /v2/vaults/{id}/items?cursor=&limit=` | 全量重建分页 |
+| `POST /v1/vaults/{id}/items` | 批量上行（CAS；逐条 ok/conflict，§6.2） |
+| `GET /v1/vaults/{id}/changes?since=&limit=` | 增量下行（§6.3；`cursor_expired` 410） |
+| `GET /v1/vaults/{id}/items?cursor=&limit=` | 全量重建分页 |
 
 ### 7.4 附件（v7 新增）
 
 | 端点 | 说明 |
 |---|---|
-| `PUT /v2/vaults/{id}/attachments/{uuid}?upload=UID` | 密文暂存（octet-stream ≤20MB；须 content-length 预判配额） |
-| `POST /v2/vaults/{id}/attachments/{uuid}/commit` `{uploadId, sha256, bytes, dekWrapped, cardUuid}` | 校验后换入 + 登记行 |
-| `GET /v2/vaults/{id}/attachments/{uuid}` | 拉取密文流 |
-| `DELETE /v2/vaults/{id}/attachments/{uuid}` | 删行 + 删 blob（随条目硬清除触发） |
+| `PUT /v1/vaults/{id}/attachments/{uuid}?upload=UID` | 密文暂存（octet-stream ≤20MB；须 content-length 预判配额） |
+| `POST /v1/vaults/{id}/attachments/{uuid}/commit` `{uploadId, sha256, bytes, dekWrapped, cardUuid}` | 校验后换入 + 登记行 |
+| `GET /v1/vaults/{id}/attachments/{uuid}` | 拉取密文流 |
+| `DELETE /v1/vaults/{id}/attachments/{uuid}` | 删行 + 删 blob（随条目硬清除触发） |
 
 ### 7.5 改密 rekey 与管理面
 
 | 端点 | 说明 |
 |---|---|
-| `POST /v2/vaults/{id}/rekey/begin` → `…/chunk` → `…/commit`（`DELETE …/rekey/{rekeyId}` 放弃） | §6.5 |
-| `GET /v2/admin/stats` `X-Admin-Token` + CF Access | 只读统计（按新表聚合；无任何写操作） |
+| `POST /v1/vaults/{id}/rekey/begin` → `…/chunk` → `…/commit`（`DELETE …/rekey/{rekeyId}` 放弃） | §6.5 |
+| `GET /v1/admin/stats` `X-Admin-Token` + CF Access | 只读统计（按新表聚合；无任何写操作） |
 
 ### 7.6 网站目录（全局）
 
 | 端点 | 说明 |
 |---|---|
-| `GET /v2/sites/lookup?domain=<host>` | `{siteId, domain, primaryDomain, nameZh?, nameEn, icon{sha256, bytes, b64}}`；未命中 404（客户端回退现行抓取行为） |
-| `GET /v2/sites/icon/<sha256>` | 图标字节流（ETag=sha256，强缓存；缓存 miss 时单独补拉） |
-| `POST /v2/admin/sites` `X-Admin-Token` + CF Access | 目录批量 upsert（domains/nameZh?/nameEn/homeUrl?/iconB64），图标按 sha256 去重落 R2 |
+| `GET /v1/sites/lookup?domain=<host>` | `{siteId, domain, primaryDomain, nameZh?, nameEn, icon{sha256, bytes, b64}}`；未命中 404（客户端回退现行抓取行为） |
+| `GET /v1/sites/icon/<sha256>` | 图标字节流（ETag=sha256，强缓存；缓存 miss 时单独补拉） |
+| `POST /v1/admin/sites` `X-Admin-Token` + CF Access | 目录批量 upsert（domains/nameZh?/nameEn/homeUrl?/iconB64），图标按 sha256 去重落 R2 |
 
 隐私注记：lookup 经会话鉴权，服务端理论上可感知「某用户在为哪个网站建
 凭据」——审计红线扩展：**站点查询域名一律不进日志**（只记计数/耗时）；
@@ -644,7 +648,7 @@ sequenceDiagram
 
 客户端检测流程（密码永不出设备）：
 
-1. `GET /v2/breach/range/<5位hex前缀>`（Bearer 鉴权）→ Worker 查边缘
+1. `GET /v1/breach/range/<5位hex前缀>`（Bearer 鉴权）→ Worker 查边缘
    缓存，未命中转发 HIBP range API 并回填缓存（TTL 24h）；响应与 HIBP
    同形（每行 `35位后缀:流行度`），客户端本地比对完整 SHA-1；
 2. 端点不可达 → 直连 HIBP 兜底（现行 `CompromisedService` 代码保留）；
@@ -771,7 +775,7 @@ id = "<wrangler hyperdrive create 生成的 id>"
    只存真实内容；`DatabaseXML` 适配 uuid 属性 + **条目级编解码 API**（单条目 ↔
    XML 元素字节，行同步的编解码基元）；`Attachment` 数据与引用拆分
    （本地保留 data，序列化/同步层剥出）；`Contracts/schemas` 同步镜像；
-2. **Persistence**：`RelayClient` → `/v2` 行协议；新增 **RowSync 引擎**
+2. **Persistence**：`RelayClient` → `/v1` 行协议（兼容 `/v2`）；新增 **RowSync 引擎**
    （脏集合、批量 CAS、冲突合并重试、游标应用、全量重建、rekey 编排、
    附件剥出/懒拉/staging-commit）；`.upwsync` sidecar 读写；脏集合采集含
    **跨进程兜底**（前台/锁屏冲刷时与上次同步快照 diff + `.upw` 文件监听，
@@ -793,7 +797,7 @@ id = "<wrangler hyperdrive create 生成的 id>"
    离线可用）；浏览器扩展建卡/填充同样接入（shared TS 复用 host 匹配）；
    目录数据由运营经管理面导入（初始批次可用公开榜单 + 人工整理中英文名）；
 7. **泄漏检测（异步无感知契约）**：`CompromisedService` 端点切换为自有
-   `/v2/breach/range`（响应与 HIBP 同形，仅换端点 + 鉴权），直连 HIBP
+   `/v1/breach/range`（响应与 HIBP 同形，仅换端点 + 鉴权），直连 HIBP
    保留为端点不可达兜底、离线演示集照旧；本地动态清单与缓存机制不变；
    浏览器扩展同源接入。检查全程后台 Task 化（现行 macOS/iOS
    `runSilentBreachCheck` 语义，v7 保持并扩展触发点）：
@@ -808,14 +812,14 @@ id = "<wrangler hyperdrive create 生成的 id>"
 
 1. MariaDB：建库/最小权限账号/`sql/0001_init.sql`（§4 全量 DDL）；
 2. Hyperdrive 创建 + wrangler.toml 切换（§8.3/8.4，需 `wrangler login`）；
-3. Worker：`/v2` 全量端点（auth 平移 + items/changes/attachments/rekey/
+3. Worker：`/v1` 全量端点（兼容 `/v2`；auth 平移 + items/changes/attachments/rekey/
    cron）+ mysql2 数据层 + vitest/CI；
 4. Core：uuid 化 + 条目级编解码 + Contracts；
 5. Persistence：RowSync 引擎 + `.upwsync`；
 6. macOS/iOS 接线 + 扩展适配；
 7. 网站目录：建表 + 管理面导入 + lookup/icon 端点 + 客户端接入（独立于
    同步主链路，可与 3-6 并行）；
-8. 泄漏检测：`/v2/breach/range` 代理端点 + 边缘缓存 + 客户端端点切换
+8. 泄漏检测：`/v1/breach/range` 代理端点 + 边缘缓存 + 客户端端点切换
    （独立于同步主链路，可与 3-7 并行）；
 9. 退役 D1 与 v6 端点；README/FEATURES/AGENTS 文档同步更新。
 

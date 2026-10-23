@@ -20,7 +20,7 @@ test("saveVaultItem: exact single-card CAS POST and returned revision", async (t
     const calls = mock(t, { results: [{ uuid, status: "ok", revision: 8 }] });
     assert.deepEqual(await saveVaultItem("token", "vault1", item), { revision: 8 });
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].url, "https://api.upasswords.com/v2/vaults/vault1/items");
+    assert.equal(calls[0].url, "https://api.upasswords.com/v1/vaults/vault1/items");
     assert.equal(calls[0].init.method, "POST");
     assert.equal(calls[0].init.headers.authorization, "Bearer token");
     assert.equal(calls[0].init.headers["content-type"], "application/json");
