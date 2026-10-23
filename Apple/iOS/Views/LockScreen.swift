@@ -20,6 +20,8 @@ struct LockScreen: View {
     @State private var lockImage: UIImage? = nil
     @State private var showFileImporter = false
     @State private var accountStepDismissed = false
+    @State private var personalInfoStepPresented = false
+    @State private var personalInfo = PersonalInfoDraft()
     @State private var accountEmail = ""
     @State private var accountCode = ""
     @State private var accountBusy = false
@@ -36,8 +38,8 @@ struct LockScreen: View {
         Vault.themes[max(0, min(Vault.themes.count - 1, vault.themeIndex))]
     }
 
-    /// 选中即可恢复:v7 行级同步下空库同样合法(信封+0 行 → 空库接管,
-    /// 其他设备同步后的条目随后拉取);不再设 v6 整库镜像时代的门槛。
+    /// 选中即可恢复:行级同步下空库同样合法(信封+0 行 → 空库接管,
+    /// 其他设备同步后的条目随后拉取)。
     private var selectedRecord: RelayClient.VaultRecord? {
         serverVaults.first(where: { $0.name == selectedVault })
     }
@@ -126,7 +128,7 @@ struct LockScreen: View {
                 }
             }
         }
-        .onChange(of: vault.hasVault) { hasVault in
+        .onChange(of: vault.hasVault) { _, hasVault in
             // 服务端恢复完成 → 转入解锁界面,同样尝试带出钥匙串密码
             if hasVault, password.isEmpty, let stored = vault.storedMasterPassword() {
                 password = stored
@@ -146,7 +148,9 @@ struct LockScreen: View {
     private var inputArea: some View {
         VStack(spacing: 12) {
             if isSetup {
-                if !accountStepDismissed && vault.relayOnboardingNeeded {
+                if personalInfoStepPresented {
+                    personalInfoCard
+                } else if !accountStepDismissed && vault.relayOnboardingNeeded {
                     // 必经第一步:整页仅账户登录,云端恢复/文件导入/新建
                     // 一概后置到验证完成(库就绪后自动补绑云同步)
                     onboardingAccountCard
@@ -342,6 +346,8 @@ struct LockScreen: View {
                 Task {
                     if await vault.relayLoginOnly(email: address, code: entered) {
                         accountStepDismissed = true
+                        personalInfo.email = address
+                        personalInfoStepPresented = true
                     }
                     accountBusy = false
                 }
@@ -356,6 +362,54 @@ struct LockScreen: View {
             }
             .disabled(accountEmail.isEmpty || accountCode.count < RelayClient.verificationCodeLength || accountBusy)
             .buttonStyle(.plain)
+        }
+        .padding(14)
+        .background(Brand.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var personalInfoCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(L10n.t("personal_info_title"), systemImage: "person.text.rectangle")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Brand.fg)
+            Text(L10n.t("personal_info_hint"))
+                .font(.footnote)
+                .foregroundStyle(Brand.muted)
+            Group {
+                TextField(L10n.t("personal_info_given_name"), text: $personalInfo.givenName)
+                TextField(L10n.t("personal_info_family_name"), text: $personalInfo.familyName)
+                TextField(L10n.t("personal_info_email"), text: $personalInfo.email)
+                    .keyboardType(.emailAddress)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField(L10n.t("personal_info_phone"), text: $personalInfo.phone)
+                    .keyboardType(.phonePad)
+                TextField(L10n.t("personal_info_address_line_1"), text: $personalInfo.addressLine1)
+                TextField(L10n.t("personal_info_address_line_2"), text: $personalInfo.addressLine2)
+                TextField(L10n.t("personal_info_city"), text: $personalInfo.city)
+                TextField(L10n.t("personal_info_region"), text: $personalInfo.region)
+                TextField(L10n.t("personal_info_postal_code"), text: $personalInfo.postalCode)
+                TextField(L10n.t("personal_info_country"), text: $personalInfo.country)
+            }
+            .textFieldStyle(.roundedBorder)
+            .frame(minHeight: 44)
+            Button {
+                Log.info("ui", "ios setup: personal info step completed")
+                vault.pendingPersonalInfo = personalInfo
+                personalInfoStepPresented = false
+            } label: {
+                Text(L10n.t("continue_button"))
+                    .primaryButtonStyle()
+            }
+            .buttonStyle(.plain)
+            Button(L10n.t("skip_button")) {
+                Log.info("ui", "ios setup: personal info step skipped")
+                vault.pendingPersonalInfo = nil
+                personalInfoStepPresented = false
+            }
+            .font(.footnote)
+            .foregroundStyle(Brand.muted)
+            .frame(maxWidth: .infinity, minHeight: 44)
         }
         .padding(14)
         .background(Brand.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))

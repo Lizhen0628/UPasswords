@@ -1,6 +1,6 @@
 // 条目行级同步核心:批量 CAS 上行、变更日志游标拉取、全量重建分页。
-// 语义(v7):删除 = 删行 + op=purge 日志;「缺席即删除」由 not_found 收口;
-// 无墓碑行(行库即权威,见 Cloud/DESIGN.md §6.6)。
+// 删除 = 删行 + op=purge 日志;「缺席即删除」由 not_found 收口;
+// 无墓碑行(行库即权威,见 Cloud/DATABASE.md)。
 
 import type { AuthContext } from "./auth";
 import { audit, connExec, connQuery, exec, q, q1, tx } from "./db";

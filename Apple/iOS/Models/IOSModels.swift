@@ -120,7 +120,7 @@ enum TemplateGroups {
         }
     }
 
-    /// 内置模板标题集合(用于区分"我的模板"与内置模板卡;v7 条目 id 为 UUID,
+    /// 内置模板标题集合(用于区分"我的模板"与内置模板卡;条目 id 为 UUID,
     /// 内置判据改按本地化标题比对)。
     static let builtInTemplateTitles = Set(Templates.all.map { L10n.db($0.titleKey) })
 }

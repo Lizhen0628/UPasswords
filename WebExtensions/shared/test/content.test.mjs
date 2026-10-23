@@ -7,7 +7,7 @@ const root = new URL("../../", import.meta.url);
 const variants = ["chrome", "safari", "edge", "firefox"];
 const source = readFileSync(new URL("chrome/src/content.js", root), "utf8");
 
-function fixture({ password = true, autocomplete = "current-password", topFrame = true, protocol = "https:", language = "en" } = {}) {
+function fixture({ password = true, autocomplete = "current-password", registration = false, topFrame = true, protocol = "https:", language = "en" } = {}) {
     const callbacks = new Map();
     const messages = [];
     const listeners = [];
@@ -16,7 +16,7 @@ function fixture({ password = true, autocomplete = "current-password", topFrame 
     const allElements = [];
     const observers = [];
     let timerID = 0;
-    let hint = { type: "site-hint", count: 2, unlocked: true };
+    let hint = { type: "site-hint", count: 2, unlocked: true, profileAvailable: false };
     let popup = { type: "vault-opened", ok: false };
     class Element {
         constructor(tag) {
@@ -78,11 +78,16 @@ function fixture({ password = true, autocomplete = "current-password", topFrame 
     const pass = new Input("password", autocomplete);
     pass.form = form;
     if (password) form.append(pass);
+    const givenName = new Input("text", registration ? "given-name" : "");
+    const email = new Input("email", registration ? "email" : "");
+    givenName.form = form;
+    email.form = form;
+    if (registration) form.append(givenName, email);
     const document = {
         documentElement: html,
         createElement(tag) { return new Element(tag); },
         querySelectorAll(selector) {
-            assert.equal(selector, "input");
+            assert.ok(["input", "input, textarea"].includes(selector));
             return form.children.filter((field) => field.tagName === "input");
         },
         addEventListener(type, listener) { callbacks.set(`document:${type}`, listener); },
@@ -102,6 +107,7 @@ function fixture({ password = true, autocomplete = "current-password", topFrame 
     };
     const context = {
         browser: api, document, location, navigator: { language }, HTMLInputElement: Input,
+        HTMLTextAreaElement: Input,
         Event: class { constructor(type, options) { this.type = type; Object.assign(this, options); } },
         console: { info() {}, warn() {} },
         MutationObserver: class {
@@ -127,6 +133,7 @@ function fixture({ password = true, autocomplete = "current-password", topFrame 
     };
     return {
         api, callbacks, messages, listeners, timers, intervals, observers, html, form, username, pass,
+        givenName, email,
         location, popupSender, sendFill,
         get nativeSets() { return nativeSets; },
         get hintHost() { return html.children.find((element) => element !== form); },
@@ -178,6 +185,60 @@ test("frames, non-web URLs, signup and hidden inputs do not show a hint", async 
     f.intervals[0].callback();
     await settle();
     assert.equal(f.hintHost, undefined);
+});
+
+test("registration form gets a count-only profile hint and fills matching blank fields after a trusted popup action", async () => {
+    const f = fixture({ registration: true, password: false });
+    f.hint = { type: "site-hint", count: 0, unlocked: true, profileAvailable: true };
+    f.intervals[0].callback();
+    await settle();
+    assert.ok(f.hintHost);
+    assert.equal(f.button.textContent, "UPasswords · Personal info available");
+    assert.ok(f.messages.some((message) => message.type === "site-hint" && message.registration === true));
+    f.email.value = "already-entered@example.com";
+    const response = f.sendFill({ candidate: { item: {
+        recordType: "userProfile",
+        fields: [
+            { autofill: "given-name", value: "Taylor" },
+            { autofill: "email", value: "profile@example.com" },
+        ],
+    } } });
+    assert.equal(response.ok, true);
+    assert.equal(f.givenName.value, "Taylor");
+    assert.equal(f.email.value, "already-entered@example.com");
+    assert.equal(f.nativeSets, 2);
+    const text = f.hintHost.shadow.children.map((element) => element.textContent).join(" ");
+    assert.doesNotMatch(text, /Taylor|profile@example/);
+});
+
+test("disabled personal information cannot be filled by a popup message", async () => {
+    const f = fixture({ registration: true, password: false });
+    await settle();
+    const response = f.sendFill({ candidate: { username: "profile@example.com", item: {
+        recordType: "userProfile",
+        autofillEnabled: false,
+        fields: [{ autofill: "given-name", value: "Taylor" }],
+    } } });
+    assert.equal(response.ok, false);
+    assert.equal(f.givenName.value, "");
+    assert.equal(f.nativeSets, 0);
+});
+
+test("registration fields stay within one form and address lines fill a street-address field", async () => {
+    const f = fixture({ registration: true, password: false });
+    f.givenName.autocomplete = "section-contact shipping street-address";
+    await settle();
+    const candidate = { item: { recordType: "userProfile", fields: [
+        { autofill: "address-line1", value: "1 Main Street" },
+        { autofill: "address-line2", value: "Unit 2" },
+    ] } };
+    assert.equal(f.sendFill({ candidate }).ok, true);
+    assert.equal(f.givenName.value, "1 Main Street\nUnit 2");
+    f.givenName.currentValue = "";
+    f.email.form = { contains(field) { return field === f.email; } };
+    f.form.contains = field => field !== f.email;
+    assert.equal(f.sendFill({ candidate }).ok, false);
+    assert.equal(f.givenName.value, "");
 });
 
 test("trusted popup sender and exact origin required; native input setter and events fill visible fields", async () => {

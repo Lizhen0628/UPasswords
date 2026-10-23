@@ -87,7 +87,7 @@ extension AppContext {
     }
 
     /// 登记当前库并绑定(登录后自动调用;也可为已登录账户的其他库单独启用)。
-    /// v7:创建即携带初始信封;绑定即全量上行由随后的一轮 sync 完成
+    /// 创建即携带初始信封;绑定即全量上行由随后的一轮 sync 完成
     /// (快照基线为空 → 全部条目进脏集合),失败不回滚——下轮自愈。
     private func relayEnableForCurrentVault(token: String, email: String) async throws {
         guard phase == .unlocked else {

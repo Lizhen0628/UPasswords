@@ -112,7 +112,7 @@ final class DatabaseXMLTests: XCTestCase {
         XCTAssertEqual(a.card(id: c3.id)?.title, "added remotely")
     }
 
-    /// v7 无墓碑:被删条目不会从对端整库合并中复活——删除侧本地已移除,
+    /// 无墓碑:被删条目不会从对端整库合并中复活——删除侧本地已移除,
     /// 合并只会采纳对端仍持有的副本(缺席即删除的收敛由服务端行库保证,
     /// 本地整库合并只用于导入/恢复场景)。
     func testMergeDoesNotResurrectLocallyDeletedWhenRemoteLacksIt() {
@@ -126,7 +126,7 @@ final class DatabaseXMLTests: XCTestCase {
     }
 
     func testDefaultDatabaseContents() {
-        var db = PasswordDatabase.createDefault(now: Date(timeIntervalSince1970: 0))
+        let db = PasswordDatabase.createDefault(now: Date(timeIntervalSince1970: 0))
         XCTAssertEqual(db.labels.count, 3, "商务/私人/网络账号")
         XCTAssertEqual(db.templateCards.count, 16, "15 named templates + custom")
         let loginSpec = Templates.spec(id: 102)!

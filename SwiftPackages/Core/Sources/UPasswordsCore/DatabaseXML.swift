@@ -18,14 +18,29 @@ import Foundation
 /// </database>
 /// ```
 ///
-/// v7:`id` 属性为 UUID 字符串(客户端生成,行级同步条目身份);
+/// `id` 属性为 UUID 字符串(客户端生成,行级同步条目身份);
 /// 无 `<ghost>` 元素——本地删除即移除,删除事实由服务端条目表缺席承载
-/// (Cloud/DESIGN.md §6.6)。
+/// (Cloud/DATABASE.md)。
 public struct PasswordDatabase: Codable, Equatable {
     public init() {}
 
     public var labels: [CardLabel] = []
     public var cards: [Card] = []
+    public var userProfiles: [UserProfile] = []
+
+    private enum CodingKeys: String, CodingKey {
+        case labels, cards, userProfiles
+    }
+
+    /// Decodes older JSON backups that predate the independent profile collection.
+    /// - Parameter decoder: Database decoder.
+    /// - Throws: A decoding error when a present collection is invalid.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        labels = try container.decodeIfPresent([CardLabel].self, forKey: .labels) ?? []
+        cards = try container.decodeIfPresent([Card].self, forKey: .cards) ?? []
+        userProfiles = try container.decodeIfPresent([UserProfile].self, forKey: .userProfiles) ?? []
+    }
 
     // MARK: - Item accessors
 
@@ -67,6 +82,12 @@ public struct PasswordDatabase: Codable, Equatable {
             byCard[c.id] = c
         }
         cards = byCard.values.sorted { $0.id.uuidString < $1.id.uuidString }
+        var byProfile = Dictionary(uniqueKeysWithValues: userProfiles.map { ($0.id, $0) })
+        for profile in other.userProfiles {
+            if let mine = byProfile[profile.id], mine.modified >= profile.modified { continue }
+            byProfile[profile.id] = profile
+        }
+        userProfiles = byProfile.values.sorted { $0.id.uuidString < $1.id.uuidString }
     }
 
     /// 永久删除条目(回收站二段式的第二段):本地直接移除,不留标记;
@@ -95,6 +116,9 @@ extension PasswordDatabase {
         let labelNames = Dictionary(uniqueKeysWithValues: labels.map { ($0.id, $0.name) })
         for c in cards {
             s += Self.cardElement(c, labelNames: labelNames) + "\n"
+        }
+        for profile in userProfiles {
+            s += Self.userProfileElement(profile) + "\n"
         }
         s += "</database>\n"
         return Data(s.utf8)
@@ -158,6 +182,24 @@ extension PasswordDatabase {
         return s + "    </card>"
     }
 
+    /// Encodes a personal information record separately from card elements.
+    /// - Parameter profile: Decrypted profile to serialize before vault encryption.
+    /// - Returns: One user_profile XML element.
+    public static func userProfileElement(_ profile: UserProfile) -> String {
+        var s = "    <user_profile id=\"\(profile.id.uuidString)\""
+        s += " autofill=\"\(profile.registrationAutofillEnabled ? "on" : "off")\""
+        s += " created=\"\(Int64(profile.created))\" modified=\"\(Int64(profile.modified))\">\n"
+        for field in profile.fields {
+            s += "        <field name=\"\(XMLEscape(field.name))\""
+            s += " type=\"\(field.type.rawValue)\" autofill=\"\(field.autofill.rawValue)\""
+            if !field.history.isEmpty {
+                s += " history=\"\(XMLEscape(Self.historyJSON(field.history)))\""
+            }
+            s += ">\(XMLEscape(field.value))</field>\n"
+        }
+        return s + "    </user_profile>"
+    }
+
     public static func historyJSON(_ entries: [HistoryEntry]) -> String {
         let arr: [[String: Any]] = entries.map { ["v": $0.value, "t": Int64($0.time)] }
         guard let data = try? JSONSerialization.data(withJSONObject: arr),
@@ -197,6 +239,7 @@ extension PasswordDatabase {
         var db = PasswordDatabase()
         db.labels = parser.labels
         db.cards = parser.cards
+        db.userProfiles = parser.userProfiles
         return db
     }
 }
@@ -207,8 +250,10 @@ private let knownAutofills = Set(Autofill.allCases.map(\.rawValue))
 final class DBXMLParser: NSObject, XMLParserDelegate {
     public var labels: [CardLabel] = []
     public var cards: [Card] = []
+    public var userProfiles: [UserProfile] = []
     public var failed = false
 
+    private var currentProfile: UserProfile?
     private var currentCard: Card? = nil
     private var currentField: Field? = nil
     private var textBuf = ""
@@ -250,6 +295,16 @@ final class DBXMLParser: NSObject, XMLParserDelegate {
             c.useWebsiteIcon = attrs["use_website_icon"] == "true"
             c.watch = attrs["watch"] == "true"
             currentCard = c
+        case "user_profile":
+            guard let rawID = attrs["id"], let id = UUID(uuidString: rawID) else {
+                failed = true
+                return
+            }
+            var profile = UserProfile(id: id)
+            profile.registrationAutofillEnabled = attrs["autofill"] != "off"
+            profile.created = attrs["created"].flatMap(Double.init) ?? 0
+            profile.modified = attrs["modified"].flatMap(Double.init) ?? 0
+            currentProfile = profile
         case "field":
             var f = Field(name: L10n.resolve(attrs["name"] ?? ""))
             if let t = attrs["type"], knownFieldTypes.contains(t) {
@@ -290,7 +345,13 @@ final class DBXMLParser: NSObject, XMLParserDelegate {
         switch name {
         case "field":
             currentField?.value = textBuf
-            if let f = currentField { currentCard?.fields.append(f) }
+            if let f = currentField {
+                if currentProfile != nil {
+                    currentProfile?.fields.append(f)
+                } else {
+                    currentCard?.fields.append(f)
+                }
+            }
             currentField = nil
         case "note":
             currentCard?.notes = textBuf
@@ -308,6 +369,9 @@ final class DBXMLParser: NSObject, XMLParserDelegate {
                 currentCard?.iconSource = src
                 currentCard?.iconData = trimmed.isEmpty ? nil : Data(base64Encoded: trimmed)
             }
+        case "user_profile":
+            if let profile = currentProfile { userProfiles.append(profile) }
+            currentProfile = nil
         case "card":
             if let c = currentCard { cards.append(c) }
             currentCard = nil

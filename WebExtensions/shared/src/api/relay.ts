@@ -1,6 +1,6 @@
 /**
  * Relay API client for standalone extension contexts (no native bridge):
- * email-code login, vault registry, key envelope and row-level items (v7).
+ * email-code login, vault registry, key envelope and row-level items.
  * Mirrors the Swift `RelayClient` paths; the session token lives in
  * browser.storage.local managed by the caller.
  *
@@ -234,7 +234,7 @@ export async function getVaultChanges(
             change.bodyB64 = raw.bodyB64;
         }
         if (raw.kind !== undefined) {
-            if (!isSafeNonNegativeInteger(raw.kind) || (raw.kind !== 1 && raw.kind !== 2)) {
+            if (!isSafeNonNegativeInteger(raw.kind) || (raw.kind !== 1 && raw.kind !== 2 && raw.kind !== 3)) {
                 throw new RelayApiError(0, "bad_changes_response");
             }
             change.kind = raw.kind;
@@ -259,7 +259,7 @@ function isSafeNonNegativeInteger(value: unknown): value is number {
 export function isValidRelayItemRow(value: unknown): value is RelayItemRow {
     if (!isRecord(value) || typeof value.uuid !== "string"
         || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.uuid)
-        || !isSafeNonNegativeInteger(value.kind) || (value.kind !== 1 && value.kind !== 2)
+        || !isSafeNonNegativeInteger(value.kind) || (value.kind !== 1 && value.kind !== 2 && value.kind !== 3)
         || !isSafeNonNegativeInteger(value.revision) || value.revision < 1
         || typeof value.bodyB64 !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value.bodyB64)
         || value.bodyB64.length === 0

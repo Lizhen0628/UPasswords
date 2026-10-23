@@ -27,9 +27,12 @@ final class AppContext: ObservableObject {
         didSet {
             syncSessionID = UUID()
             Log.info("lifecycle", "phase \(oldValue) → \(phase)")
+            savePendingPersonalInfoIfNeeded()
         }
     }
     @Published var database = PasswordDatabase()
+    /// Memory-only onboarding draft, consumed after creation or restoration unlocks the vault.
+    var pendingPersonalInfo: PersonalInfoDraft?
     @Published var databaseName: String = "" {
         didSet {
             guard oldValue != databaseName else { return }
@@ -403,7 +406,7 @@ final class AppContext: ObservableObject {
                     Log.warn("lifecycle", "remote unlock fallback: password rejected by remote envelope")
                     return .wrongPassword
                 }
-                // v7:远端是行级密文,走全量重建收敛本地(他机改密后本体随新 VEK 重加密)
+                // 远端是行级密文,走全量重建收敛本地(他机改密后本体随新 VEK 重加密)
                 var state: RowSyncState
                 do {
                     state = try store.loadSyncState(for: name)

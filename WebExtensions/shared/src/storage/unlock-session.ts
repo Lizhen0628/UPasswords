@@ -285,7 +285,7 @@ export function createUnlockSession(options: UnlockSessionOptions) {
                                 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(row.uuid)
                                 || seen.has(row.uuid.toLowerCase()) || typeof row.bodyB64 !== "string"
                                 || !validVersion(row.revision) || row.revision === 0
-                                || (row.kind !== 1 && row.kind !== 2)
+                                || (row.kind !== 1 && row.kind !== 2 && row.kind !== 3)
                                 || !validVersion(row.modifiedMs)) return locked("invalid_session_rows");
                             seen.add(row.uuid.toLowerCase());
                             const body = Uint8Array.from(atob(row.bodyB64), char => char.charCodeAt(0));

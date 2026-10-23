@@ -21,6 +21,12 @@ final class AppSettings: ObservableObject {
     @Published var searchByLabels: Bool { didSet { d.set(searchByLabels, forKey: "app.searchByLabels") } }
     @Published var searchPasswords: Bool { didSet { d.set(searchPasswords, forKey: "app.searchPasswords") } }
     @Published var useWebsiteIcons: Bool { didSet { d.set(useWebsiteIcons, forKey: "app.useWebsiteIcons") } }
+    @Published var registrationAutofillEnabled: Bool {
+        didSet {
+            d.set(registrationAutofillEnabled, forKey: "autofill.registrationEnabled")
+            Log.info("ui", "registration autofill \(registrationAutofillEnabled ? "enabled" : "disabled")")
+        }
+    }
 
     var sortingValue: Sorting {
         get { Sorting(rawValue: sorting) ?? .titleAsc }
@@ -98,6 +104,7 @@ final class AppSettings: ObservableObject {
         searchByLabels = d.object(forKey: "app.searchByLabels") as? Bool ?? true
         searchPasswords = d.object(forKey: "app.searchPasswords") as? Bool ?? false
         useWebsiteIcons = d.object(forKey: "app.useWebsiteIcons") as? Bool ?? true
+        registrationAutofillEnabled = d.object(forKey: "autofill.registrationEnabled") as? Bool ?? true
         autoLockSeconds = d.object(forKey: "sec.autoLock") as? Int ?? 300
         lockInBackground = d.object(forKey: "sec.lockInBackground") as? Bool ?? true
         lockIfWindowClosed = d.object(forKey: "sec.lockIfWindowClosed") as? Bool ?? false

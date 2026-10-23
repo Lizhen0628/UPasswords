@@ -233,7 +233,7 @@ struct LockWindowView: View {
 struct SetupWindowView: View {
     @EnvironmentObject var ctx: AppContext
 
-    private enum SetupMode { case account, create, restoreCloud, restoreLocal }
+    private enum SetupMode { case account, personalInfo, create, restoreCloud, restoreLocal }
 
     @State private var mode: SetupMode = .create
     @State private var name = ""
@@ -241,6 +241,7 @@ struct SetupWindowView: View {
     @State private var confirm = ""
     @State private var touchID = true
     @State private var error = ""
+    @State private var personalInfo = PersonalInfoDraft()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -255,8 +256,23 @@ struct SetupWindowView: View {
             if mode == .account {
                 // 新装引导第一步:注册/登录先于建库(库就绪后自动补绑云同步)
                 AccountStepView(onDone: {
-                    mode = .create
+                    personalInfo.email = $0
+                    mode = .personalInfo
                 })
+            } else if mode == .personalInfo {
+                PersonalInfoStepView(
+                    draft: $personalInfo,
+                    onContinue: {
+                        Log.info("ui", "setup: personal info step completed")
+                        ctx.pendingPersonalInfo = personalInfo
+                        mode = .create
+                    },
+                    onSkip: {
+                        Log.info("ui", "setup: personal info step skipped")
+                        ctx.pendingPersonalInfo = nil
+                        mode = .create
+                    }
+                )
             } else if mode == .create {
                 Spacer()
                 createForm
@@ -376,7 +392,7 @@ struct SetupWindowView: View {
 /// 库就绪后由 AppContext.relayBindCurrentVaultIfNeeded 自动补绑云同步。
 private struct AccountStepView: View {
     @EnvironmentObject var ctx: AppContext
-    var onDone: () -> Void
+    var onDone: (String) -> Void
 
     @State private var email = ""
     @State private var code = ""
@@ -429,7 +445,7 @@ private struct AccountStepView: View {
                     code = ""
                     Task {
                         if await ctx.relayLoginOnly(email: address, code: entered) {
-                            onDone()
+                            onDone(address)
                         }
                         busy = false
                     }
@@ -459,8 +475,8 @@ struct RestoreCloudForm: View {
     @State private var password = ""
     @State private var error = ""
 
-    /// 选中即可恢复:v7 行级同步下空库同样合法(信封+0 行 → 空库接管,
-    /// 其他设备同步后的条目随后拉取)。不再设"有镜像才可恢复"的 v6 遗留门槛
+    /// 选中即可恢复:行级同步下空库同样合法(信封+0 行 → 空库接管,
+    /// 其他设备同步后的条目随后拉取)。
     /// ——该门槛曾让选中空库时"恢复并打开"永久禁用。
     private var selectedRecord: RelayClient.VaultRecord? {
         serverVaults.first(where: { $0.name == selected })

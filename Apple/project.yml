@@ -87,6 +87,8 @@ targets:
       - path: SafariWebExtension
         excludes:
           - "SafariWebExtension.entitlements"
+          - "iOS.entitlements"
+          - "iOS-Info.plist"
       # manifest.json 平铺到 appex Resources 根;src 目录以 folder reference
       # 整体拷入,保住 manifest 里 "src/…" 引用的相对结构(组语义会打平,导致
       # Safari 找不到 background/content 脚本)。
@@ -135,6 +137,8 @@ targets:
         product: UPasswordsNetworking
       - target: UPasswordsAutoFill
         embed: true
+      - target: SafariWebExtension-iOS
+        embed: true
     info:
       path: iOS/Info.plist
       properties:
@@ -159,6 +163,36 @@ targets:
         SUPPORTS_MACCATALYST: "NO"
         CODE_SIGN_ENTITLEMENTS: iOS/UPasswords.entitlements
         # 真机构建:自动签名(需在 Xcode 登录 2CV6VKVD26 团队的 Apple ID)
+        DEVELOPMENT_TEAM: 2CV6VKVD26
+        CODE_SIGN_STYLE: Automatic
+
+  SafariWebExtension-iOS:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: SafariWebExtension/SafariWebExtensionHandler.swift
+      - path: ../WebExtensions/safari/manifest.json
+        buildPhase: resources
+      - path: ../WebExtensions/safari/src
+        buildPhase: resources
+        type: folder
+    dependencies:
+      - package: Core
+        product: UPasswordsCore
+    info:
+      path: SafariWebExtension/iOS-Info.plist
+      properties:
+        CFBundleDisplayName: UPasswords for Safari
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.Safari.web-extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SafariWebExtensionHandler
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lizhen.upasswords.safari
+        PRODUCT_NAME: UPasswordsSafariWebExtension-iOS
+        SKIP_INSTALL: "YES"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_ENTITLEMENTS: SafariWebExtension/iOS.entitlements
         DEVELOPMENT_TEAM: 2CV6VKVD26
         CODE_SIGN_STYLE: Automatic
 

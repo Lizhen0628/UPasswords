@@ -1,7 +1,8 @@
 # Cloud — UPasswords 云同步协调服务(api.upasswords.com)
 
-架构与安全模型详见 [DESIGN.md](DESIGN.md)(**v7 已实施**:MariaDB 行级密文
-条目 + R2 附件 + Hyperdrive;测试验收见 [TESTING.md](TESTING.md))。
+项目当前开发版本统一为 **v1**。架构与安全模型见 [DESIGN.md](DESIGN.md)，
+MariaDB 表结构、SQL 和 ER 图见 [DATABASE.md](DATABASE.md)；测试入口见
+[TESTING.md](TESTING.md)。当前生产 API 为 Go + chi，Worker 为回退运行时。
 服务端对库内容零知识:密码项以**单条目 AES-GCM 密文行**存于自管 MariaDB,
 条目标识为 UUID,编辑只改行;附件密文 blob 在 R2;`/v1/breach/range` 代理
 HIBP(k-匿名,密码永不出设备)。
@@ -56,7 +57,7 @@ PATCH /v1/vaults/{id}     {name}               改名
 POST /v1/vaults/{id}/transfer {email,code,currentCode,deviceName?}  换绑邮箱
 DELETE /v1/vaults/{id}    {code}               解绑(清行+R2 前缀)
 POST /v1/vaults/{id}/items    {items:[{uuid,kind,op,baseRevision,bodyB64?,sha256?,modifiedMs}]}
-                                               批量 CAS 上行 → 逐条 ok|conflict|not_found
+                                               批量 CAS 上行(kind=1 card, 2 label) → 逐条 ok|conflict|not_found
 GET  /v1/vaults/{id}/changes?since=&limit=     游标增量下行(410 cursor_expired)
 GET  /v1/vaults/{id}/items?cursorMs=&cursorUuid=&limit=   全量重建 keyset 分页
 PUT  /v1/vaults/{id}/attachments/{uuid}?upload=UID        附件密文暂存(octet-stream)
@@ -113,8 +114,8 @@ npx wrangler secret put APP_KEK && npx wrangler secret put ADMIN_TOKEN \
 # 3) schema 已在服务器应用过(upasswords / upasswords_test 两库);
 #    变更 DDL 时:cat sql/0001_init.sql | ssh database-server '(经 docker exec 导入)'
 # 4) 部署
-npx wrangler deploy     # 自定义域 api.upasswords.com;旧 v6 端点随本次部署下线
+npx wrangler deploy     # 自定义域 api.upasswords.com;旧整库端点随本次部署下线
 ```
 
-D1 `upasswords-sync` 与 v6 库体端点(body/envelope/hashes)已随 v7 退役;
+D1 `upasswords-sync` 与旧整库端点(body/envelope/hashes)已随行级同步切换退役;
 R2 旧 `vaults/<id>` 单对象由每日 cron 清扫。

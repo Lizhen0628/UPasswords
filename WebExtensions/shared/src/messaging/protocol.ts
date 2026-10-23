@@ -10,7 +10,7 @@ export interface VaultSessionRow {
     uuid: string;
     bodyB64: string;
     revision: number;
-    kind: 1 | 2;
+    kind: 1 | 2 | 3;
     modifiedMs: number;
 }
 
@@ -18,7 +18,7 @@ export interface VaultSessionFragment {
     uuid: string;
     xml: string;
     revision: number;
-    kind: 1 | 2;
+    kind: 1 | 2 | 3;
     modifiedMs: number;
 }
 
@@ -56,7 +56,8 @@ export type RequestMessage =
     | { type: "ping" }
     | { type: "query"; host: string }
     | { type: "fill"; candidate: FillCandidate; expectedOrigin: string }
-    | { type: "site-hint" }
+    | { type: "site-hint"; registration?: boolean }
+    | { type: "registration-check" }
     | { type: "open-vault" }
     | { type: "unlock"; password: string }
     /** content→bg:登记自身页面地址(popup 无 tabs 权限时的事实来源) */
@@ -67,7 +68,7 @@ export type RequestMessage =
 export type ResponseMessage =
     | VaultSessionResponse
     | { type: "pong" }
-    | { type: "site-hint"; count: number; unlocked: boolean }
+    | { type: "site-hint"; count: number; unlocked: boolean; profileAvailable: boolean }
     | { type: "vault-opened"; ok: boolean }
     | { type: "active-location"; href: string | null }
     | { type: "items"; candidates: FillCandidate[] }
@@ -87,5 +88,5 @@ export function isRequestMessage(value: unknown): value is RequestMessage {
     }
     return type === "ping" || type === "query" || type === "fill" || type === "unlock"
         || type === "location" || type === "active-location"
-        || type === "site-hint" || type === "open-vault";
+        || type === "site-hint" || type === "open-vault" || type === "registration-check";
 }

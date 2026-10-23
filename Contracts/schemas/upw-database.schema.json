@@ -4,110 +4,297 @@
     "title": "UPasswords database (JSON mirror of the .upw plaintext XML)",
     "description": "Canonical entry/field shapes shared by the native app (SwiftPackages/Core) and the web extensions. Property names match the XML attributes of the .upw plaintext format; timestamps are Unix epoch milliseconds. The encrypted .upw container wraps this structure (see Contracts/README.md).",
     "type": "object",
-    "required": ["cards"],
+    "required": [
+        "cards"
+    ],
     "properties": {
         "labels": {
             "type": "array",
-            "items": { "$ref": "#/$defs/label" }
+            "items": {
+                "$ref": "#/$defs/label"
+            }
         },
         "cards": {
             "type": "array",
-            "items": { "$ref": "#/$defs/card" }
+            "items": {
+                "$ref": "#/$defs/card"
+            }
+        },
+        "userProfiles": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/userProfile"
+            }
         }
     },
     "$defs": {
         "fieldType": {
             "enum": [
-                "login", "password", "pin", "number", "date", "phone",
-                "website", "email", "one_time_password", "text", "expiry", "secret"
+                "login",
+                "password",
+                "pin",
+                "number",
+                "date",
+                "phone",
+                "website",
+                "email",
+                "one_time_password",
+                "text",
+                "expiry",
+                "secret"
             ]
         },
         "autofill": {
             "enum": [
-                "off", "username", "current-password", "url", "one-time-code",
-                "cc-number", "cc-name", "cc-exp", "cc-csc"
+                "off",
+                "username",
+                "current-password",
+                "url",
+                "one-time-code",
+                "given-name",
+                "family-name",
+                "email",
+                "tel",
+                "street-address",
+                "address-line1",
+                "address-line2",
+                "address-level1",
+                "address-level2",
+                "postal-code",
+                "country-name",
+                "cc-number",
+                "cc-name",
+                "cc-exp",
+                "cc-csc"
             ]
         },
         "historyEntry": {
             "type": "object",
-            "required": ["value", "time"],
+            "required": [
+                "value",
+                "time"
+            ],
             "properties": {
-                "value": { "type": "string" },
-                "time": { "type": "number", "description": "Epoch millis." }
+                "value": {
+                    "type": "string"
+                },
+                "time": {
+                    "type": "number",
+                    "description": "Epoch millis."
+                }
             }
         },
         "field": {
             "type": "object",
-            "required": ["name"],
+            "required": [
+                "name"
+            ],
             "properties": {
-                "name": { "type": "string" },
-                "type": { "$ref": "#/$defs/fieldType", "default": "text" },
-                "value": { "type": "string", "default": "" },
-                "autofill": { "$ref": "#/$defs/autofill", "default": "off" },
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "$ref": "#/$defs/fieldType",
+                    "default": "text"
+                },
+                "value": {
+                    "type": "string",
+                    "default": ""
+                },
+                "autofill": {
+                    "$ref": "#/$defs/autofill",
+                    "default": "off"
+                },
                 "history": {
                     "type": "array",
-                    "items": { "$ref": "#/$defs/historyEntry" },
+                    "items": {
+                        "$ref": "#/$defs/historyEntry"
+                    },
                     "default": []
                 }
             }
         },
         "attachment": {
             "type": "object",
-            "required": ["name", "data"],
+            "required": [
+                "name",
+                "data"
+            ],
             "properties": {
-                "name": { "type": "string" },
-                "data": { "type": "string", "contentEncoding": "base64" }
+                "name": {
+                    "type": "string"
+                },
+                "data": {
+                    "type": "string",
+                    "contentEncoding": "base64"
+                }
             }
         },
         "label": {
             "type": "object",
-            "required": ["id", "name"],
+            "required": [
+                "id",
+                "name"
+            ],
             "properties": {
-                "id": { "type": "string", "format": "uuid", "description": "UUID v4, client-generated item identity (v7 row sync)." },
-                "name": { "type": "string" },
-                "color": { "type": ["string", "null"] },
-                "type": { "type": ["string", "null"] },
-                "pinToTop": { "type": "boolean", "default": false },
-                "timeStamp": { "type": "number", "default": 0, "description": "Unix epoch millis; serialized as the XML <label time> attribute only when > 0 (0 keeps legacy byte-stable output). Drives label merge LWW." }
+                "id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "UUID v4, client-generated item identity for row sync."
+                },
+                "name": {
+                    "type": "string"
+                },
+                "color": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "type": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "pinToTop": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "timeStamp": {
+                    "type": "number",
+                    "default": 0,
+                    "description": "Unix epoch millis; serialized as the XML <label time> attribute only when > 0 (0 keeps legacy byte-stable output). Drives label merge LWW."
+                }
             }
         },
         "card": {
             "type": "object",
-            "required": ["id"],
+            "required": [
+                "id"
+            ],
             "properties": {
-                "id": { "type": "string", "format": "uuid", "description": "UUID v4, client-generated item identity (v7 row sync)." },
-                "title": { "type": "string", "default": "" },
-                "symbol": { "type": ["string", "null"] },
-                "color": { "type": ["string", "null"] },
-                "template": { "type": "boolean", "default": false },
-                "autofillEnabled": { "type": "boolean", "default": false },
-                "favorite": { "type": "boolean", "default": false },
-                "archived": { "type": "boolean", "default": false },
-                "trashed": { "type": "boolean", "default": false },
-                "expiration": { "type": ["number", "null"] },
-                "reminder": { "type": ["number", "null"] },
-                "created": { "type": "number", "default": 0 },
-                "modified": { "type": "number", "default": 0 },
+                "id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "UUID v4, client-generated item identity for row sync."
+                },
+                "title": {
+                    "type": "string",
+                    "default": ""
+                },
+                "symbol": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "color": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "template": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "autofillEnabled": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "favorite": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "archived": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "trashed": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "expiration": {
+                    "type": [
+                        "number",
+                        "null"
+                    ]
+                },
+                "reminder": {
+                    "type": [
+                        "number",
+                        "null"
+                    ]
+                },
+                "created": {
+                    "type": "number",
+                    "default": 0
+                },
+                "modified": {
+                    "type": "number",
+                    "default": 0
+                },
                 "fields": {
                     "type": "array",
-                    "items": { "$ref": "#/$defs/field" },
+                    "items": {
+                        "$ref": "#/$defs/field"
+                    },
                     "default": []
                 },
-                "notes": { "type": "string", "default": "" },
+                "notes": {
+                    "type": "string",
+                    "default": ""
+                },
                 "labelIds": {
                     "type": "array",
-                    "items": { "type": "string", "format": "uuid" },
+                    "items": {
+                        "type": "string",
+                        "format": "uuid"
+                    },
                     "default": []
                 },
                 "images": {
                     "type": "array",
-                    "items": { "$ref": "#/$defs/attachment" },
+                    "items": {
+                        "$ref": "#/$defs/attachment"
+                    },
                     "default": []
                 },
                 "files": {
                     "type": "array",
-                    "items": { "$ref": "#/$defs/attachment" },
+                    "items": {
+                        "$ref": "#/$defs/attachment"
+                    },
                     "default": []
+                }
+            }
+        },
+        "userProfile": {
+            "type": "object",
+            "required": [
+                "id"
+            ],
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "format": "uuid"
+                },
+                "registrationAutofillEnabled": {
+                    "type": "boolean",
+                    "default": true
+                },
+                "created": {
+                    "type": "number"
+                },
+                "modified": {
+                    "type": "number"
+                },
+                "fields": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/field"
+                    }
                 }
             }
         }

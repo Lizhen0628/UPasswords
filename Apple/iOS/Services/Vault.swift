@@ -21,8 +21,13 @@ final class Vault: ObservableObject {
     /// 视图仍只经 Vault 方法改数据(规范 14.4)。
     @Published var database = PasswordDatabase()
     @Published private(set) var locked = true {
-        didSet { syncSessionID = UUID() }
+        didSet {
+            syncSessionID = UUID()
+            savePendingPersonalInfoIfNeeded()
+        }
     }
+    /// Memory-only onboarding draft, consumed after creation or restoration unlocks the vault.
+    var pendingPersonalInfo: PersonalInfoDraft?
     @Published var toast: String? = nil
 
     // 设置(共享 defaults,AutoFill 扩展可读面容 ID 开关)
@@ -33,6 +38,19 @@ final class Vault: ObservableObject {
     @Published var themeIndex: Int { didSet { d.set(themeIndex, forKey: "set.theme") } }
     @Published var sortOrder: SortOrder { didSet { d.set(sortOrder.rawValue, forKey: "set.sort") } }
     @Published var pinFavorites: Bool { didSet { d.set(pinFavorites, forKey: "set.pinFav") } }
+    @Published var registrationAutofillEnabled: Bool {
+        didSet {
+            d.set(registrationAutofillEnabled, forKey: "autofill.registrationEnabled")
+            Log.info("ui", "ios registration autofill \(registrationAutofillEnabled ? "enabled" : "disabled")")
+            for index in database.userProfiles.indices {
+                database.userProfiles[index].registrationAutofillEnabled = registrationAutofillEnabled
+                database.userProfiles[index].modified = max(
+                    Date().millis, database.userProfiles[index].modified + 1
+                )
+            }
+            if !locked { persist() }
+        }
+    }
 
     /// 应用内语言覆盖(空 = 跟随系统)。写入 UserDefaults 的 app.language,
     /// 由 Core 的 L10n.activeBundle 每次取词时解析——切换后立即生效。
@@ -137,6 +155,7 @@ final class Vault: ObservableObject {
         themeIndex = d.object(forKey: "set.theme") as? Int ?? 0
         sortOrder = SortOrder(rawValue: d.object(forKey: "set.sort") as? Int ?? 0) ?? .titleAsc
         pinFavorites = d.object(forKey: "set.pinFav") as? Bool ?? true
+        registrationAutofillEnabled = d.object(forKey: "autofill.registrationEnabled") as? Bool ?? true
         language = UserDefaults.standard.string(forKey: "app.language") ?? ""
         autoBreachCheckEnabled = d.object(forKey: "sec.autoBreachCheck") as? Bool ?? false
         autoBreachCheckDays = d.object(forKey: "sec.autoBreachCheckDays") as? Int ?? 7
@@ -174,12 +193,12 @@ final class Vault: ObservableObject {
         databaseName = name.isEmpty ? SharedVaultStore.defaultDatabaseName : name
         do {
             _ = try store.create(name: databaseName, password: pw)
+            let (createdDatabase, key) = try store.loadUnlocked(name: databaseName, password: pw)
+            database = createdDatabase
+            rowSync = try store.loadSyncState(for: databaseName)
             password = pw
-            // 会话必须带上库密钥:建库即解锁,后续登录绑定/保存都要用
-            // (真实事故:缺这一步时建库后立刻登录云同步报 notConfigured)
-            if let (_, vek) = try? store.loadUnlocked(name: databaseName, password: pw) {
-                vaultKey = vek
-            }
+            // 完整加载新库与密钥后才解锁,确保引导资料写入保留默认模板。
+            vaultKey = key
             if biometric {
                 PasswordStore.savePasswordForBiometric(pw, databaseName: databaseName)
             }
@@ -253,7 +272,7 @@ final class Vault: ObservableObject {
                 Log.warn("app", "ios remote unlock fallback: password rejected by remote envelope")
                 return false
             }
-            // v7:远端是行级密文,走全量重建收敛本地(他机改密后本体随新 VEK 重加密)
+            // 远端是行级密文,走全量重建收敛本地(他机改密后本体随新 VEK 重加密)
             var state = try store.loadSyncState(for: name)
             let rebuilt: PasswordDatabase
             do {

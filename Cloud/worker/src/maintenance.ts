@@ -114,8 +114,8 @@ async function auditRetention(env: Env): Promise<void> {
   await exec(env, "DELETE FROM audit_log WHERE ts_ms < ?", [nowMs() - 180 * DAY_MS]);
 }
 
-/// 旧版(v6)R2 库体单对象布局退役清扫:vaults/<vaultId>(无 /attachments/
-/// 段的裸键)是 v6 遗留库体副本,开发期无数据,直接清掉防残留。
+/// 旧整库 R2 单对象布局退役清扫:vaults/<vaultId>(无 /attachments/
+/// 段的裸键)是遗留库体副本,开发期无数据,直接清掉防残留。
 async function sweepLegacyBodyObjects(env: Env): Promise<void> {
   let cursor: string | undefined;
   do {

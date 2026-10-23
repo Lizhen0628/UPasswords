@@ -110,11 +110,11 @@ test('Contracts: database schema parses and field vocabulary matches the app', (
         'date', 'email', 'expiry', 'login', 'number', 'one_time_password',
         'password', 'phone', 'pin', 'secret', 'text', 'website',
     ])
-    assert.equal(schema.$defs.autofill.enum.length, 9, 'autofill vocabulary has 9 tokens')
+    assert.equal(schema.$defs.autofill.enum.length, 20, 'autofill vocabulary has 20 tokens')
     assert.ok(schema.$defs.card, 'card def present')
-    assert.equal(schema.$defs.ghost, undefined, 'v7: no tombstone (row store is authoritative)')
-    assert.equal(schema.$defs.card.properties.id.type, 'string', 'v7: card id is uuid string')
-    assert.equal(schema.$defs.label.properties.id.format, 'uuid', 'v7: label id is uuid')
+    assert.equal(schema.$defs.ghost, undefined, 'no tombstone (row store is authoritative)')
+    assert.equal(schema.$defs.card.properties.id.type, 'string', 'card id is uuid string')
+    assert.equal(schema.$defs.label.properties.id.format, 'uuid', 'label id is uuid')
 })
 
 test('Contracts: extension message schema covers all request/response tags', () => {
@@ -123,7 +123,7 @@ test('Contracts: extension message schema covers all request/response tags', () 
     )
     const tag = (branch) => branch.properties.type.const
     const [request, response] = schema.oneOf
-    assert.deepEqual(request.oneOf.map(tag).sort(), ['active-location', 'fill', 'location', 'open-vault', 'ping', 'query', 'site-hint', 'unlock', 'vault-session'])
+    assert.deepEqual(request.oneOf.map(tag).sort(), ['active-location', 'fill', 'location', 'open-vault', 'ping', 'query', 'registration-check', 'site-hint', 'unlock', 'vault-session'])
     assert.deepEqual(response.oneOf.map(tag).sort(), ['active-location', 'error', 'filled', 'items', 'locked', 'noVault', 'pong', 'site-hint', 'unlocked', 'vault-opened', 'vault-session'])
 })
 
@@ -142,7 +142,7 @@ test('Contracts: raw XML is trusted-session only and fills require an origin', (
     assert.equal(session.properties.item.$ref, '#/$defs/sessionItem')
     assert.ok(session.properties.action.enum.includes('replace'))
     const hint = schema.oneOf[1].oneOf.find((branch) => branch.properties.type.const === 'site-hint')
-    assert.deepEqual(Object.keys(hint.properties).sort(), ['count', 'type', 'unlocked'])
+    assert.deepEqual(Object.keys(hint.properties).sort(), ['count', 'profileAvailable', 'type', 'unlocked'])
     assert.equal(hint.additionalProperties, false)
 })
 

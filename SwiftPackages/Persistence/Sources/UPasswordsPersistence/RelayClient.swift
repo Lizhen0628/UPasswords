@@ -1,7 +1,7 @@
 import Foundation
 import UPasswordsCore
 
-/// api.upasswords.com 协调服务客户端(见 Cloud/DESIGN.md v7):
+/// api.upasswords.com 协调服务客户端(见 Cloud/DESIGN.md):
 /// 账户(邮箱验证码)+ 库注册表 + 行级条目同步(items/changes)+
 /// 附件(R2 blob)+ 改密 rekey。零知识红线:所有请求只携带密文/哈希/
 /// 元数据,绝不携带主密码或库密钥。

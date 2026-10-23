@@ -25,6 +25,7 @@ enum AppSheet: Identifiable, Hashable {
     case exportAs
     case importData
     case databaseInfo
+    case personalInfo
     case compromised
     case changePassword
     case configureCloud
@@ -62,6 +63,7 @@ enum AppSheet: Identifiable, Hashable {
         case .exportAs: return "exportAs"
         case .importData: return "importData"
         case .databaseInfo: return "databaseInfo"
+        case .personalInfo: return "personalInfo"
         case .compromised: return "compromised"
         case .changePassword: return "changePassword"
         case .configureCloud: return "configureCloud"

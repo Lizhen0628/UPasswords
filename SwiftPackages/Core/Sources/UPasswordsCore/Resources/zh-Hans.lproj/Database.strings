@@ -17,6 +17,17 @@
 "cc_exp_year_autofill" = "截止年份";
 "cc_name_autofill" = "持卡人";
 "cc_number_autofill" = "卡号";
+"given_name_autofill" = "名";
+"family_name_autofill" = "姓";
+"email_autofill" = "电子邮箱";
+"telephone_autofill" = "电话号码";
+"street_address_autofill" = "街道地址";
+"address_line_1_autofill" = "地址第一行";
+"address_line_2_autofill" = "地址第二行";
+"address_level_1_autofill" = "省 / 州";
+"address_level_2_autofill" = "城市";
+"postal_code_autofill" = "邮政编码";
+"country_name_autofill" = "国家/地区";
 "class_field" = "类别";
 "code_field" = "编码";
 "code_template" = "编码";

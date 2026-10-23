@@ -84,7 +84,7 @@ extension Vault {
         }
     }
 
-    /// 登记当前库并绑定(登录后自动调用)。v7:创建即携带初始信封;
+    /// 登记当前库并绑定(登录后自动调用)。创建即携带初始信封;
     /// 绑定即全量上行由随后的一轮 syncNow 完成(快照基线清空),失败不回滚——下轮自愈。
     private func relayEnableForCurrentVault(token: String, email: String) async throws {
         guard !locked, let vaultKey else { throw SyncError.notConfigured }

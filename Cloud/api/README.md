@@ -1,5 +1,8 @@
 # Go API Deployment
 
+UPasswords project documentation uses development version v1. API path versions and
+the row-sync capability version are separate protocol identifiers.
+
 The canonical API prefix is `/v1/`; `/v2/` remains available as a compatibility alias
 for already-installed clients. Both prefixes expose the same row-sync protocol
 (capability version 2), handlers, and data. Nginx runs in the existing `nginxui`

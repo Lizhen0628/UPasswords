@@ -110,7 +110,7 @@ public enum Templates {
 
     public static func spec(id: Int) -> Spec? { all.first { $0.id == id } }
 
-    /// 默认标签(键名 + 类型);v7 标签 id 为 UUID,创建时现场生成。
+    /// 默认标签(键名 + 类型);标签 id 为 UUID,创建时现场生成。
     public static var defaultLabelKeys: [(nameKey: String, type: String?)] = [
         ("busines_label", nil),
         ("private_label", nil),

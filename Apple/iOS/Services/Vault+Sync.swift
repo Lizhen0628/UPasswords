@@ -4,7 +4,7 @@ import CryptoKit
 import UPasswordsCore
 import UPasswordsPersistence
 
-// MARK: - iOS 行级云同步(v7,与 macOS AppContext+Sync 同语义)
+// MARK: - iOS 行级云同步(与 macOS AppContext+Sync 同语义)
 //
 // 拉取(游标增量) → 上行(脏集合 CAS);冲突逐条 LWW 自动收敛,无整库弹窗。
 // 本体仍经库密钥整库加密落盘(.upw),行级密文只在同步链路上存在。
@@ -274,7 +274,7 @@ extension Vault {
                 db = try await RowSync.fullRebuild(
                     client: relayClient, token: token, vaultId: binding.vaultId,
                     key: key, state: &state)
-                outcome.pulledItems = db.cards.count + db.labels.count
+                outcome.pulledItems = db.cards.count + db.labels.count + db.userProfiles.count
             } catch let signal as RowSyncRekeySignal {
                 // 对端 rekey:旧 VEK 解不开新密文,强制锁定接管
                 Log.warn("sync", "ios peer rekey detected (version → \(signal.passwordVersion)) — force locking")
@@ -286,6 +286,7 @@ extension Vault {
                 return nil
             }
             try validateSyncSession(name: name, key: snapshotKey, sessionID: sessionID)
+            if db.migrateLegacyPersonalInfo() > 0 { state.recomputeDirty(database: db) }
             let pushed = try await RowSync.push(
                 client: relayClient, token: token, vaultId: binding.vaultId,
                 key: key, database: &db, state: &state)

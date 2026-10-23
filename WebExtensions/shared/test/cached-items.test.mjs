@@ -26,6 +26,19 @@ test("cached labels and inactive cards remain verified but are not fill candidat
     }
 });
 
+test("personal information tokens and disabled preference survive encrypted row projection", () => {
+    const xml = `<user_profile id="${uuid}" autofill="off">
+        <field name="Email" type="email" autofill="email">test@example.com</field>
+        <field name="Phone" type="phone" autofill="tel">5550100</field>
+        <field name="Street" type="text" autofill="address-line1">1 Main Street</field>
+    </user_profile>`;
+    const item = projectVaultFragment(fragment(xml, { kind: 3 }));
+    assert.equal(item.recordType, "userProfile");
+    assert.equal(item.autofillEnabled, false);
+    assert.equal(item.host, "");
+    assert.deepEqual(item.fields.map(field => field.autofill), ["email", "tel", "address-line1"]);
+});
+
 test("cached projection rejects identity, metadata and XML shape corruption", () => {
     const xml = `<card id="${uuid}"/>`;
     for (const extra of [{ uuid: "bad" }, { revision: 0 }, { revision: 1.1 }, { kind: 3 },

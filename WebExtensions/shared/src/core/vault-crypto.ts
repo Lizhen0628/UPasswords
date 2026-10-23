@@ -144,7 +144,7 @@ export function envelopeChangedAt(envelope: Uint8Array): number | null {
 }
 
 /**
- * Decrypt one row-sync item body (v7 §6.2): AES-GCM(vaultKey) combined
+ * Decrypt one row-sync item body: AES-GCM(vaultKey) combined
  * (nonce 12 + ct + tag), AAD bound to the item uuid. Mirrors Swift
  * `RowSyncCipher` byte-for-byte — the AAD is the *uppercase* canonical
  * uuid string (Swift uuidString); the server normalizes stored uuids to
@@ -234,6 +234,9 @@ const FIELD_TYPES: ReadonlySet<string> = new Set([
 ]);
 const AUTOFILL_TOKENS: ReadonlySet<string> = new Set([
     "off", "username", "current-password", "url", "one-time-code",
+    "given-name", "family-name", "email", "tel", "street-address",
+    "address-line1", "address-line2", "address-level1", "address-level2",
+    "postal-code", "country-name",
     "cc-number", "cc-name", "cc-exp", "cc-csc",
 ]);
 
@@ -251,7 +254,7 @@ export function parseVaultXml(xml: string): ExtensionItem[] {
         throw new VaultCryptoError("bad_xml");
     }
     const items: ExtensionItem[] = [];
-    for (const card of Array.from(doc.querySelectorAll("card"))) {
+    for (const card of Array.from(doc.querySelectorAll("card, user_profile"))) {
         if (card.getAttribute("trashed") === "true" || card.getAttribute("archived") === "true" || card.getAttribute("template") === "true") {
             continue;
         }
@@ -268,13 +271,15 @@ export function parseVaultXml(xml: string): ExtensionItem[] {
             };
         });
         const website = fields.find((f) => f.type === "website")?.value ?? "";
-        // v7 条目 id 为 UUID 字符串;缺 id 用空串,变更检测按指纹失真可见
+        // 条目 id 为 UUID 字符串;缺 id 用空串,变更检测按指纹失真可见
         items.push({
             id: card.getAttribute("id") ?? "",
-            title: card.getAttribute("title") ?? "",
+            ...(card.tagName === "user_profile" ? { recordType: "userProfile" as const } : {}),
+            title: card.tagName === "user_profile" ? "@string/personal_info_title" : card.getAttribute("title") ?? "",
             symbol: card.getAttribute("symbol"),
             fields,
             host: website.trim(),
+            autofillEnabled: card.getAttribute("autofill") !== "off",
             ...(card.getAttribute("favorite") === "true" ? { favorite: true } : {}),
         });
     }

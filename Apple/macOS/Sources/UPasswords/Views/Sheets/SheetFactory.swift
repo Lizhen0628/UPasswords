@@ -23,6 +23,7 @@ enum SheetFactory {
         case .exportAs: ExportAsSheet()
         case .importData: ImportSheet()
         case .databaseInfo: DatabaseInfoSheet()
+        case .personalInfo: PersonalInfoSheet()
         case .compromised: CompromisedSheet()
         case .changePassword: ChangePasswordSheet()
         case .configureCloud: ConfigureCloudSheet()

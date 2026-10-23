@@ -235,7 +235,7 @@ extension AppContext {
     }
 
     /// 远端不可解密修复 B:以本地数据覆盖云端(确认后调用),丢弃云端现有内容。
-    /// v7 形态 = 用本地 VEK + 本地信封跑一轮 rekey(原子替换服务端全部条目)。
+    /// 当前实现通过本地 VEK + 本地信封执行一轮 rekey(原子替换服务端全部条目)。
     func overwriteUnreadableRemote() async {
         guard let binding = relay.binding(database: databaseName),
               let token = relay.token(database: databaseName),
@@ -411,7 +411,7 @@ extension AppContext {
                 db = try await RowSync.fullRebuild(
                     client: relayClient, token: token, vaultId: binding.vaultId,
                     key: key, state: &state)
-                outcome.pulledItems = db.cards.count + db.labels.count
+                outcome.pulledItems = db.cards.count + db.labels.count + db.userProfiles.count
             } catch let signal as RowSyncRekeySignal {
                 // 对端 rekey:旧 VEK 解不开新密文,强制锁定接管
                 Log.warn("sync", "peer rekey detected (version → \(signal.passwordVersion)) — force locking")
@@ -423,6 +423,7 @@ extension AppContext {
                 return nil
             }
             try validateSyncSession(name: name, key: snapshotKey, sessionID: sessionID)
+            if db.migrateLegacyPersonalInfo() > 0 { state.recomputeDirty(database: db) }
             let pushed = try await RowSync.push(
                 client: relayClient, token: token, vaultId: binding.vaultId,
                 key: key, database: &db, state: &state)

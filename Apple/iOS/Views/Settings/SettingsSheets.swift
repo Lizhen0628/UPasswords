@@ -103,6 +103,12 @@ struct AutoFillGuideView: View {
                 }
 
                 Section {
+                    Text(L10n.t("ios_registration_safari_steps"))
+                } header: {
+                    Text(L10n.t("registration_autofill_setting"))
+                }
+
+                Section {
                     Button {
                         if let url = URL(string: UIApplication.openSettingsURLString) {
                             UIApplication.shared.open(url)

@@ -66,9 +66,9 @@ function element(tag = 'div') {
     }
 }
 
-function renderer(browser, { host = 'example.com', query = '', filter = 'all' } = {}) {
+function renderer(browser, { host = 'example.com', query = '', filter = 'all', registrationForm = false } = {}) {
     const source = read(browser, 'popup.js')
-    const start = source.indexOf('function renderCandidates(items) {')
+    const start = source.indexOf('function isPersonalInfoItem(item) {')
     const end = source.indexOf('\nasync function fill(', start)
     const itemsEl = element()
     const suggestionsEl = element()
@@ -78,7 +78,7 @@ function renderer(browser, { host = 'example.com', query = '', filter = 'all' } 
     const labels = { emptyTitle: element(), emptyDescription: element(), itemsHeading: element(), emptyNewLoginButton: element() }
     const calls = []
     const render = runInNewContext(`${source.slice(start, end)}; renderCandidates`, {
-        itemsEl, suggestionsEl, suggestionSection, resultCount, emptyState, host, credentialsOf, hostMatches,
+        itemsEl, suggestionsEl, suggestionSection, resultCount, emptyState, host, credentialsOf, hostMatches, registrationForm,
         searchInput: { value: query }, siteFilter: { value: filter }, sortItems: { value: 'title' },
         t: (zh, en) => en, copyText: (...args) => calls.push(['copy', ...args]),
         document: { createElement: element, getElementById: id => labels[id] },
@@ -179,6 +179,7 @@ async function popup(browserName, {
         tabs: {
             query: async () => [{ id: 1, url }],
             sendMessage: async (tab, message) => {
+                if (message.type === 'registration-check') return hooks.registrationForm === true
                 fills.push(message)
                 return hooks.fillResponse ? await hooks.fillResponse(tab, message) : { ok: true }
             },
@@ -752,7 +753,7 @@ for (const browser of browsers) {
         await view.api.fill({ item: entry }, element())
         const message = view.fills[0]
         assert.equal(message.expectedOrigin, 'https://example.com')
-        assert.deepEqual(Object.keys(message.candidate.item).sort(), ['fields', 'host', 'id', 'symbol', 'title'])
+        assert.deepEqual(Object.keys(message.candidate.item).sort(), ['autofillEnabled', 'fields', 'host', 'id', 'symbol', 'title'])
         assert.equal(message.candidate.item.fields.length, 2)
         assert.equal(message.candidate.item.fields[0].autofill, 'username')
         assert.equal(JSON.stringify(message).includes('private notes'), false)
@@ -760,6 +761,38 @@ for (const browser of browsers) {
         const internal = await popup(browser, { items: [entry], url: 'chrome://example.com' })
         await internal.api.fill({ item: entry }, element())
         assert.equal(internal.fills.length, 0)
+    })
+
+    test(`Popup ${browser}: registration profile fills only with an enabled current session item`, async () => {
+        const profile = { ...editableItem(), host: '', recordType: 'userProfile',
+            autofillEnabled: true, fields: [
+                { name: 'Email', type: 'email', value: 'test@example.com', autofill: 'email' },
+                { name: 'Phone', type: 'phone', value: '5550100', autofill: 'tel' },
+                { name: 'Private', type: 'secret', value: 'synthetic-private', autofill: 'off' },
+                { name: 'Password', type: 'password', value: 'synthetic-password', autofill: 'current-password' },
+                { name: 'Account', type: 'login', value: 'synthetic-account', autofill: 'username' },
+            ] }
+        const view = await popup(browser, { items: [profile], hooks: { registrationForm: true } })
+        assert.equal(view.elements.items.children.length, 1)
+        await view.api.fill({ item: profile }, element())
+        assert.equal(view.fills.length, 1)
+        const message = view.fills[0]
+        assert.equal(message.expectedOrigin, 'https://example.com')
+        assert.equal(message.candidate.item.fields.length, 2)
+        assert.equal(JSON.stringify(message).includes('synthetic-private'), false)
+        assert.equal(JSON.stringify(message).includes('synthetic-password'), false)
+        assert.equal(JSON.stringify(message).includes('synthetic-account'), false)
+        assert.equal(JSON.stringify(message).includes('synthetic-original'), false)
+        view.setState({ items: [{ ...profile, autofillEnabled: false }] })
+        await view.api.fill({ item: profile }, element())
+        assert.equal(view.fills.length, 1, 'fresh disabled flag blocks stale candidate')
+        const disabled = await popup(browser, { items: [{ ...profile, autofillEnabled: false }],
+            hooks: { registrationForm: true } })
+        assert.equal(disabled.elements.items.children.length, 0)
+        const login = await popup(browser, { items: [profile] })
+        assert.equal(login.elements.items.children.length, 0)
+        await login.api.fill({ item: profile }, element())
+        assert.equal(login.fills.length, 0)
     })
 
     test(`Popup ${browser}: delayed detail read and external timeout cannot restore detail DOM`, async () => {

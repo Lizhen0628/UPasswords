@@ -1,4 +1,4 @@
--- UPasswords v7 全量 DDL(MariaDB 11.4, utf8mb4, InnoDB)
+-- UPasswords v1 full DDL (MariaDB 11.4, utf8mb4, InnoDB)
 -- 约定:时间一律 BIGINT Unix 毫秒(与客户端 Card 时间戳同单位,服务端签发);
 -- 外键 users→sessions/vaults、vaults→items/changes/attachments 均 ON DELETE CASCADE;
 -- attachments.card_uuid 为逻辑引用(条目体是密文,无法建 FK,孤儿由 cron 清扫)。
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS vaults (
 CREATE TABLE IF NOT EXISTS vault_items (
   vault_id    VARCHAR(32)  NOT NULL,
   item_uuid   CHAR(36)     NOT NULL,                    -- UUIDv4 客户端生成
-  kind        TINYINT      NOT NULL,                    -- 1=card 2=label(无墓碑行,删即删行)
+  kind        TINYINT      NOT NULL,                    -- 当前 API: 1=card 2=label
   revision    BIGINT UNSIGNED NOT NULL DEFAULT 1,       -- 每次接受写入 +1(CAS)
   body        MEDIUMBLOB   NOT NULL,                    -- VEK AEAD 密文(AAD=vault+uuid)
   body_sha256 CHAR(64)     NOT NULL,

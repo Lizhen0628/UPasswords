@@ -4,7 +4,13 @@ import XCTest
 final class FieldTypeTests: XCTestCase {
     func testTypeSet() {
         XCTAssertEqual(FieldType.allCases.count, 12)
-        XCTAssertEqual(Autofill.allCases.count, 9)
+        XCTAssertEqual(Autofill.allCases.count, 20)
+        let personalInfoTokens: Set<String> = [
+            "given-name", "family-name", "email", "tel", "street-address",
+            "address-line1", "address-line2", "address-level1", "address-level2",
+            "postal-code", "country-name",
+        ]
+        XCTAssertTrue(personalInfoTokens.isSubset(of: Set(Autofill.allCases.map(\.rawValue))))
         XCTAssertTrue(FieldType.password.isHidden)
         XCTAssertTrue(FieldType.oneTimePassword.isHidden)
         XCTAssertFalse(FieldType.login.isHidden)

@@ -26,6 +26,17 @@ export type ExtensionAutofill =
     | "current-password"
     | "url"
     | "one-time-code"
+    | "given-name"
+    | "family-name"
+    | "email"
+    | "tel"
+    | "street-address"
+    | "address-line1"
+    | "address-line2"
+    | "address-level1"
+    | "address-level2"
+    | "postal-code"
+    | "country-name"
     | "cc-number"
     | "cc-name"
     | "cc-exp"
@@ -40,10 +51,14 @@ export interface ExtensionField {
 
 /** A vault entry handed to the extension for one origin. */
 export interface ExtensionItem {
-    id: string; // UUID v4 (v7 row-sync item identity)
+    /** Dedicated encrypted profile record; absent for ordinary password cards. */
+    recordType?: "userProfile";
+    id: string; // UUID v4 row-sync item identity
     title: string;
     symbol: string | null;
     fields: ExtensionField[];
+    /** False disables filling this item even when the site and fields match. */
+    autofillEnabled?: boolean;
     /** Website hostname or HTTP(S) URL; empty never matches a page. */
     host: string;
     /** Original decrypted fragment and CAS revision, kept only in the unlocked session; never send for filling. */

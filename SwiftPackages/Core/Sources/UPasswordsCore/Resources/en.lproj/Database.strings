@@ -17,6 +17,17 @@
 "cc_exp_year_autofill" = "Expiration year";
 "cc_name_autofill" = "Cardholder name";
 "cc_number_autofill" = "Card number";
+"given_name_autofill" = "First name";
+"family_name_autofill" = "Last name";
+"email_autofill" = "Email address";
+"telephone_autofill" = "Phone number";
+"street_address_autofill" = "Street address";
+"address_line_1_autofill" = "Address line 1";
+"address_line_2_autofill" = "Address line 2";
+"address_level_1_autofill" = "State / province";
+"address_level_2_autofill" = "City";
+"postal_code_autofill" = "Postal code";
+"country_name_autofill" = "Country";
 "class_field" = "Class";
 "code_field" = "Code";
 "code_template" = "Code";

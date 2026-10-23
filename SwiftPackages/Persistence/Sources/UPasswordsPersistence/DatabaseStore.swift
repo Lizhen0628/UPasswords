@@ -73,7 +73,7 @@ public final class DatabaseStore {
     /// v2 信封文件路径:库密钥由主密码包裹存放在此(<名>.upwkey)。
     public func keyURL(for name: String) -> URL { databasesDir.appendingPathComponent("\(name).upwkey") }
 
-    /// v7 行级同步游标 sidecar 路径(<名>.upwsync;纯元数据,无敏感值)。
+    /// 行级同步游标 sidecar 路径(<名>.upwsync;纯元数据,无敏感值)。
     public func syncStateURL(for name: String) -> URL { databasesDir.appendingPathComponent("\(name).upwsync") }
 
     private func syncTransactionURL(for name: String) -> URL {

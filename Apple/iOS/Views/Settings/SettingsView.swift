@@ -17,7 +17,7 @@ struct SettingsView: View {
     /// 子页面经 `@Binding` 共享该出口。
     enum ActiveSheet: Identifiable {
         case changePassword, autoFillGuide, export, importData, backups
-        case manageVaults, createDatabase, importDatabase
+        case manageVaults, createDatabase, importDatabase, personalInfo
 
         var id: Self { self }
     }
@@ -48,6 +48,7 @@ struct SettingsView: View {
             case .manageVaults: VaultManageSheet()
             case .createDatabase: DatabaseCreateSheet()
             case .importDatabase: DatabaseImportSheet()
+            case .personalInfo: PersonalInfoSheet()
             }
         }
     }
@@ -113,6 +114,25 @@ struct SettingsView: View {
                         .foregroundStyle(Brand.accent)
                 }
             }
+            Button {
+                Log.info("ui", "ios personal information editor opened")
+                activeSheet = .personalInfo
+            } label: {
+                Label(L10n.t("personal_info_title"), systemImage: "person.text.rectangle")
+            }
+            Toggle(isOn: Binding(
+                get: {
+                    vault.database.userProfiles.first?.registrationAutofillEnabled
+                        ?? vault.registrationAutofillEnabled
+                },
+                set: { vault.registrationAutofillEnabled = $0 }
+            )) {
+                Label(L10n.t("registration_autofill_setting"), systemImage: "person.text.rectangle")
+            }
+            .tint(Brand.accent)
+            Text(L10n.t("registration_autofill_setting_hint"))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         } header: {
             Text(L10n.t("ios_settings_group_general"))
         }

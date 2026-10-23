@@ -191,6 +191,12 @@ if (!pageUrl) {
     } catch { /* 后台未应答按无地址处理 */ }
 }
 const host = /^https?:\/\//i.test(pageUrl) ? canonicalizeHost(hostnameOf(pageUrl)) : "";
+let registrationForm = false;
+if (tab?.id) {
+    try {
+        registrationForm = Boolean(await browser.tabs.sendMessage(tab.id, { type: "registration-check" }));
+    } catch { /* No content script means this page cannot receive profile data. */ }
+}
 // host 行只承载域名;取不到(chrome:// 内部页/新标签页)整行隐藏,
 // "此页面不可填充"只由下方状态行说一次——避免两行重复提示
 hostEl.textContent = host;
@@ -737,6 +743,24 @@ async function syncVault(auto = false) {
 
 // MARK: - 候选与填充
 
+function isPersonalInfoItem(item) {
+    return item.recordType === "userProfile";
+}
+
+function personalInfoFields(item) {
+    const tokens = new Set([
+        "given-name", "family-name", "email", "tel", "street-address",
+        "address-line1", "address-line2", "address-level1", "address-level2",
+        "postal-code", "country-name",
+    ]);
+    return item.fields.filter((field) => tokens.has(field.autofill) && Boolean(field.value));
+}
+
+function canFillPersonalInfo(item) {
+    return isPersonalInfoItem(item) && item.autofillEnabled !== false
+        && personalInfoFields(item).length > 0;
+}
+
 function renderCandidates(items) {
     itemsEl.replaceChildren();
     suggestionsEl.replaceChildren();
@@ -744,8 +768,12 @@ function renderCandidates(items) {
     const filter = siteFilter.value;
     const candidates = items
         .map((item) => ({ item, ...credentialsOf(item) }))
-        .filter(({ item, username }) => (filter !== "favorites" || item.favorite === true)
-            && (filter !== "current" || Boolean(host && hostMatches(host, item.host)))
+        .filter(({ item, username }) => (!isPersonalInfoItem(item)
+            || (registrationForm && canFillPersonalInfo(item)))
+            && (filter !== "favorites" || item.favorite === true)
+            && (filter !== "current" || (isPersonalInfoItem(item)
+                ? registrationForm && canFillPersonalInfo(item)
+                : Boolean(host && hostMatches(host, item.host))))
             && (!query || item.title.toLocaleLowerCase().includes(query)
                 || username.toLocaleLowerCase().includes(query)
                 || item.host.toLocaleLowerCase().includes(query)))
@@ -767,12 +795,17 @@ function renderCandidates(items) {
 }
 
 function appendCandidate(candidate, list) {
+    if (isPersonalInfoItem(candidate.item)) {
+        candidate.item.title = t("个人资料", "Personal information");
+    }
     const li = document.createElement("li");
     li.className = "item";
     li.dataset.itemId = candidate.item.id;
     const button = document.createElement("button");
     button.type = "button";
-    const canFill = Boolean(host && hostMatches(host, candidate.item.host));
+    const canFill = isPersonalInfoItem(candidate.item)
+        ? registrationForm && canFillPersonalInfo(candidate.item)
+        : Boolean(host && hostMatches(host, candidate.item.host));
     const avatar = document.createElement("span");
     avatar.className = "item-avatar";
     avatar.setAttribute("aria-hidden", "true");
@@ -899,7 +932,10 @@ async function quickFillCurrentSite() {
 }
 
 async function fill(candidate, li) {
-    if (!tab?.id || !/^https?:\/\//i.test(pageUrl) || !hostMatches(host, candidate.item.host)) {
+    const profile = isPersonalInfoItem(candidate.item);
+    if (!tab?.id || !/^https?:\/\//i.test(pageUrl)
+        || (profile ? !registrationForm || !canFillPersonalInfo(candidate.item)
+            : !hostMatches(host, candidate.item.host))) {
         console.warn("[upw] fill skipped: page context not fillable");
         status(t("当前页面不可填充，请重新打开扩展后重试。", "This page cannot be filled. Reopen the extension and try again."), true);
         return;
@@ -917,7 +953,9 @@ async function fill(candidate, li) {
             return;
         }
         const current = state.items?.find(item => item.id === candidate.item.id);
-        if (!current || !hostMatches(host, current.host)) {
+        if (!current || (profile
+            ? !canFillPersonalInfo(current) || !registrationForm
+            : !hostMatches(host, current.host))) {
             console.warn("[upw] fill aborted: item missing or host mismatch in session");
             status(t("条目已变化或与当前网站不匹配，请刷新后重试。", "The item changed or no longer matches this site. Refresh and try again."), true);
             return;
@@ -939,16 +977,19 @@ async function fill(candidate, li) {
             return;
         }
         if (new URL(activeTab.url).protocol === "http:" && !window.confirm(t(
-            "此页面使用不安全的 HTTP 连接。仍要填充密码吗？",
-            "This page uses an insecure HTTP connection. Fill the password anyway?",
+            profile ? "此页面使用不安全的 HTTP 连接。仍要填充个人资料吗？" : "此页面使用不安全的 HTTP 连接。仍要填充密码吗？",
+            profile ? "This page uses an insecure HTTP connection. Fill personal info anyway?" : "This page uses an insecure HTTP connection. Fill the password anyway?",
         ))) return;
-        const { username, password } = credentialsOf(current);
+        const { username, password } = profile ? { username: "", password: "" } : credentialsOf(current);
         const fillItem = {
             id: current.id, title: current.title, symbol: current.symbol, host: current.host,
-            fields: [
-                { name: "", type: "login", value: username, autofill: "username" },
-                { name: "", type: "password", value: password, autofill: "current-password" },
-            ],
+            ...(profile ? { recordType: "userProfile" } : {}),
+            autofillEnabled: current.autofillEnabled,
+            fields: profile ? personalInfoFields(current)
+                : [
+                    { name: "", type: "login", value: username, autofill: "username" },
+                    { name: "", type: "password", value: password, autofill: "current-password" },
+                ],
         };
         const response = await browser.tabs.sendMessage(tab.id, {
             type: "fill", expectedOrigin: new URL(activeTab.url).origin,
@@ -966,7 +1007,9 @@ async function fill(candidate, li) {
             window.close?.();
         } else {
             console.warn("[upw] popup fill: no form");
-            status(t("页面上没找到可填充的登录表单，请确认页面表单可见后重试。", "No fillable login form was found. Make sure the login form is visible and try again."), true);
+            status(profile
+                ? t("没有找到可填入的空白个人资料字段。", "No empty personal information fields were found.")
+                : t("页面上没找到可填充的登录表单，请确认页面表单可见后重试。", "No fillable login form was found. Make sure the login form is visible and try again."), true);
         }
     } catch {
         if (!isCurrent()) return;

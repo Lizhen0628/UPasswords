@@ -130,7 +130,7 @@ test("missing legacy key and any corrupt row fail the whole decrypt batch", asyn
     const next = await h.commit();
     for (const rows of [[row, { ...row, uuid: "00000000-0000-4000-8000-000000000000" }],
         [{ ...row, bodyB64: "!!!" }], [{ ...row, revision: 0 }], [row, row],
-        ...["card", "1", 0, 3, null, undefined].map(kind => [{ ...row, kind }])]) {
+        ...["card", "1", 0, 4, null, undefined].map(kind => [{ ...row, kind }])]) {
         const failed = await h.unlock.handle(request("decrypt", { generation: next.generation, rows }));
         assert.equal(failed.unlocked, false);
         assert.equal(typeof failed.code, "string");

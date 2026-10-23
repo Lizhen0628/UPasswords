@@ -92,6 +92,17 @@ public enum Autofill: String, CaseIterable, Codable, Identifiable {
     case currentPassword = "current-password"
     case url
     case oneTimeCode = "one-time-code"
+    case givenName = "given-name"
+    case familyName = "family-name"
+    case email
+    case telephone = "tel"
+    case streetAddress = "street-address"
+    case addressLine1 = "address-line1"
+    case addressLine2 = "address-line2"
+    case addressLevel1 = "address-level1"
+    case addressLevel2 = "address-level2"
+    case postalCode = "postal-code"
+    case countryName = "country-name"
     case ccNumber = "cc-number"
     case ccName = "cc-name"
     case ccExp = "cc-exp"
@@ -107,6 +118,17 @@ public enum Autofill: String, CaseIterable, Codable, Identifiable {
         case .currentPassword: return L10n.db("password_autofill")
         case .url: return L10n.db("url_autofill")
         case .oneTimeCode: return L10n.db("one_time_code_autofill")
+        case .givenName: return L10n.db("given_name_autofill")
+        case .familyName: return L10n.db("family_name_autofill")
+        case .email: return L10n.db("email_autofill")
+        case .telephone: return L10n.db("telephone_autofill")
+        case .streetAddress: return L10n.db("street_address_autofill")
+        case .addressLine1: return L10n.db("address_line_1_autofill")
+        case .addressLine2: return L10n.db("address_line_2_autofill")
+        case .addressLevel1: return L10n.db("address_level_1_autofill")
+        case .addressLevel2: return L10n.db("address_level_2_autofill")
+        case .postalCode: return L10n.db("postal_code_autofill")
+        case .countryName: return L10n.db("country_name_autofill")
         case .ccNumber: return L10n.db("cc_number_autofill")
         case .ccName: return L10n.db("cc_name_autofill")
         case .ccExp: return L10n.db("cc_exp_autofill")

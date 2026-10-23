@@ -593,9 +593,27 @@ struct AutoBackupPane: View {
 // MARK: - Autofill
 
 struct AutofillPane: View {
+    @EnvironmentObject private var ctx: AppContext
+    @EnvironmentObject private var settings: AppSettings
+    @State private var personalInfoPresented = false
+
     var body: some View {
         PaneContainer {
             VStack(alignment: .leading, spacing: 16) {
+                Toggle(L10n.t("registration_autofill_setting"), isOn: Binding(
+                    get: {
+                        ctx.database.userProfiles.first?.registrationAutofillEnabled
+                            ?? settings.registrationAutofillEnabled
+                    },
+                    set: ctx.setRegistrationAutofillEnabled
+                ))
+                Button(L10n.t("personal_info_title")) {
+                    Log.info("ui", "personal information editor opened")
+                    personalInfoPresented = true
+                }
+                Text(L10n.t("registration_autofill_setting_hint"))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Label(L10n.t("browser_integration_title"), systemImage: "safari")
                     .font(.headline)
                 Text(L10n.t("install_extension_text"))
@@ -608,7 +626,9 @@ struct AutofillPane: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .sheet(isPresented: $personalInfoPresented) { PersonalInfoSheet() }
     }
+
 }
 
 // MARK: - Lock screen

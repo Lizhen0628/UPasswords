@@ -11,8 +11,13 @@ interface HintSession {
     }>;
 }
 
-type SiteHint = { type: "site-hint"; count: number; unlocked: boolean };
-const lockedHint = (): SiteHint => ({ type: "site-hint", count: 0, unlocked: false });
+type SiteHint = { type: "site-hint"; count: number; unlocked: boolean; profileAvailable: boolean };
+const lockedHint = (): SiteHint => ({ type: "site-hint", count: 0, unlocked: false, profileAvailable: false });
+const personalInfoTokens = new Set([
+    "given-name", "family-name", "email", "tel", "street-address",
+    "address-line1", "address-line2", "address-level1", "address-level2",
+    "postal-code", "country-name",
+]);
 
 function webURL(value: unknown): URL | null {
     if (typeof value !== "string") return null;
@@ -28,14 +33,19 @@ function webURL(value: unknown): URL | null {
 export function installSiteHints(api: any, session: HintSession): void {
     const badgeVersions = new Map<number, number>();
 
-    async function countFor(url: URL): Promise<SiteHint> {
+    async function countFor(url: URL, includeProfile = false): Promise<SiteHint> {
         const snapshot = await session.inspect();
         if (!snapshot.unlocked) return lockedHint();
-        const count = (snapshot.items ?? []).filter((item) => {
+        const items = snapshot.items ?? [];
+        const count = items.filter((item) => {
             return Boolean(item.host) && hostMatches(url.hostname, item.host)
                 && item.fields.some((field) => field.type === "password" && Boolean(field.value));
         }).length;
-        return { type: "site-hint", count, unlocked: true };
+        const profileAvailable = includeProfile && items.some((item) => {
+            return item.recordType === "userProfile" && item.autofillEnabled !== false
+                && item.fields.some((field) => personalInfoTokens.has(field.autofill) && Boolean(field.value));
+        });
+        return { type: "site-hint", count, unlocked: true, profileAvailable };
     }
 
     async function authorizedPage(sender: any): Promise<URL | null> {
@@ -94,7 +104,7 @@ export function installSiteHints(api: any, session: HintSession): void {
             const page = await authorizedPage(sender);
             if (!page) return denied();
             if (message.type === "site-hint") {
-                const hint = await countFor(page);
+                const hint = await countFor(page, message.registration === true);
                 // Do not return stale counts after a cross-origin navigation during inspection.
                 if (!await authorizedPage(sender)) return lockedHint();
                 void refreshBadge(sender.tab.id);

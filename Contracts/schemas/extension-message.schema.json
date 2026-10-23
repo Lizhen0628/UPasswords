@@ -57,6 +57,12 @@
                 "host": {
                     "type": "string",
                     "description": "Website hostname or HTTP(S) URL; empty never matches a page."
+                },
+                "autofillEnabled": {
+                    "type": "boolean"
+                },
+                "recordType": {
+                    "const": "userProfile"
                 }
             },
             "additionalProperties": false
@@ -118,6 +124,9 @@
                     "type": "boolean",
                     "description": "Native favorite marker; trusted popup/background only, never included in page fill payloads."
                 },
+                "autofillEnabled": {
+                    "type": "boolean"
+                },
                 "source": {
                     "type": "object",
                     "properties": {
@@ -134,6 +143,9 @@
                         "revision"
                     ],
                     "additionalProperties": false
+                },
+                "recordType": {
+                    "const": "userProfile"
                 }
             },
             "additionalProperties": false,
@@ -153,7 +165,11 @@
                     "type": "string"
                 },
                 "kind": {
-                    "enum": [1, 2]
+                    "enum": [
+                        1,
+                        2,
+                        3
+                    ]
                 },
                 "revision": {
                     "type": "integer",
@@ -185,7 +201,11 @@
                     "type": "string"
                 },
                 "kind": {
-                    "enum": [1, 2]
+                    "enum": [
+                        1,
+                        2,
+                        3
+                    ]
                 },
                 "revision": {
                     "type": "integer",
@@ -419,6 +439,18 @@
                     "properties": {
                         "type": {
                             "const": "site-hint"
+                        },
+                        "registration": {
+                            "type": "boolean"
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "const": "registration-check"
                         }
                     },
                     "additionalProperties": false
@@ -608,11 +640,15 @@
                         },
                         "unlocked": {
                             "type": "boolean"
+                        },
+                        "profileAvailable": {
+                            "type": "boolean"
                         }
                     },
                     "required": [
                         "count",
-                        "unlocked"
+                        "unlocked",
+                        "profileAvailable"
                     ],
                     "additionalProperties": false
                 },

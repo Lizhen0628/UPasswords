@@ -1,133 +1,84 @@
 # UPasswords
 
-**一款独立开发的密码管理器**（macOS 优先：SwiftUI + AppKit；领域核心为跨平台 Swift 包，macOS 14+ / iOS 17+）。
+> 项目当前开发版本：**v1**。本文记录当前工作树的实现；容器格式、同步协议和 API 路径各自使用独立版本号，详见下文。
 
-核心能力：双密钥信封加密（主密码经 PBKDF2-SHA256 ×600,000（兼容下限 100,000）包裹库密钥，
-库密钥以 AES-256-GCM 加密数据库本体，改密轮换库密钥并重加密本体，旧密文对旧密码永久作废）、Touch ID 快速解锁、15 个内置模板、密码生成与强度评估、TOTP 一次性代码、账户云同步
-（服务端零知识加密副本，条目级合并 + 冲突裁决）、自动备份、18 种第三方密码管理器数据导入、XML/CSV/TXT 导出、泄露密码检查（haveibeenpwned k-匿名）、菜单栏常驻、中英双语界面。
+UPasswords 是一款独立开发的密码管理器。领域模型、加密和数据库编解码由跨平台 Swift 包提供，客户端包括 macOS、iOS、iOS AutoFill，以及 Safari、Chrome、Edge、Firefox 扩展。
 
-**功能清单**：全部客户端形态与云同步的功能面见 [FEATURES.md](FEATURES.md)。
+核心能力包括本地加密密码库、密码生成与强度分析、TOTP、数据导入导出、备份恢复、泄露密码检查和个人多设备同步。完整功能范围与部分实现边界见 [FEATURES.md](FEATURES.md)。
 
-**浏览器插件**：Safari / Chrome / Edge / Firefox 提供密码库工作台、站点／收藏筛选、
-域名搜索、快捷复制、密码生成器及手动新建／联网编辑。使用方法、加载步骤与安全边界见
-[浏览器扩展说明](WebExtensions/README.md)。
+## 文档导航
 
-## 仓库结构
-
-```
-UPasswords/
-├── UPasswords.xcworkspace          根工作区（指向 Apple/UPasswords.xcodeproj）
-├── Apple/
-│   ├── UPasswords.xcodeproj        xcodegen 生成（Apple/project.yml）
-│   │   ├── UPasswords-macOS        macOS 应用 target
-│   │   ├── UPasswords-iOS          iOS 应用 target（完整界面，消费领域包）
-│   │   ├── UPasswordsAutoFill      iOS 凭据自动填充扩展 target
-│   │   └── SafariWebExtension      Safari Web 扩展 target
-│   ├── macOS/                      macOS 应用（SPM 可执行包 + 测试）
-│   ├── iOS/                        iOS 应用：App/Services(Vault 会话层)/Models/Views
-│   │                               + AutoFill/（ASCredentialProvider 扩展）
-│   └── Shared/                     iOS 主 App 与扩展共享：品牌组件、
-│                                   App Group 库容器（SharedVaultStore）、产品常量
-├── WebExtensions/
-│   ├── shared/                     Safari/Chrome/Firefox 共享 TS（core/storage/messaging/platform）
-│   ├── safari/                     Safari 扩展（manifest + background/content/popup）
-│   ├── chrome/ + edge/             Chromium 系 MV3 同构壳
-│   └── firefox/                    Firefox MV3（host_permissions 可选授予）
-├── SwiftPackages/
-│   ├── Core/                       UPasswordsCore — 模型、XML 编解码、加密、生成器、
-│   │                               强度、TOTP、日志、本地化字符串表
-│   ├── Persistence/                UPasswordsPersistence — 文件存储、钥匙串、备份、
-│   │                               云同步（账户中继）、导入导出
-│   └── Networking/                 UPasswordsNetworking — HIBP 泄露检查
-├── Contracts/                      数据交换契约（JSON Schema + 说明）
-├── package.json / pnpm-workspace.yaml   Web 扩展 monorepo
-├── scripts/make-app.sh             .app 打包
-└── .github/workflows/ci.yml        build + test（Swift ×4 包 / xcodebuild 双平台 / pnpm）
-```
-
-## 构建与测试
-
-```bash
-# Swift 包（每个包独立构建/测试）
-cd SwiftPackages/Core && swift build && swift test        # 领域核心
-cd SwiftPackages/Persistence && swift build && swift test # 存储与同步
-cd SwiftPackages/Networking && swift build && swift test  # 泄露检查
-cd Apple/macOS && swift build && swift test               # macOS 应用
-
-# Xcode 工程（四 target：macOS App / iOS App / iOS AutoFill 扩展 / Safari 扩展）
-cd Apple && xcodegen generate
-xcodebuild -workspace UPasswords.xcworkspace -scheme UPasswords-macOS build
-xcodebuild -workspace UPasswords.xcworkspace -scheme UPasswords-iOS \
-  -destination 'generic/platform=iOS Simulator' build
-
-# Web 扩展（共享 TS 编译 + Safari/Chrome/Edge/Firefox 四端打包）
-pnpm install && pnpm build
-
-./scripts/make-app.sh             # 打包 dist/UPasswords.app 并可直接运行
-```
-
-## 模块速览
-
-| 模块 | 实现 |
+| 文档 | 内容 |
 |---|---|
-| 数据模型 | `SwiftPackages/Core/…/CoreModels.swift`（`Card / Field / CardLabel / Attachment / HistoryEntry` 等值类型） |
-| XML 解析/序列化 | `SwiftPackages/Core/…/DatabaseXML.swift`（逐属性往返 + 删除墓碑，支撑同步合并） |
-| 加密容器 | `SwiftPackages/Core/…/DatabaseCipher.swift` — v2 双密钥信封：`.upw` 本体（库密钥 AES-256-GCM）+ `.upwkey` 信封（主密码 PBKDF2-SHA256 ×600,000/下限 100,000 包裹库密钥） |
-| 数据库/会话 | `SwiftPackages/Persistence/…/DatabaseStore.swift` + `Apple/macOS/…/App/AppContext.swift` |
-| 内置模板 | `SwiftPackages/Core/…/Templates.swift`（15 个，`@string/…` 经字符串表解析） |
-| 密码生成器 | `SwiftPackages/Core/…/PasswordGenerator.swift`（随机/便于记忆/字母数字/纯数字 4 型 + 历史） |
-| 强度评估 | `SwiftPackages/Core/…/PasswordStrength.swift`（模式分析：常见密码/重复/键盘序列/日期/词典） |
-| TOTP | `SwiftPackages/Core/…/TOTP.swift`（RFC 6238，SHA1/256/512，otpauth:// URI） |
-| 钥匙串 | `SwiftPackages/Persistence/…/PasswordStore.swift`（GenericPassword + `.userPresence` 快速解锁） |
-| 导入导出 | `SwiftPackages/Persistence/…/Import/` — 18 种导入 + XML / CSV / TXT 导出（含明文警告） |
-| 泄露检查 | `SwiftPackages/Networking/…/CompromisedService.swift` — SHA-1 k-匿名 Range API + 离线演示集 |
-| 云同步 | `SwiftPackages/Persistence/…/CloudSync.swift` — 同步冲突判定与基线哈希（通道见 `RelayClient.swift` 账户中继） |
-| 自动备份 | `DatabaseStore.backup/restore/prune`（默认保留 10 份） |
-| 主窗口 | `Apple/macOS/…/Views/Main/` 三栏布局 + `Views/Window/` 自绘工具栏 |
-| 弹窗 | `Apple/macOS/…/Views/Sheets/`（SheetFactory 统一登记，按域分组） |
-| Web 扩展 | `WebExtensions/shared`（TS 核心：host 规范化/匹配、storage 封装、消息协议、Safari/Chrome 适配器）+ `safari/`、`chrome/` 壳 |
-| 数据契约 | `Contracts/schemas/`（数据库 JSON 镜像 + 扩展消息 Schema） |
-| 菜单与快捷键 | `Apple/macOS/…/App/Commands.swift` |
-| 本地化 | `SwiftPackages/Core/…/Resources/{zh-Hans,en}.lproj/` |
+| [功能清单](FEATURES.md) | 各客户端、云同步、导入导出及已知功能边界 |
+| [数据库设计](Cloud/DATABASE.md) | 本地数据模型、云端 MariaDB 表结构、SQL、ER 图和待讨论事项 |
+| [云服务设计](Cloud/DESIGN.md) | 云端部署形态、安全模型、同步流程与 API 版本 |
+| [云服务运维](Cloud/README.md) | Go API、Worker 回退实现、部署与运维入口 |
+| [API 部署说明](Cloud/api/README.md) | Go + chi 生产 API 的配置、验证和启动 |
+| [跨端契约](Contracts/README.md) | 加密库明文 XML 与扩展消息契约 |
+| [浏览器扩展](WebExtensions/README.md) | 构建、加载方式和扩展安全边界 |
+| [开发规范](AGENTS.md) | 架构、隐私、代码风格、测试、打包和交付要求 |
+
+## 项目结构
+
+| 路径 | 职责 |
+|---|---|
+| Apple/macOS | SwiftUI + AppKit macOS 应用，使用 Core、Persistence、Networking |
+| Apple/iOS | iOS 应用和凭据自动填充扩展 |
+| Apple/Shared | iOS App 与扩展共享的品牌组件、App Group 库存储和产品常量 |
+| Apple/SafariWebExtension | Safari 扩展的原生消息桥 |
+| SwiftPackages/Core | 领域模型、加密容器、XML、密码生成、强度、TOTP、本地化 |
+| SwiftPackages/Persistence | 加密库文件、备份、钥匙串、同步、导入与导出 |
+| SwiftPackages/Networking | HIBP k-匿名泄露检查 |
+| WebExtensions/shared | 浏览器扩展共享 TypeScript 核心、存储和消息协议 |
+| Cloud/api | 当前生产 Go + chi API |
+| Cloud/worker | 保留的 Cloudflare Worker 回退实现 |
+| Cloud/worker/sql | MariaDB 初始化 DDL；Go API 集成测试也使用该 schema |
+| Contracts | 跨端 JSON Schema 与协议说明 |
+
+Xcode 工程由 [Apple/project.yml](Apple/project.yml) 生成。生成的 Apple/UPasswords.xcodeproj 不手工编辑。
 
 ## 数据与安全
 
-- 数据库：`~/Library/Application Support/UPasswords/Databases/<名称>.upw`，配套同名
-  `<名称>.upwkey` 信封（v2 双密钥，两者须成对存在，缺信封无法解锁）
-- 容器格式（v2 为唯一受支持格式）：本体 `"UPWDB2\0\0"` magic + 版本 + flags +
-  AES-GCM 密封盒（密钥 = 库密钥）；信封 `"UPWKEY1\0"` magic + PBKDF2 迭代次数 +
-  16B 盐 + 被包裹的库密钥 + 改密时间戳
-- 密码/Touch ID 副本存 Keychain（`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`）
-- 自动备份：`~/Library/Application Support/UPasswords/Backups/<名称>/`（加密备份，
-  每份含配套 `.upwkey` 信封，恢复时缺信封即拒绝）
-- XML 交换格式支持导入导出（可导入 SafeInCloud 导出的 XML）
-- 日志：`~/Library/Application Support/UPasswords/Logs/UPasswords.log`（超 1MB 自动轮转为
-  `.old.log`）。DEBUG 构建记录 debug 级，release 默认 info 级；排查问题时可用
-  `UP_LOG_LEVEL=debug` 环境变量或 `defaults write com.upasswords.UPasswords log.level -string debug`
-  提升详细程度。日志只记录操作/对象名/长度/错误，绝不记录密码与字段内容
+- macOS 与 iOS 的本地密码库是 XML 数据经 VEK 使用 AES-GCM 加密后的 .upw 容器；主密码经 PBKDF2-SHA256 派生密钥，保护 .upwkey 中的 VEK 信封。格式细节以 [DatabaseCipher.swift](SwiftPackages/Core/Sources/UPasswordsCore/DatabaseCipher.swift) 为准。
+- 本地数据模型包括卡片、标签和独立用户资料；字段、历史、附件、笔记和卡片标签引用序列化在加密库中。永久删除会移除记录，不保存本地永久墓碑。
+- 云同步使用条目级密文和 revision。同步游标、修订基线及待同步集合保存在 .upwsync sidecar；该文件不保存密码或字段明文。
+- 生产云 API 运行于 Go + chi，MariaDB 保存账户、会话、密码库元数据、条目密文与变更日志；R2 提供附件和网站图标对象接口。服务端不解密条目内容。当前 MariaDB DDL 与表关系见 [Cloud/DATABASE.md](Cloud/DATABASE.md)。
+- 客户端已有 UserProfile kind=3 编码，但 Go API 与 Worker 均仅接受 kind=1 卡片和 kind=2 标签；个人资料的云端同步尚未闭环。附件 API 已存在，原生应用的附件当前随加密库保存，未完整接入独立云附件流程。
+- 密码、密钥、字段内容和笔记不得进入日志。产品版本 v1 与下列技术版本相互独立：本地容器格式 v2、行同步能力版本 2、主 API 路径 /v1（兼容别名 /v2）、MariaDB 初始化脚本 0001。
 
-## 实现说明
+本地库默认位于用户 Application Support 目录；macOS 数据库、备份、钥匙串和同步状态的具体路径及保留策略由 [DatabaseStore.swift](SwiftPackages/Persistence/Sources/UPasswordsPersistence/DatabaseStore.swift) 与 [数据库设计文档](Cloud/DATABASE.md) 定义。恢复加密库仍需要相应主密码。
 
-1. **加密**：双密钥信封——库密钥以 AES-256-GCM 加密数据库本体
-   （`.upw`）；主密码经 PBKDF2-SHA256 ×600,000（新信封；兼容下限 100,000）派生密钥包裹库密钥成信封
-   （`.upwkey`）。改主密码始终轮换库密钥：本体重加密 + 信封重写，
-   旧密文（历史残留/备份/泄露副本）对旧密码永久作废；改密前自动落一份备份。
-2. **图标/纹理**：全部使用 SF Symbol 与程序化渐变自绘，不含第三方素材。
-3. **云同步**：账户中继通道（邮箱验证码登录，服务端零知识：注册表信封 + R2 加密库体
-   副本，条目级合并 + 冲突裁决）；离线迁移走 `.upw`/`.upwkey` 文件对本地还原与导出。
-4. **iOS / Safari / Chrome 扩展**：iOS 端为完整应用（锁屏/首页/列表/详情/编辑/生成器/安全/设置
-   七大界面），数据落在 App Group 容器的真实加密库，与 macOS 共用 Core/Persistence/Networking；
-   AutoFill 凭据扩展经钥匙串/主密码解锁后按站点匹配填充。真机运行需配置签名与
-   App Group entitlement（`group.com.upasswords.shared`）；浏览器扩展可构建加载。
-5. **高级功能（Premium）**：无商店集成，界面仅作信息展示。
-6. **Passkey**：密钥只能在移动端创建（空状态提示）。
-7. **UI**：SwiftUI 实现；主窗口为隐藏系统标题栏 + 自绘工具栏条带。
+## 构建与测试
 
-## 开发规范
+Swift 包分别构建和测试：
 
-Swift 代码开发规范（命名/格式/可选值/错误处理/并发/性能 + 本项目特定约定与提交自查清单）
-见 [AGENTS.md](AGENTS.md)，所有贡献者与编码 Agent 必须遵守。
+~~~sh
+(cd SwiftPackages/Core && swift build && swift test)
+(cd SwiftPackages/Persistence && swift build && swift test)
+(cd SwiftPackages/Networking && swift build && swift test)
+(cd Apple/macOS && swift build && swift test)
+~~~
+
+Apple 工程与浏览器扩展：
+
+~~~sh
+cd Apple && xcodegen generate
+cd ..
+xcodebuild -workspace UPasswords.xcworkspace -scheme UPasswords-macOS build
+xcodebuild -workspace UPasswords.xcworkspace -scheme UPasswords-iOS -destination 'generic/platform=iOS Simulator' build
+pnpm install && pnpm build && pnpm test
+~~~
+
+云端 Go API 的隔离集成测试见 [Cloud/api/README.md](Cloud/api/README.md)；Worker 回退测试见 [Cloud/TESTING.md](Cloud/TESTING.md)。Release macOS 应用由 scripts/make-app.sh 打包。
+
+## 技术基线
+
+- Swift tools 5.9；macOS 14+；Core、Persistence、Networking 另支持 iOS 17+。
+- SwiftUI MV + ObservableObject；Core/Persistence/Networking 不依赖 AppKit。
+- 包依赖方向：Apple 应用 → Core/Persistence/Networking；Persistence 与 Networking → Core。
+- 浏览器扩展共享代码为严格模式 TypeScript，四个平台从共享核心构建。
 
 ## 许可
 
-MIT（见 LICENSE）。本项目为独立开发的密码管理器，与其他密码管理器软件无任何隶属关系。
+MIT，详见 [LICENSE](LICENSE)。

@@ -1,4 +1,4 @@
-// Pages receive only a match count. Credentials are filled solely by the trusted popup.
+// Pages receive only a match count and profile-availability flag. Values are filled only by the trusted popup.
 (function () {
     "use strict";
     const api = globalThis.browser ?? globalThis.chrome;
@@ -53,6 +53,33 @@
         return username ? { username, password: null, anchor: username } : null;
     }
 
+    const profileTokens = new Set([
+        "given-name", "family-name", "email", "tel", "street-address",
+        "address-line1", "address-line2", "address-level1", "address-level2",
+        "postal-code", "country-name",
+    ]);
+
+    function autocompleteToken(field) {
+        const tokens = (field.autocomplete ?? "").trim().toLowerCase().split(/\s+/);
+        return tokens[tokens.length - 1];
+    }
+
+    function registrationFields() {
+        const fields = Array.from(document.querySelectorAll("input, textarea")).filter(isVisible);
+        const contactFields = fields.filter((field) => profileTokens.has(autocompleteToken(field)));
+        for (const anchor of contactFields) {
+            const scope = anchor.form || anchor.closest('[role="form"]') || anchor.parentElement;
+            const nearby = fields.filter((field) => scope?.contains(field));
+            const contacts = contactFields.filter((field) => scope?.contains(field));
+            const newPassword = nearby.some((field) => (field.type ?? "").toLowerCase() === "password"
+                && autocompleteToken(field) === "new-password");
+            if (contacts.length >= 2 || (newPassword && contacts.length > 0)) {
+                return { fields: contacts, anchor };
+            }
+        }
+        return null;
+    }
+
     function removeHint() {
         if (host) host.remove();
         host = null;
@@ -75,7 +102,7 @@
         host.style.top = `${top}px`;
     }
 
-    function showHint(count, field) {
+    function showHint(count, field, profileAvailable = false) {
         anchor = field;
         if (host && !host.isConnected) removeHint();
         anchor = field;
@@ -107,9 +134,14 @@
             shadow.append(style, button, fallback);
             document.documentElement.append(host);
         }
-        const state = String(count);
+        const state = `${count}:${profileAvailable}`;
         if (renderedState !== state) {
-            button.textContent = chinese ? `UPasswords · ${count} 个匹配密码` : `UPasswords · ${count} matching password${count === 1 ? "" : "s"}`;
+            const credentials = count > 0
+                ? (chinese ? `${count} 个匹配密码` : `${count} matching password${count === 1 ? "" : "s"}`)
+                : "";
+            const profile = profileAvailable ? (chinese ? "个人资料可填充" : "Personal info available") : "";
+            const details = [credentials, profile].filter(Boolean).join(" · ");
+            button.textContent = `UPasswords · ${details}`;
             fallback.hidden = true;
             renderedState = state;
             console.info("[upw] site hint updated");
@@ -126,20 +158,23 @@
             reportLocation();
         }
         const fields = loginFields();
-        if (!fields) {
+        const registration = registrationFields();
+        if (!fields && !registration) {
             removeHint();
             return;
         }
         try {
-            const response = await api.runtime.sendMessage({ type: "site-hint" });
+            const response = await api.runtime.sendMessage({ type: "site-hint", registration: Boolean(registration) });
             if (request !== sequence || href !== location.href) return;
             const current = loginFields();
-            if (!current || response?.type !== "site-hint" || !response.unlocked
-                || !Number.isSafeInteger(response.count) || response.count <= 0) {
+            const currentRegistration = registrationFields();
+            if ((!current && !currentRegistration) || response?.type !== "site-hint" || !response.unlocked
+                || !Number.isSafeInteger(response.count)
+                || (response.count <= 0 && !(currentRegistration && response.profileAvailable))) {
                 removeHint();
                 return;
             }
-            showHint(response.count, current.anchor);
+            showHint(response.count, currentRegistration?.anchor ?? current?.anchor, Boolean(response.profileAvailable));
         } catch {
             if (request === sequence) removeHint();
         }
@@ -156,9 +191,11 @@
         } catch { /* Extension reload invalidates this content context. */ }
     }
 
-    function setField(field, value) {
-        if (!field || typeof value !== "string" || !value || !isVisible(field)) return false;
-        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    function setField(field, value, onlyEmpty = false) {
+        if (!field || typeof value !== "string" || !value || !isVisible(field)
+            || (onlyEmpty && field.value)) return false;
+        const prototype = field.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
         if (!setter) return false;
         setter.call(field, value);
         field.dispatchEvent(new Event("input", { bubbles: true }));
@@ -167,6 +204,10 @@
     }
 
     api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message?.type === "registration-check") {
+            sendResponse(Boolean(registrationFields()));
+            return false;
+        }
         if (message?.type !== "fill") return false;
         const trusted = sender?.id === api.runtime.id && sender.url === popupURL && sender.tab == null
             && message.expectedOrigin === location.origin;
@@ -174,10 +215,32 @@
             sendResponse({ type: "filled", ok: false });
             return false;
         }
-        const fields = loginFields();
-        const usernameFilled = setField(fields?.username, message.candidate.username);
-        const passwordFilled = setField(fields?.password, message.candidate.password);
-        const ok = usernameFilled || passwordFilled;
+        const profile = message.candidate.item?.recordType === "userProfile";
+        let ok = false;
+        if (profile && message.candidate.item.autofillEnabled !== false) {
+            const registration = registrationFields();
+            if (registration && Array.isArray(message.candidate.item.fields)) {
+                const values = new Map(message.candidate.item.fields
+                    .filter((field) => profileTokens.has(field.autofill) && typeof field.value === "string")
+                    .map((field) => [field.autofill, field.value]));
+                if (!values.has("street-address")) {
+                    const address = [values.get("address-line1"), values.get("address-line2")]
+                        .filter(Boolean).join("\n");
+                    if (address) values.set("street-address", address);
+                }
+                for (const field of registration.fields) {
+                    const token = autocompleteToken(field);
+                    const value = values.get(token)
+                        || (token === "address-line1" ? values.get("street-address")?.split(/\r?\n/)[0] : "");
+                    if (setField(field, value, true)) ok = true;
+                }
+            }
+        } else if (!profile) {
+            const fields = loginFields();
+            const usernameFilled = setField(fields?.username, message.candidate.username);
+            const passwordFilled = setField(fields?.password, message.candidate.password);
+            ok = usernameFilled || passwordFilled;
+        }
         console.info(`[upw] popup fill dispatched, ok=${ok}`);
         sendResponse({ type: "filled", ok });
         return false;

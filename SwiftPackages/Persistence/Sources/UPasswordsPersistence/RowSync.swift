@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import UPasswordsCore
 
-// MARK: - RowSync 引擎(v7 行级同步)
+// MARK: - RowSync 引擎
 //
 // 职责:脏集合上行(批量 CAS + 冲突合并重试)、变更游标增量应用、
 // 全量重建(快照+差量)、改密 rekey 编排。`.upw` 永远是唯一本地真源,
@@ -196,6 +196,7 @@ public enum RowSync {
     private static func removeItem(uuid: UUID, from database: inout PasswordDatabase, state: inout RowSyncState) {
         database.deleteCardPermanently(id: uuid)
         database.deleteLabelPermanently(id: uuid)
+        database.userProfiles.removeAll { $0.id == uuid }
         state.revisions.removeValue(forKey: uuid)
         state.syncedMtimes.removeValue(forKey: uuid)
         // 删除胜:本地未上行的修改一并丢弃(§6.6)
@@ -206,16 +207,25 @@ public enum RowSync {
     static func localItem(uuid: UUID, in database: PasswordDatabase) -> DatabaseItem? {
         if let c = database.card(id: uuid) { return .card(c) }
         if let l = database.label(id: uuid) { return .label(l) }
+        if let profile = database.userProfiles.first(where: { $0.id == uuid }) { return .userProfile(profile) }
         return nil
     }
 
     static func applyItem(_ item: DatabaseItem, to database: inout PasswordDatabase) {
         switch item {
         case .card(let card):
+            database.userProfiles.removeAll { $0.id == card.id }
             if let i = database.cards.firstIndex(where: { $0.id == card.id }) {
                 database.cards[i] = card
             } else {
                 database.cards.append(card)
+            }
+        case .userProfile(let profile):
+            database.cards.removeAll { $0.id == profile.id }
+            if let index = database.userProfiles.firstIndex(where: { $0.id == profile.id }) {
+                database.userProfiles[index] = profile
+            } else {
+                database.userProfiles.append(profile)
             }
         case .label(let label):
             if let i = database.labels.firstIndex(where: { $0.id == label.id }) {
@@ -286,7 +296,8 @@ public enum RowSync {
         }
         guard let bodyB64, let sealed = Data(base64Encoded: bodyB64),
               let plaintext = RowSyncCipher.decrypt(sealed, key: key, uuid: op.uuid),
-              let remote = DatabaseItemCodec.parse(kind: op.kind, uuid: op.uuid, data: plaintext),
+              let remote = DatabaseItemCodec.parse(kind: op.kind, uuid: op.uuid, data: plaintext)
+                ?? (op.kind == 3 ? DatabaseItemCodec.parse(kind: 1, uuid: op.uuid, data: plaintext) : nil),
               let local = localItem(uuid: op.uuid, in: database) else {
             return false
         }
@@ -395,5 +406,6 @@ public enum RowSync {
     /// 全部条目(卡片 + 标签)。
     public static func allItems(database: PasswordDatabase) -> [DatabaseItem] {
         database.cards.map(DatabaseItem.card) + database.labels.map(DatabaseItem.label)
+            + database.userProfiles.map(DatabaseItem.userProfile)
     }
 }
