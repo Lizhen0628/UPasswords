@@ -483,7 +483,8 @@
 "sorting_prompt" = "Sorting:";
 "sorting_title" = "Sorting";
 "source_prompt" = "Source:";
-"support_text" = "Support";
+"support_email" = "contact@upasswords.com";
+"support_text" = "Contact & Feedback";
 "switch_button" = "Switch";
 "sync_button" = "Sync";
 "sync_command" = "Sync";

@@ -422,3 +422,10 @@ IUO（`var x: T!`）仅允许用于 init 期无法赋值的框架注入点（本
   `Apple/macOS/Sources/UPasswords/App/AppContext+CardList.swift`（guard/策略分组）、
   `SwiftPackages/Core/Sources/UPasswordsCore/AppLog.swift`（门控与并发保护）、
   `SwiftPackages/Core/Sources/UPasswordsCore/PasswordStrength.swift`（缓存与隐私）。
+
+## 18. 开发环境约定
+
+- 【必须】服务端代码在 `service-admin` 服务器的 `~/UPasswords` 工作树中开发；
+  除服务端以外的代码与文档在本地仓库中开发。
+- 【必须】需要同时改动服务端与客户端时，按上述边界分别在对应工作树修改，
+  再核对接口契约与部署状态。

@@ -10,6 +10,7 @@ import UPasswordsPersistence
 /// 功能不变。
 struct SettingsView: View {
     @EnvironmentObject var vault: Vault
+    @Environment(\.openURL) private var openURL
 
     /// 设置域全部弹层的单一出口:同一视图链式多个 `.sheet` 的呈现会互相冲突
     /// (实测 iOS 27 上首个 sheet 永不呈现),统一由枚举驱动唯一 sheet;
@@ -147,9 +148,35 @@ struct SettingsView: View {
                 }
             }
             .padding(.vertical, 4)
+            Button(action: openSupportEmail) {
+                Label {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(L10n.t("support_text"))
+                            .foregroundStyle(.primary)
+                        Text(L10n.t("support_email"))
+                            .font(.footnote)
+                            .foregroundStyle(Brand.accent)
+                            .textSelection(.enabled)
+                    }
+                } icon: {
+                    Image(systemName: "envelope")
+                        .foregroundStyle(Brand.accent)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
         } header: {
             Text(L10n.t("about_title"))
         }
+    }
+
+    private func openSupportEmail() {
+        guard let url = URL(string: "mailto:\(L10n.t("support_email"))") else {
+            Log.error("ui", "contact feedback mailto URL is invalid")
+            return
+        }
+        Log.info("ui", "open contact feedback email")
+        openURL(url)
     }
 }
 

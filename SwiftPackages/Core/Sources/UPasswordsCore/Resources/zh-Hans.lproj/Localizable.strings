@@ -483,7 +483,8 @@
 "sorting_prompt" = "排序：";
 "sorting_title" = "排序";
 "source_prompt" = "来源：";
-"support_text" = "技术支持";
+"support_email" = "contact@upasswords.com";
+"support_text" = "联系与反馈";
 "switch_button" = "切换";
 "sync_button" = "同步";
 "sync_command" = "同步";

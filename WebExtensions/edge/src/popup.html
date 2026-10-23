@@ -204,6 +204,8 @@
         #persistenceNote, #sessionMode, #accountInfo, #settingsSyncStatus, #clipboardNote { margin: 0; color: var(--secondary); font-size: 12px; overflow-wrap: anywhere; }
         #settingsSyncStatus { padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid var(--line); background: var(--subtle); }
         #accountInfo { font-weight: 600; color: var(--text); }
+        #contactFeedback a { color: var(--accent-strong); font-size: 12px; font-weight: 500; text-decoration: none; overflow-wrap: anywhere; }
+        #contactFeedback a:hover, #contactFeedback a:focus-visible { text-decoration: underline; }
 
         /* 状态条：成功=中性 pill，错误=红色卡片 */
         #status { margin-top: 12px; font-size: 12px; overflow-wrap: anywhere; }
@@ -342,6 +344,7 @@
             <p id="accountInfo"></p>
             <p id="settingsSyncStatus" role="status" aria-live="polite"></p>
             <p id="clipboardNote" class="clip-note" data-zh="复制密码后会由浏览器暂存；关闭弹窗后不保证能自动清除。" data-en="Copied passwords are held by the browser clipboard; automatic clearing after popup close is not guaranteed."></p>
+            <div class="setting-row" id="contactFeedback"><span data-zh="联系与反馈" data-en="Contact & Feedback"></span><a href="mailto:contact@upasswords.com">contact@upasswords.com</a></div>
         </section>
         <div id="status" class="muted" role="status" aria-live="polite"></div>
     </main>

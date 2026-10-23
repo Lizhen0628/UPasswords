@@ -6,6 +6,7 @@ import UPasswordsCore
 struct AboutSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         SheetShell(
@@ -27,6 +28,14 @@ struct AboutSheet: View {
                         .frame(maxWidth: 360)
                         .multilineTextAlignment(.center)
                     Divider()
+                    Button(action: openSupportEmail) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "envelope")
+                            Text(L10n.t("support_text"))
+                            Text(L10n.t("support_email"))
+                        }
+                    }
+                    .buttonStyle(.link)
                     HStack {
                         Button(L10n.t("license_info_button")) {
                             ctx.activeSheet = .premium
@@ -41,6 +50,15 @@ struct AboutSheet: View {
                 .frame(maxWidth: .infinity)
             }
         )
+    }
+
+    private func openSupportEmail() {
+        guard let url = URL(string: "mailto:\(L10n.t("support_email"))") else {
+            Log.error("ui", "contact feedback mailto URL is invalid")
+            return
+        }
+        Log.info("ui", "open contact feedback email")
+        openURL(url)
     }
 }
 
