@@ -44,7 +44,7 @@ flowchart LR
 
 ## 密钥与隐私
 
-库主密码不离开设备。它通过 PBKDF2-SHA256 派生密钥打开 .upwkey 信封并取得 VEK；VEK 加密本地库。云同步时每条卡片或标签片段由 VEK 使用 AES-GCM 加密，当前客户端 AAD 为该条目的 UUID。服务端只保存密文、摘要、长度、UUID、kind、revision 和时间戳。
+库主密码不离开设备。它通过 PBKDF2-SHA256 派生密钥打开 .upwkey 信封并取得 VEK；VEK 加密本地库。云同步时每条卡片、标签或个人资料片段由 VEK 使用 AES-GCM 加密，当前客户端 AAD 为该条目的 UUID。服务端只保存密文、摘要、长度、UUID、kind、revision 和时间戳。
 
 账户层与库层分离：邮箱验证码用于云账户授权；库主密码用于解密库。服务端使用 APP_KEK 对邮箱和密码库信封进行应用层保护，email_hmc 用于邮箱查询；会话数据库仅保存随机 bearer token 的 SHA-256 摘要，验证码仅保存键控摘要。
 
@@ -76,7 +76,7 @@ macOS/iOS 原生同步状态包括游标、revision、脏修改与删除集合�
 
 ## 当前缺口与待讨论
 
-- UserProfile 已进入本地数据模型，RowSync 使用 kind=3；已提交 Go 基线只接受 kind=1/2。独立密文表的增量迁移已归档到 database/0002_user_profiles.sql，配套 Go 实现仍是服务器未提交工作；发布状态见 [DATABASE.md](DATABASE.md)。
+- UserProfile 使用 kind=3，经独立密文表 vault_user_profiles 和统一视图 vault_sync_items 参与 CAS、增量、分页、计数和改密；上线前先应用 database/0002_user_profiles.sql，再发布匹配的 Go 镜像。
 - 独立附件云存储的服务端接口已实现，原生客户端尚未将附件生命周期接入该接口。
 - 服务端提供只读运营统计，但客户端没有可配置服务器地址或自托管切换流程。
 - /v2 兼容别名的下线时机尚未确定；下线前需要用客户端最低支持版本和实际请求数据评估。

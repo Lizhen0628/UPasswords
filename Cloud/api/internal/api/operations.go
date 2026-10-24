@@ -1,4 +1,4 @@
-// 部署检查、定时维护和显式 schema 管理入口。
+// 部署依赖检查与定时维护；生产 schema 由独立迁移流程管理。
 package api
 
 import (
@@ -13,7 +13,7 @@ import (
 
 // CheckDependencies checks production credentials without sending mail or changing stored data.
 func (s *Server) CheckDependencies(ctx context.Context) error {
-	for _, table := range []string{"users", "sessions", "email_codes", "vaults", "vault_items", "item_changes", "attachments", "rekeys", "rekey_staging", "audit_log", "websites", "website_domains"} {
+	for _, table := range []string{"users", "sessions", "email_codes", "vaults", "vault_items", "vault_user_profiles", "vault_sync_items", "item_changes", "attachments", "rekeys", "rekey_staging", "audit_log", "websites", "website_domains"} {
 		var count int
 		if err := s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil {
 			return errors.New("database schema check failed: " + table)

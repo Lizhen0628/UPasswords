@@ -34,8 +34,8 @@ removed. Database files live in `Cloud/database/`. [TESTING.md](TESTING.md) maps
 retired behavioral tests to Go regression tests and records the plain-text email
 implementation boundary.
 
-The server worktree also contains uncommitted profile-capable Go changes. Their
-additive `0002_user_profiles.sql` migration has been preserved in the independent
-database directory. Those handlers remain separate from this retirement release;
-their test bootstrap applies that migration before running the combined suite.
-Do not infer a deployed profile-capable API from the presence of its migration.
+The follow-up profile integration brings the profile-capable Go handlers into
+version control with the canonical `0002_user_profiles.sql` migration. Tests apply
+the numbered migration sequence directly. The duplicate embedded SQL and temporary
+runtime migration command have been removed. A production rollout still requires
+an explicit database migration and matching Go image deployment.

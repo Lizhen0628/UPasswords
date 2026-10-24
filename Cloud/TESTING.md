@@ -170,3 +170,13 @@ macOS 同样收敛。
 
 Go 生产邮件当前为 UTF-8 纯文本。旧 Worker 的 multipart/HTML 布局断言随该实现退役，
 不代表 Go 提供 HTML 邮件；验证码内容、用途、语言及回复路由有独立测试。
+
+## 个人资料同步回归
+
+`TestEncryptedProfileTableMigrationSyncRekeyAndDelete` 覆盖旧 kind=1 记录迁入
+kind=3 专表、创建时间与 UUID 保留、CAS、拒绝旧类型覆盖、密文存储、快照/增量、
+改密与兼容删除。`TestProfileMixedPaginationQuotaMaintenanceAndRollback` 覆盖卡片、
+标签和资料混合分页、共享配额、维护计数、失败批次事务回滚，以及重复应用迁移后数据保留。
+
+人工验收时先确认目标环境已应用 0002 并发布本次 Go 镜像，再验证个人资料新增、编辑、
+删除和旧资料迁移的双向同步；另一设备恢复后资料完整，改密后仍可用新密码恢复。

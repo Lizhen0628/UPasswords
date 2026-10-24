@@ -101,12 +101,19 @@ func testServer(t *testing.T) (*Server, *testMailer) {
 	if !strings.HasSuffix(dbName, "_test") {
 		t.Fatal("refusing integration tests against a non-test database")
 	}
-	schema, e := os.ReadFile(filepath.Join("..", "..", "..", "database", "0001_init.sql"))
-	if e != nil {
-		t.Fatal(e)
+	schemas, e := filepath.Glob(filepath.Join("..", "..", "..", "database", "*.sql"))
+	if e != nil || len(schemas) == 0 {
+		t.Fatalf("database migration files unavailable: %v", e)
 	}
-	if _, e = db.Exec(string(schema)); e != nil {
-		t.Fatal(e)
+	// Glob sorts numbered migrations lexically; production applies the same sequence explicitly.
+	for _, path := range schemas {
+		schema, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = db.Exec(string(schema)); err != nil {
+			t.Fatalf("apply %s: %v", filepath.Base(path), err)
+		}
 	}
 	db.SetMaxOpenConns(16)
 	mail := &testMailer{Codes: map[string]string{}}

@@ -1,6 +1,6 @@
 # UPasswords v1 数据库设计
 
-> 本文描述当前工作树中的实际数据存储。产品开发版本为 v1；本地容器格式 v2、云同步能力版本 2、API 路径 /v1 与数据库迁移编号 0001 是相互独立的版本标识。
+> 本文描述当前工作树中的实际数据存储。产品开发版本为 v1；本地容器格式 v2、云同步能力版本 2、API 路径 /v1 与数据库迁移编号（如 0001、0002）是相互独立的版本标识。
 
 ## 存储边界
 
@@ -8,7 +8,7 @@ UPasswords 没有本地 SQLite 数据库。原生客户端将领域模型序列�
 
 云端生产 API 为 Cloud/api 中的 Go + chi 服务。MariaDB 存账户、会话、库注册表、条目密文、变更日志、附件元数据、改密暂存、审计记录和全局网站目录。附件密文与网站图标字节保存在 R2，不属于 MariaDB 表。
 
-MariaDB 初始化 DDL 的唯一仓库副本为 [0001_init.sql](database/0001_init.sql)。该 SQL 包含下方列出的全部 12 张表。Go API 集成测试从此文件加载 schema。建库、业务账号和权限单独由部署流程创建，应用账号不应拥有 DDL 权限。后续 schema 变更按序放入 `Cloud/database/`，已在生产应用的迁移不得改写。
+MariaDB 初始化基线为 [0001_init.sql](database/0001_init.sql)，包含 12 张基础表；[0002_user_profiles.sql](database/0002_user_profiles.sql) 增加个人资料专用表与合并视图，合计 13 张表及 1 个视图。Go API 集成测试按文件名顺序加载全部迁移。建库、业务账号和权限单独由部署流程创建，应用账号不应拥有 DDL 权限。后续 schema 变更按序放入 `Cloud/database/`，已在生产应用的迁移不得改写。
 
 ## 设计约定
 
@@ -16,7 +16,7 @@ MariaDB 初始化 DDL 的唯一仓库副本为 [0001_init.sql](database/0001_ini
 - 时间：以 BIGINT 保存 Unix epoch 毫秒。服务端写入时间与客户端条目修改时间分列保存。
 - 密文：条目和 rekey payload 使用二进制列；摘要使用 SHA-256 十六进制字符串。
 - 条目身份：客户端生成 UUID。主键以 vault_id 和 item_uuid 组合，避免跨库冲突。
-- 同步删除：永久删除时删除 vault_items 行，并向 item_changes 写 op=2；不保留条目墓碑行。变更日志过期后，客户端通过全量条目重建收敛。
+- 同步删除：永久删除时删除对应 vault_items 或 vault_user_profiles 行，并向 item_changes 写 op=2；不保留条目墓碑行。变更日志过期后，客户端通过全量条目重建收敛。
 - 外键：用户删除会级联删除会话和库；库删除会级联删除条目、变更、附件和改密任务；改密任务删除会级联删除暂存内容。
 - 逻辑引用：attachments.card_uuid 指向加密条目中的卡片 ID，不设外键，因为服务端无法解密并验证条目种类。维护任务清理孤儿元数据和对象。
 
@@ -28,6 +28,7 @@ erDiagram
     users ||--o{ vaults : owns
     users ||..o{ audit_log : "logical user id"
     vaults ||--o{ vault_items : stores
+    vaults ||--o{ vault_user_profiles : stores
     vaults ||--o{ item_changes : records
     vaults ||--o{ attachments : registers
     vaults ||--o{ rekeys : locks
@@ -84,6 +85,18 @@ erDiagram
         bigint updated_ms
     }
     vault_items {
+        varchar vault_id PK
+        char item_uuid PK
+        tinyint kind
+        bigint revision
+        blob body
+        char body_sha256
+        int body_bytes
+        bigint modified_ms
+        bigint created_ms
+        bigint updated_ms
+    }
+    vault_user_profiles {
         varchar vault_id PK
         char item_uuid PK
         tinyint kind
@@ -171,7 +184,9 @@ email_codes 通过 HMAC 邮箱键匹配用户，没有外键；这使首次注�
 | email_codes | 验证码状态；(email_hmc, purpose) 复合主键，限制每种用途一个当前验证码。保存键控 code_hash、IP 限流字段、有效期、尝试次数和使用时间。 |
 | sessions | 设备授权；id 主键，token_hash 唯一，user_id 外键级联。按 (user_id, expires_ms) 查询用户设备和有效期。数据库不保存原始 bearer token。 |
 | vaults | 用户密码库注册表；vault_id 主键，(user_id, name) 唯一，user_id 外键级联。保存信封、密码版本、head_seq、变更保留地板及配额计数。 |
-| vault_items | 卡片与标签的行级密文；(vault_id, item_uuid) 复合主键。按 (vault_id, updated_ms, item_uuid) 建索引，服务全量重建的 keyset 分页。当前 Go API 接受 kind=1 卡片、kind=2 标签。 |
+| vault_items | 卡片与标签的行级密文；(vault_id, item_uuid) 复合主键。按 (vault_id, updated_ms, item_uuid) 建索引，服务全量重建的 keyset 分页。本表存 kind=1 卡片、kind=2 标签。 |
+| vault_user_profiles | 个人资料的 kind=3 密文行；列结构和分页索引与 vault_items 一致，kind 受 CHECK 约束，vault_id 外键级联。姓名、联系方式和偏好保存在客户端密文中。 |
+| vault_sync_items（视图） | UNION ALL 合并 vault_items 和 vault_user_profiles，统一读取、计数和改密身份检查；写入按已验证的固定种类选择物理表。UUID 跨表唯一由同一库行锁及 API 写入规则保证。 |
 | item_changes | 增量同步变更日志；seq 全局自增主键，(vault_id, seq) 支持游标扫描。op=1 表示 upsert，op=2 表示永久删除，op=3 表示库级 rekey。 |
 | attachments | 附件密文登记；(vault_id, attach_uuid) 复合主键，按 (vault_id, card_uuid) 索引清理卡片附件。object_key 指向 R2，dek_wrapped 保存经 VEK 包裹的 DEK。 |
 | rekeys | 每库改密任务；rekey_id 主键，vault_id 外键级联并有索引。有效任务使普通写入进入 rekey 锁定状态。 |
@@ -185,14 +200,14 @@ email_codes 通过 HMAC 邮箱键匹配用户，没有外键；这使首次注�
 - 登录通过 users.email_hmc 唯一索引定位账户；会话鉴权通过 sessions.token_hash 唯一索引。
 - 库列表使用 vaults.user_id；库变更轮询读取 vaults.head_seq。
 - 条目写入通过 (vault_id, item_uuid) 点查并比较 baseRevision；只有 revision 匹配时才写入。
-- 增量下行按 (vault_id, seq) 扫描 item_changes，再读取当前 vault_items 密文；永久删除事件由日志返回，不需要墓碑行。
+- 增量下行按 (vault_id, seq) 扫描 item_changes，再通过 vault_sync_items 读取当前密文；永久删除事件由日志返回，不需要墓碑行。
 - 附件通过 (vault_id, attach_uuid) 定位，并使用 (vault_id, card_uuid) 清理卡片附件。
 - 条目 upsert/delete、revision、变更日志、高水位和配额计数在同一个 MariaDB 事务中更新。R2 对象操作不与 MariaDB 构成分布式事务，使用暂存对象、提交登记和清理任务处理失败重试。
 - 改密以 rekeys 行作为短期库写锁，先暂存完整新密文，再以事务内替换条目、附件 DEK、信封和 password_version。
 
 ## SQL
 
-完整、可重复执行的表结构定义见 [Cloud/database/0001_init.sql](database/0001_init.sql)。该文件假设目标数据库已创建，不包含生产口令或应用账号。首次部署时由 DBA 先执行数据库与最小权限账号初始化，再对目标库应用 DDL：
+基础表定义见 [0001_init.sql](database/0001_init.sql)，个人资料扩展见 [0002_user_profiles.sql](database/0002_user_profiles.sql)。两者均可重复执行，假设目标数据库已创建，不包含生产口令或应用账号。首次部署时由 DBA 先执行数据库与最小权限账号初始化，再对目标库应用 DDL：
 
 ~~~sql
 CREATE DATABASE upasswords
@@ -206,7 +221,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON upasswords.* TO 'upw_app'@'%';
 在已有目标数据库上应用表结构：
 
 ~~~sh
-mysql --default-character-set=utf8mb4 upasswords < Cloud/database/0001_init.sql
+mariadb --defaults-extra-file=/secure/path/mariadb-client.cnf --default-character-set=utf8mb4 upasswords < Cloud/database/0001_init.sql
+mariadb --defaults-extra-file=/secure/path/mariadb-client.cnf --default-character-set=utf8mb4 upasswords < Cloud/database/0002_user_profiles.sql
 ~~~
 
 应用运行账号不授予 CREATE、ALTER、DROP 或 mysql.* 权限。生产端迁移和环境变量管理按 [Cloud/api/README.md](api/README.md) 执行；不要将真实凭据写入仓库。
@@ -219,11 +235,11 @@ mysql --default-character-set=utf8mb4 upasswords < Cloud/database/0001_init.sql
 
 ## 当前边界与待讨论
 
-以下事项按当前代码确认；方案尚未定稿，后续讨论前不要把备选方案写成已实现能力。
+以下区分当前实现、上线前置条件与仍需讨论的事项；备选方案不代表已实现能力。
 
-| 事项 | 当前实现 | 待讨论的决策及影响 |
+| 事项 | 当前实现 | 发布前置条件或待讨论的决策及影响 |
 |---|---|---|
-| 个人资料云同步 | Swift Core 与 RowSync 使用 `kind=3`；已提交的 Go 基线只接受 `kind=1/2`。`database/0002_user_profiles.sql` 保留专用密文表及合并视图的增量迁移，配套 Go 实现仍在服务器未提交工作中。 | 发布配套实现时核对 API 校验、分页、冲突规则、契约、迁移及客户端升级；仅有迁移文件不代表功能已部署。 |
+| 个人资料云同步 | Swift、扩展及 Go API 使用 kind=3，专用密文表参与增量、分页、配额、删除和改密；旧个人资料卡通过匹配 CAS 的 1→3 转换迁入专表。 | 发布时先备份并应用 0002，再启动匹配镜像；服务端不能解密识别个人资料，迁移由升级客户端发起。 |
 | 原生附件云同步 | 原生图片/文件内嵌在本地 `.upw`；Go API 有附件登记与 R2 密文接口，原生客户端尚未打通上传、下载、删除和恢复流程。 | 决定是否纳入当前开发版本的验收范围；若纳入，需明确本地附件迁移、离线队列、R2 失败补偿、配额和跨设备恢复行为。 |
 | TOTP 账户列 | `users.totp_secret` 存在于 DDL，但当前账户 API 未实现 TOTP 二次验证，也未使用该列。 | 决定移除预留列、保留为未启用字段，或先确定密钥加密和账户恢复方案再实现；当前不可描述为可用安全能力。 |
 | DDL 维护入口 | 初始化 DDL 与后续迁移位于 `Cloud/database/`，供 Go API 集成测试与生产部署使用。 | 新迁移按序新增；部署前验证兼容性并备份数据库，已应用迁移保持不可变。 |

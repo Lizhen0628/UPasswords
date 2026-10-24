@@ -118,7 +118,7 @@ func (s *Server) rekeyChunk(w http.ResponseWriter, r *http.Request) error {
 				return fail(400, "hash_mismatch")
 			}
 			var kind int
-			if e = t.QueryRowContext(r.Context(), "SELECT kind FROM vault_items WHERE vault_id=? AND item_uuid=?", vid, id).Scan(&kind); errors.Is(e, sql.ErrNoRows) {
+			if e = t.QueryRowContext(r.Context(), "SELECT kind FROM vault_sync_items WHERE vault_id=? AND item_uuid=?", vid, id).Scan(&kind); errors.Is(e, sql.ErrNoRows) {
 				return fail(409, "rekey_stale")
 			} else if e != nil {
 				return e
@@ -191,13 +191,13 @@ func (s *Server) rekeyCommit(w http.ResponseWriter, r *http.Request) error {
 			return fail(409, "rekey_incomplete")
 		}
 		var items, deks, matchedItems, matchedDeks int64
-		if e = t.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM vault_items WHERE vault_id=?", vid).Scan(&items); e != nil {
+		if e = t.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM vault_sync_items WHERE vault_id=?", vid).Scan(&items); e != nil {
 			return e
 		}
 		if e = t.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM attachments WHERE vault_id=?", vid).Scan(&deks); e != nil {
 			return e
 		}
-		if e = t.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM vault_items i JOIN rekey_staging s ON s.item_uuid=i.item_uuid AND s.rekey_id=? AND s.kind=1 WHERE i.vault_id=?", rid, vid).Scan(&matchedItems); e != nil {
+		if e = t.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM vault_sync_items i JOIN rekey_staging s ON s.item_uuid=i.item_uuid AND s.rekey_id=? AND s.kind=1 WHERE i.vault_id=?", rid, vid).Scan(&matchedItems); e != nil {
 			return e
 		}
 		if e = t.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM attachments a JOIN rekey_staging s ON s.item_uuid=a.attach_uuid AND s.rekey_id=? AND s.kind=2 WHERE a.vault_id=?", rid, vid).Scan(&matchedDeks); e != nil {
@@ -206,8 +206,11 @@ func (s *Server) rekeyCommit(w http.ResponseWriter, r *http.Request) error {
 		if items != k.Items || deks != k.Deks || matchedItems != items || matchedDeks != deks {
 			return fail(409, "rekey_stale")
 		}
-		// Update only existing rows, preserving card/label kind and modification timestamps.
+		// Update existing card, label and profile rows without changing kind or modification time.
 		if _, e = t.ExecContext(r.Context(), "UPDATE vault_items i JOIN rekey_staging s ON s.rekey_id=? AND s.kind=1 AND s.item_uuid=i.item_uuid SET i.revision=i.revision+1,i.body=s.payload,i.body_sha256=s.sha256,i.body_bytes=LENGTH(s.payload),i.updated_ms=? WHERE i.vault_id=?", rid, ts, vid); e != nil {
+			return e
+		}
+		if _, e = t.ExecContext(r.Context(), "UPDATE vault_user_profiles i JOIN rekey_staging s ON s.rekey_id=? AND s.kind=1 AND s.item_uuid=i.item_uuid SET i.revision=i.revision+1,i.body=s.payload,i.body_sha256=s.sha256,i.body_bytes=LENGTH(s.payload),i.updated_ms=? WHERE i.vault_id=?", rid, ts, vid); e != nil {
 			return e
 		}
 		if _, e = t.ExecContext(r.Context(), "UPDATE attachments a JOIN rekey_staging s ON s.rekey_id=? AND s.kind=2 AND s.item_uuid=a.attach_uuid SET a.dek_wrapped=s.payload WHERE a.vault_id=?", rid, vid); e != nil {

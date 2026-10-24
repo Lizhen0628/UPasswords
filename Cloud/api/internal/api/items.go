@@ -61,7 +61,7 @@ func (s *Server) itemsPost(w http.ResponseWriter, r *http.Request) error {
 			return fail(400, "duplicate_uuid")
 		}
 		seen[id] = true
-		if (v.Kind != 1 && v.Kind != 2) || (v.Op != "upsert" && v.Op != "delete") || v.BaseRevision == nil || *v.BaseRevision < 0 || v.ModifiedMS == nil || *v.ModifiedMS < 0 || *v.BaseRevision >= 9007199254740991 || *v.ModifiedMS > 9007199254740991 {
+		if (v.Kind != 1 && v.Kind != 2 && v.Kind != 3) || (v.Op != "upsert" && v.Op != "delete") || v.BaseRevision == nil || *v.BaseRevision < 0 || v.ModifiedMS == nil || *v.ModifiedMS < 0 || *v.BaseRevision >= 9007199254740991 || *v.ModifiedMS > 9007199254740991 {
 			return fail(400, "bad_request")
 		}
 		if v.Op == "upsert" {
@@ -97,9 +97,10 @@ func (s *Server) itemsPost(w http.ResponseWriter, r *http.Request) error {
 		}
 		for _, i := range b.Items {
 			result := map[string]any{"uuid": i.UUID}
-			var rev int64
+			var rev, created int64
 			var current []byte
-			e := t.QueryRowContext(r.Context(), "SELECT revision,body FROM vault_items WHERE vault_id=? AND item_uuid=?", vid, i.UUID).Scan(&rev, &current)
+			var currentKind int
+			e := t.QueryRowContext(r.Context(), "SELECT revision,body,kind,created_ms FROM vault_sync_items WHERE vault_id=? AND item_uuid=?", vid, i.UUID).Scan(&rev, &current, &currentKind, &created)
 			exists := e == nil
 			if e != nil && !errors.Is(e, sql.ErrNoRows) {
 				return e
@@ -128,17 +129,37 @@ func (s *Server) itemsPost(w http.ResponseWriter, r *http.Request) error {
 				out = append(out, result)
 				continue
 			}
+			// A stale client cannot overwrite a dedicated profile with a password card.
+			if exists && currentKind != i.Kind && !(currentKind == 1 && i.Kind == 3) && i.Op == "upsert" {
+				return fail(409, "record_type_changed")
+			}
+			// Preserve the logical record creation time while moving legacy card ciphertext.
+			if !exists {
+				created = ts
+			}
+			table := itemTable(i.Kind)
+			if exists && i.Op == "delete" {
+				table = itemTable(currentKind)
+			}
+			migrating := exists && currentKind != i.Kind && i.Op == "upsert"
+			if migrating {
+				if _, e = t.ExecContext(r.Context(), "DELETE FROM "+itemTable(currentKind)+" WHERE vault_id=? AND item_uuid=?", vid, i.UUID); e != nil {
+					return e
+				}
+			}
 			op := 1
 			newRev := rev + 1
 			if i.Op == "upsert" {
-				if !exists {
-					v.Count++
+				if !exists || migrating {
+					if !exists {
+						v.Count++
+					}
 					if v.Count > s.Config.limit("ITEMS_PER_VAULT_LIMIT") {
 						return fail(413, "quota_exceeded")
 					}
-					_, e = t.ExecContext(r.Context(), "INSERT INTO vault_items(vault_id,item_uuid,kind,revision,body,body_sha256,body_bytes,modified_ms,created_ms,updated_ms) VALUES(?,?,?,?,?,?,?,?,?,?)", vid, i.UUID, i.Kind, newRev, i.Body, *i.SHA256, len(i.Body), *i.ModifiedMS, ts, ts)
+					_, e = t.ExecContext(r.Context(), "INSERT INTO "+table+"(vault_id,item_uuid,kind,revision,body,body_sha256,body_bytes,modified_ms,created_ms,updated_ms) VALUES(?,?,?,?,?,?,?,?,?,?)", vid, i.UUID, i.Kind, newRev, i.Body, *i.SHA256, len(i.Body), *i.ModifiedMS, created, ts)
 				} else {
-					_, e = t.ExecContext(r.Context(), "UPDATE vault_items SET kind=?,revision=?,body=?,body_sha256=?,body_bytes=?,modified_ms=?,updated_ms=? WHERE vault_id=? AND item_uuid=?", i.Kind, newRev, i.Body, *i.SHA256, len(i.Body), *i.ModifiedMS, ts, vid, i.UUID)
+					_, e = t.ExecContext(r.Context(), "UPDATE "+table+" SET kind=?,revision=?,body=?,body_sha256=?,body_bytes=?,modified_ms=?,updated_ms=? WHERE vault_id=? AND item_uuid=?", i.Kind, newRev, i.Body, *i.SHA256, len(i.Body), *i.ModifiedMS, ts, vid, i.UUID)
 				}
 				if e != nil {
 					return e
@@ -168,7 +189,7 @@ func (s *Server) itemsPost(w http.ResponseWriter, r *http.Request) error {
 				if _, e = t.ExecContext(r.Context(), "DELETE FROM attachments WHERE vault_id=? AND card_uuid=?", vid, i.UUID); e != nil {
 					return e
 				}
-				if _, e = t.ExecContext(r.Context(), "DELETE FROM vault_items WHERE vault_id=? AND item_uuid=?", vid, i.UUID); e != nil {
+				if _, e = t.ExecContext(r.Context(), "DELETE FROM "+table+" WHERE vault_id=? AND item_uuid=?", vid, i.UUID); e != nil {
 					return e
 				}
 				v.Count--
@@ -258,7 +279,7 @@ func (s *Server) itemsList(w http.ResponseWriter, r *http.Request) error {
 			return e
 		}
 	}
-	rows, e := s.DB.QueryContext(r.Context(), "SELECT item_uuid,kind,revision,body,body_sha256,modified_ms,updated_ms FROM vault_items WHERE vault_id=? AND (updated_ms>? OR(updated_ms=? AND item_uuid>?)) ORDER BY updated_ms,item_uuid LIMIT ?", v.ID, ms, ms, cursor, limit+1)
+	rows, e := s.DB.QueryContext(r.Context(), "SELECT item_uuid,kind,revision,body,body_sha256,modified_ms,updated_ms FROM vault_sync_items WHERE vault_id=? AND (updated_ms>? OR(updated_ms=? AND item_uuid>?)) ORDER BY updated_ms,item_uuid LIMIT ?", v.ID, ms, ms, cursor, limit+1)
 	if e != nil {
 		return e
 	}
@@ -310,7 +331,7 @@ func (s *Server) changes(w http.ResponseWriter, r *http.Request) error {
 		return fail(410, "cursor_expired")
 	}
 	// The event and live row are read in one statement to avoid mixed snapshots.
-	rows, e := s.DB.QueryContext(r.Context(), "SELECT c.seq,c.item_uuid,c.op,c.revision,i.kind,i.revision,i.body,i.body_sha256,i.modified_ms FROM item_changes c LEFT JOIN vault_items i ON i.vault_id=c.vault_id AND i.item_uuid=c.item_uuid WHERE c.vault_id=? AND c.seq>? ORDER BY c.seq LIMIT ?", v.ID, since, limit)
+	rows, e := s.DB.QueryContext(r.Context(), "SELECT c.seq,c.item_uuid,c.op,c.revision,i.kind,i.revision,i.body,i.body_sha256,i.modified_ms FROM item_changes c LEFT JOIN vault_sync_items i ON i.vault_id=c.vault_id AND i.item_uuid=c.item_uuid WHERE c.vault_id=? AND c.seq>? ORDER BY c.seq LIMIT ?", v.ID, since, limit)
 	if e != nil {
 		return e
 	}
@@ -349,4 +370,13 @@ func (s *Server) changes(w http.ResponseWriter, r *http.Request) error {
 	}
 	writeJSON(w, 200, map[string]any{"headSeq": v.Head, "changes": out})
 	return nil
+}
+
+// itemTable maps previously validated kinds to fixed SQL identifiers.
+// Callers hold the vault row lock when moving records to preserve cross-table UUID uniqueness.
+func itemTable(kind int) string {
+	if kind == 3 {
+		return "vault_user_profiles"
+	}
+	return "vault_items"
 }

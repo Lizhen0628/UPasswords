@@ -21,6 +21,25 @@ The configured 163 SMTP account sends registration and verification mail. Its
 `SMTP_FROM` address must be authorized by 163. `SMTP_REGISTER_REPLY_TO` and
 `SMTP_VERIFY_REPLY_TO` route replies to the corresponding product addresses.
 
+## Schema prerequisite
+
+This API requires `Cloud/database/0001_init.sql` followed by
+`0002_user_profiles.sql`. The second migration adds the encrypted-profile table
+and shared sync view. For an existing initialized database, apply only the missing
+migration with a privileged deployment account after taking a backup:
+
+```sh
+mariadb --defaults-extra-file=/secure/path/mariadb-client.cnf upasswords < ../database/0002_user_profiles.sql
+```
+
+Run this from `Cloud/api`. The running API and its `check` command never create or
+alter tables; the application account keeps data permissions only. Apply the
+additive migration before starting the matching image. An old image can still read
+cards and labels after this additive migration, but it cannot sync profiles and
+its maintenance/rekey logic is unaware of that table. Once profiles exist, recovery
+must use a profile-capable image or a rehearsed matching database backup; do not
+restart an older maintenance scheduler against profile data.
+
 ## Run and Verify
 
 Run the isolated MariaDB integration suite with `docker compose -f compose.test.yaml up

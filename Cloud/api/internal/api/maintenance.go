@@ -166,7 +166,7 @@ func (s *Server) Maintain(ctx context.Context) error {
 				}
 				cursor = next
 			}
-			_, e = t.ExecContext(ctx, "UPDATE vaults v SET item_count=(SELECT COUNT(*) FROM vault_items i WHERE i.vault_id=v.vault_id),attach_bytes=(SELECT COALESCE(SUM(bytes),0) FROM attachments a WHERE a.vault_id=v.vault_id) WHERE v.vault_id=?", v.id)
+			_, e = t.ExecContext(ctx, "UPDATE vaults v SET item_count=(SELECT COUNT(*) FROM vault_sync_items i WHERE i.vault_id=v.vault_id),attach_bytes=(SELECT COALESCE(SUM(bytes),0) FROM attachments a WHERE a.vault_id=v.vault_id) WHERE v.vault_id=?", v.id)
 			return e
 		})
 		if e != nil {
