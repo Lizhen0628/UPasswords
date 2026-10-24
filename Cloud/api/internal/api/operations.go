@@ -1,3 +1,4 @@
+// 部署检查、定时维护和显式 schema 管理入口。
 package api
 
 import (
@@ -86,6 +87,8 @@ func (s *Server) ScheduleMaintenance(ctx context.Context) error {
 		}
 	}
 }
+
+// nextMaintenance returns the next strictly future 04:00 UTC slot, independent of host timezone.
 func nextMaintenance(ts time.Time) time.Time {
 	ts = ts.UTC()
 	next := time.Date(ts.Year(), ts.Month(), ts.Day(), 4, 0, 0, 0, time.UTC)

@@ -40,4 +40,4 @@
 `site-hint` 由后台按发送页和当前页的同源校验计算，仅返回匹配数量与解锁状态；`open-vault` 请求打开插件弹窗，不自动填充。只有显式选择、匹配当前网站的条目才可填充，填充负载排除原始 XML、笔记与无关字段，内容脚本还校验自身插件弹窗来源及 `expectedOrigin`。
 消息形状见 `extension-message.schema.json`，TypeScript 定义见 `WebExtensions/shared/src/messaging/protocol.ts`。
 
-个人资料独立于 cards：本地加密库中的 userProfiles 集合以 user_profile XML 元素序列化，并参与本地备份、恢复和改密。Swift RowSync 为其分配 kind=3；当前生产 Go API 与 Worker 仅接受 kind=1（card）和 kind=2（label），所以个人资料尚未完成云端同步。MariaDB 当前没有 vault_user_profiles 表。云端的 kind=3 存储方式及旧个人资料卡迁移方案列为待讨论事项，见 [Cloud/DATABASE.md](../Cloud/DATABASE.md)。
+个人资料独立于 cards：本地加密库中的 userProfiles 集合以 user_profile XML 元素序列化，并参与本地备份、恢复和改密。Swift RowSync 为其分配 kind=3；当前生产 Go API 仅接受 kind=1（card）和 kind=2（label），所以个人资料尚未完成云端同步。MariaDB 当前没有 vault_user_profiles 表。云端的 kind=3 存储方式及旧个人资料卡迁移方案列为待讨论事项，见 [Cloud/DATABASE.md](../Cloud/DATABASE.md)。

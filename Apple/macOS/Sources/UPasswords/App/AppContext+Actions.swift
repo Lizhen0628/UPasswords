@@ -3,11 +3,14 @@ import UPasswordsCore
 import UPasswordsPersistence
 import UPasswordsNetworking
 
-/// 卡片/标签 CRUD(DatabaseManager actions)、初始化清单、历史与数据库信息。
+/// 卡片与标签变更入口、初始化清单、历史与数据库信息。
 extension AppContext {
 
-    // MARK: - Card CRUD (DatabaseManager actions)
+    // MARK: - 卡片变更
 
+    /// 按 UUID 新增或替换卡片，记录旧字段历史并安排延迟保存。
+    ///
+    /// - Parameter card: 编辑完成的卡片值副本；本方法刷新修改时间并选中该卡。
     func upsertCard(_ card: Card) {
         var c = card
         c.modified = Date().millis
@@ -74,6 +77,9 @@ extension AppContext {
         }
     }
 
+    /// 将卡片标记为回收站项，刷新修改时间并安排保存。
+    ///
+    /// - Parameter id: 卡片 UUID；找不到时记录并返回。
     func trashCard(_ id: UUID) {
         guard let i = database.cards.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "trashCard id=\(id) skipped: card not found")
@@ -86,6 +92,9 @@ extension AppContext {
         saveDebounced()
     }
 
+    /// 从本地值集合永久移除卡片，并安排保存供同步差分收集删除。
+    ///
+    /// - Parameter id: 被删除卡片的稳定身份。
     func deleteCardPermanently(_ id: UUID) {
         Log.info("ui", "deleteCardPermanently id=\(id)")
         database.deleteCardPermanently(id: id)
@@ -93,6 +102,9 @@ extension AppContext {
         saveDebounced()
     }
 
+    /// 取消回收站和归档标志，刷新修改时间并安排保存。
+    ///
+    /// - Parameter id: 卡片 UUID。
     func restoreCard(_ id: UUID) {
         guard let i = database.cards.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "restoreCard id=\(id) skipped: card not found")
@@ -105,6 +117,9 @@ extension AppContext {
         saveDebounced()
     }
 
+    /// 设置归档标志并安排保存，不永久删除卡片。
+    ///
+    /// - Parameter id: 卡片 UUID。
     func archiveCard(_ id: UUID) {
         guard let i = database.cards.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "archiveCard id=\(id) skipped: card not found")
@@ -116,6 +131,9 @@ extension AppContext {
         saveDebounced()
     }
 
+    /// 取消归档标志并安排保存。
+    ///
+    /// - Parameter id: 卡片 UUID。
     func unarchiveCard(_ id: UUID) {
         guard let i = database.cards.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "unarchiveCard id=\(id) skipped: card not found")
@@ -127,6 +145,9 @@ extension AppContext {
         saveDebounced()
     }
 
+    /// 切换收藏标志并安排保存。
+    ///
+    /// - Parameter id: 卡片 UUID。
     func toggleFavorite(_ id: UUID) {
         guard let i = database.cards.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "toggleFavorite id=\(id) skipped: card not found")
@@ -148,6 +169,9 @@ extension AppContext {
         saveDebounced()
     }
 
+    /// 复制完整卡片，分配新 UUID 与时间，取消收藏并安排保存。
+    ///
+    /// - Parameter id: 来源卡片 UUID；字段值和附件会随值副本保留。
     func duplicateCard(_ id: UUID) {
         guard let card = database.card(id: id) else {
             Log.warn("ui", "duplicateCard id=\(id) skipped: card not found")
@@ -165,6 +189,7 @@ extension AppContext {
         saveDebounced()
     }
 
+    /// 永久移除所有回收站卡片，并安排保存。
     func emptyTrash() {
         let ids = database.cards.filter(\.trashed).map(\.id)
         Log.info("ui", "emptyTrash count=\(ids.count)")
@@ -174,6 +199,11 @@ extension AppContext {
 
     // MARK: - Label CRUD
 
+    /// 创建具有新 UUID 和修改时间的标签并安排保存。
+    ///
+    /// - Parameters:
+    ///   - name: 标签展示名。
+    ///   - color: 可选颜色词条。
     func addLabel(name: String, color: String?) {
         let id = UUID()
         database.labels.append(CardLabel(id: id, name: name, color: color, timeStamp: Date().millis))
@@ -181,6 +211,11 @@ extension AppContext {
         saveDebounced()
     }
 
+    /// 修改标签名与修改时间，关联卡片继续使用同一 UUID。
+    ///
+    /// - Parameters:
+    ///   - id: 标签 UUID。
+    ///   - name: 新展示名。
     func renameCardLabel(id: UUID, to name: String) {
         guard let i = database.labels.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "renameCardLabel id=\(id) skipped: label not found")
@@ -192,6 +227,11 @@ extension AppContext {
         saveDebounced()
     }
 
+    /// 更新指定标签的颜色与修改时间并安排保存。
+    ///
+    /// - Parameters:
+    ///   - id: 标签 UUID。
+    ///   - color: 颜色词条，nil 恢复默认。
     func setLabelColor(id: UUID, color: String?) {
         guard let i = database.labels.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "setLabelColor id=\(id) skipped: label not found")
@@ -202,6 +242,9 @@ extension AppContext {
         saveDebounced()
     }
 
+    /// 切换标签置顶状态并安排保存。
+    ///
+    /// - Parameter id: 标签 UUID。
     func toggleLabelPinned(id: UUID) {
         guard let i = database.labels.firstIndex(where: { $0.id == id }) else {
             Log.warn("ui", "toggleLabelPinned id=\(id) skipped: label not found")
@@ -212,6 +255,9 @@ extension AppContext {
         saveDebounced()
     }
 
+    /// 删除标签及卡片内的对应 UUID 关联，安排保存。
+    ///
+    /// - Parameter id: 标签 UUID。
     func deleteCardLabel(id: UUID) {
         Log.info("ui", "deleteCardLabel id=\(id)")
         database.deleteLabelPermanently(id: id)
@@ -250,13 +296,25 @@ extension AppContext {
 
     // MARK: - Setup plan
 
+    /// 查询初始化任务是否完成。
+    ///
+    /// - Parameter task: 初始化任务。
+    /// - Returns: 对应的持久化完成标志。
     func setupTaskDone(_ task: SetupPlanTask) -> Bool {
         UserDefaults.standard.bool(forKey: "setup.done.\(task.rawValue)")
     }
+    /// 记录初始化任务已完成。
+    ///
+    /// - Parameter task: 初始化任务。
     func markSetupTaskDone(_ task: SetupPlanTask) {
         UserDefaults.standard.set(true, forKey: "setup.done.\(task.rawValue)")
         objectWillChange.send()
     }
+    /// 条件满足时记录初始化任务完成。
+    ///
+    /// - Parameters:
+    ///   - task: 初始化任务。
+    ///   - cond: 当前配置是否已满足任务要求。
     func markSetupTaskDoneIf(_ task: SetupPlanTask, when cond: Bool) {
         if cond { markSetupTaskDone(task) }
     }
@@ -264,6 +322,9 @@ extension AppContext {
 
     // MARK: - Info
 
+    /// 返回按库名排序的本地库文件描述。
+    ///
+    /// - Returns: 不包含已解密内容的库清单。
     func dbsInfo() -> [DatabaseFile] { store.list() }
 
     var allHistoryEntries: [(card: Card, field: Field, entry: HistoryEntry)] {

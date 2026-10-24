@@ -11,6 +11,9 @@ import UPasswordsPersistence
 // 数据源是 App Group 容器里的真实加密库(.upw):
 // 优先钥匙串静默/生物读取主密码(同 Team keychain 共享),失败则要求手输。
 
+/// 系统凭据请求的主 actor 会话，负责解锁、候选筛选与完成凭据响应。
+///
+/// 扩展进程独立于主应用；所有读写通过共享加密库进行，不能依赖主应用内存状态。
 @MainActor
 final class AutoFillModel: ObservableObject {
 

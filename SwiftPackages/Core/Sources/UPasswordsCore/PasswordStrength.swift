@@ -5,8 +5,11 @@ import CryptoKit
 /// passwords / repeats / keyboard sequences / dates / dictionary) producing a
 /// 0–4 score scale and crack-time strings.
 public struct PasswordStrength: Equatable {
+    /// 密码强度等级，范围为 0 至 4。
     public let score: Int          // 0…4 (zxcvbn scale)
+    /// 估算熵，单位为 bit；不表示密码具备数学意义上的随机性。
     public let entropy: Double     // bits
+    /// 按每秒一百亿次猜测估算的离线破解秒数。
     public var seconds: Double { // offline attack, 1e10 guesses/s
         pow(2.0, entropy) / 1e10
     }
@@ -216,5 +219,6 @@ extension PasswordStrength {
         }
     }
 
+    /// 根据估算秒数生成的本地化破解时间描述。
     public var crackTimeText: String { PasswordStrength.crackTime(seconds: seconds) }
 }

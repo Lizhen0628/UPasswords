@@ -1,3 +1,5 @@
+// 职责：观察当前顶层 HTTP(S) 页面的表单并展示候选数量提示。
+// 页面可见消息不含字段值；实际填充由用户打开可信 popup 后主动触发。
 // Pages receive only a match count and profile-availability flag. Values are filled only by the trusted popup.
 (function () {
     "use strict";

@@ -1,3 +1,4 @@
+// 行级 CAS、增量游标和全量快照；库锁串行化版本、计数及高水位更新。
 package api
 
 import (
@@ -8,6 +9,7 @@ import (
 	"strings"
 )
 
+// incomingItem carries one validated CAS write; Body contains ciphertext, never vault plaintext.
 type incomingItem struct {
 	UUID         string  `json:"uuid"`
 	Kind         int     `json:"kind"`
@@ -18,6 +20,8 @@ type incomingItem struct {
 	ModifiedMS   *int64  `json:"modifiedMs"`
 	Body         []byte  `json:"-"`
 }
+
+// itemRow is an encrypted sync row; Modified is client time and Updated is server time, both in milliseconds.
 type itemRow struct {
 	UUID              string
 	Kind              int
@@ -27,9 +31,13 @@ type itemRow struct {
 	Modified, Updated int64
 }
 
+// wire builds the public row projection with Base64 ciphertext and client modification time.
 func (i itemRow) wire() map[string]any {
 	return map[string]any{"uuid": i.UUID, "kind": i.Kind, "revision": i.Revision, "bodyB64": b64(i.Body), "sha256": i.SHA, "modifiedMs": i.Modified}
 }
+
+// itemsPost validates the complete batch before taking the vault lock and applying per-item CAS outcomes.
+// The row mutations, counters and change high-water mark commit in one transaction; R2 cleanup follows commit.
 func (s *Server) itemsPost(w http.ResponseWriter, r *http.Request) error {
 	var b struct{ Items []incomingItem }
 	if e := body(w, r, batchJSON, &b); e != nil {
@@ -194,6 +202,8 @@ func (s *Server) itemsPost(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 200, map[string]any{"results": out})
 	return nil
 }
+
+// noRekey rejects ordinary writes while a nonexpired rekey exists; callers must already hold the vault row lock.
 func (s *Server) noRekey(r *http.Request, t *sql.Tx, vid string) error {
 	if _, e := t.ExecContext(r.Context(), "DELETE FROM rekeys WHERE vault_id=? AND expires_ms<?", vid, now()); e != nil {
 		return e
@@ -207,6 +217,8 @@ func (s *Server) noRekey(r *http.Request, t *sql.Tx, vid string) error {
 	}
 	return nil
 }
+
+// uintQuery parses a nonnegative decimal query value, rejects signs and bounds it to JSON-safe integers.
 func uintQuery(r *http.Request, key string, def int64) (int64, error) {
 	raw := r.URL.Query().Get(key)
 	if raw == "" {
@@ -221,6 +233,8 @@ func uintQuery(r *http.Request, key string, def int64) (int64, error) {
 	}
 	return n, nil
 }
+
+// itemsList returns ciphertext rows using the (updated_ms, UUID) keyset; clients must replay changes after rebuilding.
 func (s *Server) itemsList(w http.ResponseWriter, r *http.Request) error {
 	v, e := loadVault(r.Context(), s.DB, identity(r).UserID, param(r, "vaultID"), false)
 	if e != nil {
@@ -244,17 +258,22 @@ func (s *Server) itemsList(w http.ResponseWriter, r *http.Request) error {
 			return e
 		}
 	}
-	rows, e := s.DB.QueryContext(r.Context(), "SELECT item_uuid,kind,revision,body,body_sha256,modified_ms,updated_ms FROM vault_items WHERE vault_id=? AND (updated_ms>? OR(updated_ms=? AND item_uuid>?)) ORDER BY updated_ms,item_uuid LIMIT ?", v.ID, ms, ms, cursor, limit)
+	rows, e := s.DB.QueryContext(r.Context(), "SELECT item_uuid,kind,revision,body,body_sha256,modified_ms,updated_ms FROM vault_items WHERE vault_id=? AND (updated_ms>? OR(updated_ms=? AND item_uuid>?)) ORDER BY updated_ms,item_uuid LIMIT ?", v.ID, ms, ms, cursor, limit+1)
 	if e != nil {
 		return e
 	}
 	defer rows.Close()
 	out := []map[string]any{}
 	var last itemRow
+	hasMore := false
 	for rows.Next() {
 		var i itemRow
 		if e = rows.Scan(&i.UUID, &i.Kind, &i.Revision, &i.Body, &i.SHA, &i.Modified, &i.Updated); e != nil {
 			return e
+		}
+		if int64(len(out)) == limit {
+			hasMore = true
+			continue
 		}
 		out = append(out, i.wire())
 		last = i
@@ -263,12 +282,14 @@ func (s *Server) itemsList(w http.ResponseWriter, r *http.Request) error {
 		return e
 	}
 	var next any
-	if int64(len(out)) == limit {
+	if hasMore {
 		next = map[string]any{"ms": last.Updated, "uuid": last.UUID}
 	}
 	writeJSON(w, 200, map[string]any{"items": out, "nextCursor": next, "headSeq": v.Head})
 	return nil
 }
+
+// changes returns sequence-ordered events after the caller cursor; 410 requires a full rebuild from the retained floor.
 func (s *Server) changes(w http.ResponseWriter, r *http.Request) error {
 	v, e := loadVault(r.Context(), s.DB, identity(r).UserID, param(r, "vaultID"), false)
 	if e != nil {

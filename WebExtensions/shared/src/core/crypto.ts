@@ -1,6 +1,6 @@
 /**
- * WebCrypto helpers. Used for fingerprinting/comparison only — the master
- * key never leaves the native app; the extension just receives fill payloads.
+ * WebCrypto 摘要工具，仅用于指纹与比较，不负责密码库加解密。
+ * 独立扩展的密钥链实现位于 vault-crypto.ts，明文会话由 unlock-session 管理。
  */
 
 /** SHA-256 of a string, hex-encoded. */

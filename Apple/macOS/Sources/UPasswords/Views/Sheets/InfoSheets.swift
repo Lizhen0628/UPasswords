@@ -3,6 +3,7 @@ import UPasswordsCore
 
 // MARK: - About
 
+/// 展示应用版本和产品信息。
 struct AboutSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -64,6 +65,7 @@ struct AboutSheet: View {
 
 // MARK: - What's new
 
+/// 展示当前版本的功能说明。
 struct WhatsNewSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -101,6 +103,7 @@ struct WhatsNewSheet: View {
 
 // MARK: - Premium
 
+/// 展示应用内高级功能说明与相关入口。
 struct PremiumSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -138,6 +141,7 @@ struct PremiumSheet: View {
 
 // MARK: - Setup plan (8 first-run tasks)
 
+/// 展示初始化任务完成状态并路由到相应配置。
 struct SetupPlanSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -198,6 +202,7 @@ struct SetupPlanSheet: View {
 
 // MARK: - Expired cards prompt (expiring_cards_warning)
 
+/// 展示已过期或即将过期的卡片，并提供详情入口。
 struct ExpiredCardsSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -230,6 +235,7 @@ struct ExpiredCardsSheet: View {
 
 // MARK: - Restore templates (restore_templates_command)
 
+/// 确认并恢复内置模板集合的操作入口。
 struct RestoreTemplatesSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss

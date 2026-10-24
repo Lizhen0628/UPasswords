@@ -5,6 +5,7 @@ import UPasswordsPersistence
 
 // MARK: - Database info
 
+/// 展示当前库的名称、规模和本地文件信息。
 struct DatabaseInfoSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -47,6 +48,7 @@ struct DatabaseInfoSheet: View {
 
 // MARK: - Change password
 
+/// 收集当前与新主密码，将验证、密钥轮换及持久化交由会话层。
 struct ChangePasswordSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -121,6 +123,7 @@ struct ChangePasswordSheet: View {
 
 // MARK: - Erase data (erase_data_command)
 
+/// 本地数据抹除确认入口；具体清理范围由 AppContext 决定。
 struct EraseDataSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -145,6 +148,7 @@ struct EraseDataSheet: View {
 
 // MARK: - Manage databases
 
+/// 管理本地库清单，将切换验证、重命名和删除交给会话层。
 struct ManageDatabasesSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -272,6 +276,7 @@ struct ManageDatabasesSheet: View {
 
 // MARK: - Select database (from lock screen)
 
+/// 选择后续操作的本地库名，不自行解密文件。
 struct SelectDatabaseSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss

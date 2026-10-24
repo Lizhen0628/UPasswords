@@ -31,44 +31,6 @@ jobs:
         working-directory: Cloud/api
         run: go test -race -count=1 ./... && go vet ./...
 
-  worker-test:
-    runs-on: ubuntu-latest
-    services:
-      # v7 集成测试直连真实 MariaDB(vitest workers-pool 不支持 mysql2)
-      mariadb:
-        image: mariadb:11.4
-        env:
-          MARIADB_ROOT_PASSWORD: root-test-pw
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "healthcheck.sh --connect --innodb_initialized"
-          --health-interval 5s --health-timeout 5s --health-retries 20
-    env:
-      UPW_TEST_DB_ADMIN_URL: mysql://root:root-test-pw@127.0.0.1:3306/mysql
-      UPW_TEST_DB_URL: mysql://upw_app:ci-test-pw@127.0.0.1:3306/upasswords_test
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v4
-        with:
-          # node 24 自带 npm 11:`npm install-scripts approve`(生命周期脚本
-          # 白名单)是 npm 11.5+ 的命令,node 22 的 npm 10 会报 Unknown command
-          node-version: 24
-          cache: npm
-          cache-dependency-path: Cloud/worker/package-lock.json
-      - name: Install deps
-        working-directory: Cloud/worker
-        run: |
-          npm ci
-          npm install-scripts approve esbuild >/dev/null
-          npm install-scripts approve workerd >/dev/null
-      - name: Typecheck
-        working-directory: Cloud/worker
-        run: npm run typecheck
-      - name: Test (vitest + MariaDB service)
-        working-directory: Cloud/worker
-        run: npm test
-
   build-and-test:
     # macos-26 = Xcode 26 / Swift 6.x,与本地开发工具链一致,避免 SDK 隔离检查差异
     runs-on: macos-26

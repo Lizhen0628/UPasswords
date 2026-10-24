@@ -5,6 +5,7 @@ import UPasswordsCore
 
 // MARK: - 二维码展示（OTP 搬运到其他验证器/设备）
 
+/// 展示调用方提供的二维码负载；负载可能包含 OTP 密钥，应按敏感内容处理。
 struct QRCodeSheet: View {
     let title: String
     let payload: String
@@ -59,6 +60,7 @@ struct QRCodeSheet: View {
 
 // MARK: - 相机扫码（AVFoundation 元数据输出,识别首个可用负载即回调）
 
+/// 将相机扫描控制器接入 SwiftUI，通过回调返回识别负载。
 struct QRScannerView: UIViewControllerRepresentable {
     /// 命中可用负载时回调一次（会话随即停止）。
     let onScan: (String) -> Void
@@ -105,6 +107,7 @@ struct QRScannerView: UIViewControllerRepresentable {
     }
 }
 
+/// 管理相机采集、二维码识别和关闭时资源释放的 UIKit 控制器。
 final class ScannerViewController: UIViewController {
     weak var coordinator: QRScannerView.Coordinator?
 

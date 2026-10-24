@@ -2,6 +2,7 @@ import SwiftUI
 
 import UPasswordsCore
 
+/// 应用场景入口，注入唯一会话实例并连接系统生命周期。
 @main
 struct UPasswordsApp: App {
     @StateObject private var vault = Vault.shared
@@ -24,6 +25,7 @@ struct UPasswordsApp: App {
     }
 }
 
+/// 根据会话的建库、锁定和解锁状态切换根界面。
 struct RootView: View {
     @EnvironmentObject var vault: Vault
     // UI 测试钩子(UPW_UITEST_MANAGE 环境变量):直接落到设置 Tab
@@ -61,6 +63,7 @@ struct RootView: View {
     }
 }
 
+/// 解锁后的密码、安全与设置标签页容器。
 struct MainTabView: View {
     @Binding var selectedTab: Int
     @EnvironmentObject private var vault: Vault

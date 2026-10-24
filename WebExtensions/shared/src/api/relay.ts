@@ -10,11 +10,13 @@
  * - 服务端会把条目 uuid 归一化为小写,解密 AAD 需还原大写(Swift uuidString)。
  */
 
+/** 生产中继 API 的根地址；自定义来源的缓存须使用独立 scope。 */
 export const RELAY_BASE_URL = "https://api.upasswords.com";
 
 /** 网络黑洞兜底:超时后 fetch 以 TimeoutError 拒绝,UI 可恢复(否则按钮永久禁用)。 */
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/** 保留 HTTP 状态、机器错误码和重试等待时间的中继请求错误。 */
 export class RelayApiError extends Error {
     /** rate_limited 时的冷却剩余秒数(服务端 Retry-After;无头时由调用方兜底)。 */
     public readonly retryAfter: number;
@@ -26,6 +28,7 @@ export class RelayApiError extends Error {
     }
 }
 
+/** 邮箱验证码验证后签发的账户会话；令牌与密码库密钥相互独立。 */
 export interface RelaySession {
     token: string;
     /** Unix epoch 毫秒(服务端契约)。 */
@@ -33,6 +36,7 @@ export interface RelaySession {
     userId: string;
 }
 
+/** 库注册表元数据，不包含卡片或个人资料明文。 */
 export interface RelayVaultMeta {
     vaultId: string;
     name: string;
@@ -85,6 +89,7 @@ async function call(
     return response.json();
 }
 
+/** 将任意字节编码为标准 Base64；此函数不会加密输入。 */
 export function bytesToBase64(bytes: Uint8Array): string {
     let binary = "";
     for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
@@ -97,6 +102,7 @@ export async function createVault(token: string, name: string, envelopeB64: stri
     return response.vaultId;
 }
 
+/** 解码标准 Base64；格式无效时透传 atob 异常。 */
 export function base64ToBytes(b64: string): Uint8Array {
     const binary = atob(b64);
     const bytes = new Uint8Array(binary.length);
@@ -152,6 +158,7 @@ export async function getVaultEnvelope(token: string, vaultId: string): Promise<
     return { envelope, meta: meta as unknown as RelayVaultMeta };
 }
 
+/** 增量变更事件；purge 与 rekey 不要求携带条目密文。 */
 export interface RelayChange {
     seq: number;
     uuid: string;
@@ -163,6 +170,7 @@ export interface RelayChange {
     modifiedMs?: number;
 }
 
+/** 以库级序列排序的变更页，高水位与返回条目末序列分别处理。 */
 export interface RelayChangesPage {
     headSeq: number;
     changes: RelayChange[];
@@ -256,6 +264,7 @@ function isSafeNonNegativeInteger(value: unknown): value is number {
     return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
+/** 校验未知对象的 UUID、类型码、版本、毫秒时间与密文编码结构。 */
 export function isValidRelayItemRow(value: unknown): value is RelayItemRow {
     if (!isRecord(value) || typeof value.uuid !== "string"
         || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.uuid)
@@ -324,6 +333,7 @@ export async function listAllVaultItems(token: string, vaultId: string): Promise
     throw new RelayApiError(0, "too_many_pages");
 }
 
+/** 待写入的条目密文和原始 CAS 版本；密文在调用前完成加密。 */
 export interface SaveVaultItem {
     uuid: string;
     revision: number;
@@ -347,6 +357,7 @@ export async function saveVaultItem(
     return putItem(token, vaultId, item, item.revision);
 }
 
+/** 新 UUID 的创建负载，不接受用于更新现有行的 revision。 */
 export type NewVaultItem = Omit<SaveVaultItem, "revision">;
 
 /**

@@ -4,6 +4,7 @@ import UPasswordsCore
 // MARK: - Card list (邮件消息列表式:标题+日期一行 / 副标题+角标一行,
 // 搜索与同步已上移到顶部工具栏,列表栏只承载纯列表)
 
+/// 按筛选和搜索状态组织卡片列表，将用户动作交给会话层。
 struct CardListView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings

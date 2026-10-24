@@ -14,6 +14,7 @@ declare const chrome: {
     };
 };
 
+/** 将 Chromium 回调式 API 转为共享的 Promise 浏览器适配接口。 */
 export const chromeAdapter: BrowserAdapter = {
     kind: "chrome",
     activeTabURL: () =>

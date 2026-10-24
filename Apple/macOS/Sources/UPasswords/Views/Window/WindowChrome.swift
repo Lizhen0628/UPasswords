@@ -420,6 +420,7 @@ struct WindowChromeConfigurator: NSViewRepresentable {
 
 // MARK: - 空白处可拖拽窗口
 
+/// 将窗口拖动区域接入 SwiftUI 的 AppKit 桥接。
 struct WindowDragArea: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { DragView() }
     func updateNSView(_ nsView: NSView, context: Context) {}
@@ -480,6 +481,7 @@ struct WindowDragArea: NSViewRepresentable {
 
 // MARK: - 「Above all」窗口置顶状态
 
+/// 当前窗口置顶状态的可观察包装。
 final class WindowFloatState: ObservableObject {
     static let shared = WindowFloatState()
     @Published var floating = false

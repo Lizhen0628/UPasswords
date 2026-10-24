@@ -22,10 +22,14 @@ import Foundation
 /// 无 `<ghost>` 元素——本地删除即移除,删除事实由服务端条目表缺席承载
 /// (Cloud/DATABASE.md)。
 public struct PasswordDatabase: Codable, Equatable {
+    /// 创建不含模板、卡片、标签或个人资料的空数据库值。
     public init() {}
 
+    /// 当前库中的标签值集合。
     public var labels: [CardLabel] = []
+    /// 当前库中的卡片值集合，包含模板、归档与回收站项。
     public var cards: [Card] = []
+    /// 独立于密码卡片保存的个人资料集合。
     public var userProfiles: [UserProfile] = []
 
     private enum CodingKeys: String, CodingKey {
@@ -44,10 +48,26 @@ public struct PasswordDatabase: Codable, Equatable {
 
     // MARK: - Item accessors
 
+    /// 按稳定 UUID 查找首个卡片。
+    ///
+    /// - Parameter id: 目标卡片身份。
+    /// - Returns: 对应卡片的值副本；不存在时为 nil。
+    /// - Complexity: O(n)，n 为卡片数。
     public func card(id: UUID) -> Card? { cards.first { $0.id == id } }
+    /// 按稳定 UUID 查找首个标签。
+    ///
+    /// - Parameter id: 目标标签身份。
+    /// - Returns: 对应标签的值副本；不存在时为 nil。
+    /// - Complexity: O(n)，n 为标签数。
     public func label(id: UUID) -> CardLabel? { labels.first { $0.id == id } }
 
+    /// 排除模板和回收站项后的卡片；归档项仍包含在结果中。
+    ///
+    /// - Complexity: O(n)，n 为全部卡片数。
     public var activeCards: [Card] { cards.filter { !$0.template && !$0.trashed } }
+    /// 按原始顺序保留的模板卡片。
+    ///
+    /// - Complexity: O(n)，n 为全部卡片数。
     public var templateCards: [Card] { cards.filter { $0.template } }
 
     // MARK: - Factory
@@ -105,9 +125,12 @@ public struct PasswordDatabase: Codable, Equatable {
     }
 }
 
-// MARK: - XML serialization (XDatabase.data)
+// MARK: - XML 序列化
 
 extension PasswordDatabase {
+    /// 序列化全部标签、卡片和个人资料为 UTF-8 XML 明文。
+    ///
+    /// - Returns: 尚未加密的数据库字节；写入库文件前必须交给 DatabaseCipher。
     public func xmlData() -> Data {
         var s = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<database>\n"
         for l in labels {
@@ -200,6 +223,10 @@ extension PasswordDatabase {
         return s + "    </user_profile>"
     }
 
+    /// 将字段历史序列化为 XML 属性中使用的 JSON 文本。
+    ///
+    /// - Parameter entries: 含历史明文和毫秒时间戳的记录。
+    /// - Returns: JSON 数组文本；编码失败时为空数组文本。
     public static func historyJSON(_ entries: [HistoryEntry]) -> String {
         let arr: [[String: Any]] = entries.map { ["v": $0.value, "t": Int64($0.time)] }
         guard let data = try? JSONSerialization.data(withJSONObject: arr),
@@ -207,6 +234,10 @@ extension PasswordDatabase {
         return s
     }
 
+    /// 容错读取字段历史属性，忽略没有字符串值的条目。
+    ///
+    /// - Parameter raw: 可选的历史 JSON 文本。
+    /// - Returns: 有效记录数组；缺失或格式错误时返回空数组。
     public static func history(fromJSON raw: String?) -> [HistoryEntry] {
         guard let raw, let data = raw.data(using: .utf8),
               let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
@@ -218,10 +249,12 @@ extension PasswordDatabase {
     }
 }
 
-// MARK: - XML parsing (XDatabase.parseData:)
+// MARK: - XML 解析
 
+/// 数据库 XML 语法或结构校验失败的错误域。
 public enum DatabaseXMLError: LocalizedError {
     case malformed
+    /// 供用户界面展示的本地化 XML 格式错误。
     public var errorDescription: String? { L10n.t("wrong_database_format_error") }
 }
 
@@ -247,10 +280,17 @@ extension PasswordDatabase {
 private let knownFieldTypes = Set(FieldType.allCases.map(\.rawValue))
 private let knownAutofills = Set(Autofill.allCases.map(\.rawValue))
 
+/// 单次 XML 解析使用的有状态代理，累计卡片、标签及资料记录。
+///
+/// 每次解析必须创建新实例；同一实例不得跨任务并发复用。
 final class DBXMLParser: NSObject, XMLParserDelegate {
+    /// 当前库中的标签值集合。
     public var labels: [CardLabel] = []
+    /// 当前库中的卡片值集合，包含模板、归档与回收站项。
     public var cards: [Card] = []
+    /// 独立于密码卡片保存的个人资料集合。
     public var userProfiles: [UserProfile] = []
+    /// XML 语法或必需身份字段校验是否失败。
     public var failed = false
 
     private var currentProfile: UserProfile?
@@ -259,6 +299,7 @@ final class DBXMLParser: NSObject, XMLParserDelegate {
     private var textBuf = ""
     private var currentElement = ""
 
+    /// 接收元素开始事件，创建当前记录并读取已知属性。
     public func parser(_ p: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes attrs: [String: String] = [:]) {
         currentElement = name
         textBuf = ""
@@ -310,7 +351,7 @@ final class DBXMLParser: NSObject, XMLParserDelegate {
             if let t = attrs["type"], knownFieldTypes.contains(t) {
                 f.type = FieldType(rawValue: t) ?? .text
             } else {
-                f.type = .text // XSanitizer: unknown types degrade to text
+                f.type = .text // 未知字段类型降级为普通文本
             }
             if let a = attrs["autofill"], knownAutofills.contains(a) {
                 f.autofill = Autofill(rawValue: a) ?? .off
@@ -332,6 +373,7 @@ final class DBXMLParser: NSObject, XMLParserDelegate {
         }
     }
 
+    /// 累计本次元素文本；XMLParser 可能将一段文本分多次回调。
     public func parser(_ p: XMLParser, foundCharacters string: String) {
         textBuf += string
     }
@@ -341,6 +383,7 @@ final class DBXMLParser: NSObject, XMLParserDelegate {
     private var pendingAttachmentKind: AttachmentKind? = nil
     private var pendingIconSource: String? = nil
 
+    /// 在元素结束时将文本写入当前值并收集完成的记录。
     public func parser(_ p: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
         switch name {
         case "field":
@@ -384,11 +427,16 @@ final class DBXMLParser: NSObject, XMLParserDelegate {
         currentElement = ""
     }
 
+    /// 标记本次解析失败；上层 parse 统一转为数据库格式错误。
     public func parser(_ p: XMLParser, parseErrorOccurred error: Error) {
         failed = true
     }
 }
 
+/// 转义 XML 文本及双引号属性值中的五种保留字符。
+///
+/// - Parameter s: 未转义的明文。
+/// - Returns: 可写入 XML 的文本；不进行 XML 非法控制字符过滤。
 public func XMLEscape(_ s: String) -> String {
     var out = ""
     for ch in s {

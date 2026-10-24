@@ -6,6 +6,16 @@ import Foundation
 /// 以 JSON 存进类型 .secret、名为 `Card.passkeyFieldName` 的字段:数据库结构不变,
 /// 旧版本 App 只看到一个普通私密字段;整库加密,私钥不出库。
 public struct Passkey: Codable, Equatable, Sendable {
+    /// 创建可随密码库加密保存的通行密钥凭据值。
+    ///
+    /// - Parameters:
+    ///   - credentialID: 注册时生成的凭据身份字节。
+    ///   - relyingParty: RP ID，断言时精确匹配。
+    ///   - userHandle: RP 用户句柄。
+    ///   - userName: 用户展示名。
+    ///   - privateKey: P-256 私钥 rawRepresentation，属于敏感材料。
+    ///   - signCount: 当前断言计数器。
+    ///   - created: Unix 毫秒创建时间。
     public init(credentialID: Data, relyingParty: String, userHandle: Data,
                 userName: String, privateKey: Data, signCount: UInt32, created: TimeInterval) {
         self.credentialID = credentialID
@@ -21,7 +31,9 @@ public struct Passkey: Codable, Equatable, Sendable {
     public var credentialID: Data
     /// RP ID(如 "github.com"),断言/注册匹配用它,精确相等。
     public var relyingParty: String
+    /// 依赖方提供的用户句柄字节，与用户展示名分开保存。
     public var userHandle: Data
+    /// 凭据关联的用户展示名。
     public var userName: String
     /// CryptoKit P-256 私钥 rawRepresentation。
     public var privateKey: Data

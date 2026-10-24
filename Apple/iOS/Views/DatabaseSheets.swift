@@ -15,6 +15,7 @@ import UPasswordsPersistence
 // UI 测试通过,判定为个别真机环境的手势仲裁问题),故行尾加 Menu 作为
 // 不依赖手势的可靠入口,swipeActions 保留。
 
+/// 多密码库管理入口，协调切换、新建、重命名和删除的弹层状态。
 struct VaultManageSheet: View {
     @EnvironmentObject var vault: Vault
     @Environment(\.dismiss) private var dismiss

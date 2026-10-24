@@ -1,6 +1,6 @@
 import Foundation
 
-/// iOS / macOS 两个 App target 共用的产品信息。
+/// iOS 主应用与 AutoFill 扩展共用的产品信息；macOS 不编译此目录。
 /// 品牌名等可见文案仍走 `L10n`（UPasswordsCore），此处只放非文案常量。
 enum SharedAppInfo {
     /// 统一的产品标识（bundle 显示名、日志前缀）。

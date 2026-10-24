@@ -143,9 +143,30 @@ macOS 同样收敛。
 
 ## 已有自动化覆盖(供参考,不需人工重跑)
 
-- Worker 集成测试 19 例(连真实 MariaDB):登录/单活跃码/限速/会话/注销/
-  CAS 冲突/not_found/游标/全量分页/rekey 写锁与漂移防护/附件配额/
-  换绑/跨用户隔离/目录/泄漏代理/统计;
-- Core 55 例(uuid 编解码/合并/无墓碑删除/条目级 LWW/加密向量);
-- Persistence 50 例(RowSync 引擎:上行/下行/删除胜/rekey 信号/AAD 绑定);
-- macOS 36 例、WebExtensions 17 例(契约一致性/跨端加密向量)。
+- Go API 隔离 MariaDB 集成测试:验证码限速与重放、设备会话管理、注销与重新注册、
+  vault 所有权、CAS 冲突、删除 purge/not_found、游标过期与 keyset 分页、rekey、
+  附件暂存与提交失败、换绑、网站目录与图标、HIBP 代理、只读统计和维护任务;
+- Swift 库包与 macOS 应用覆盖模型、加密、XML、同步、导入导出和资源加载；
+- WebExtensions 覆盖契约、跨端加密向量、缓存、解锁会话、增量同步与填充消息边界。
+
+## Worker 退役前的 Go 覆盖核对
+
+以下对应关系按行为核对；Go 测试须设置 `UPW_TEST_DSN` 并实际连接隔离 MariaDB，
+未设置 DSN 的跳过结果不能作为集成覆盖证据。CI 保留 `api-test` 的 race 与 vet 检查。
+
+| 原 Worker 测试场景 | Go 回归测试入口 |
+|---|---|
+| 首次注册、设备平台、当前会话、重命名、指定撤销、注销后重新注册 | `TestSessionManagementAndAccountDeregistration` |
+| 错误码次数、单次消费、当前会话撤销、重发冷却和小时限额 | `TestCodeAttemptsReplayAndSessionRevocation`、`TestCodeHourlyQuota` |
+| 跨用户 404、CAS 并发冲突、UUID 大小写、信封、改密写锁和提交 | `TestSyncIsolationCASAndRekey` |
+| 删除 purge 标记、迟到上行 not_found、全量 keyset 分页和末页边界 | `TestSyncDeletePurgeAndKeysetPagination` |
+| 错误 UUID 集合、跨库改密、分块幂等、失效快照、abort 清理与写锁释放 | `TestRekeyRejectsWrongUUIDSetAndOtherVault`、`TestRekeyStaleSnapshotAndAbort` |
+| 附件暂存→提交→下载→删除、对象失败不发布 SQL 引用 | `TestAttachmentOwnershipAndCommitFailure` |
+| 双 sensitive 验证码换绑 | `TestSensitiveDeleteAndTransfer` |
+| 目录管理、别名、中英文名、图标内容与缓存、miss、统计授权 | `TestSiteCatalogIconStatsAndBreachProxy` |
+| HIBP 鉴权、前缀校验、padding、响应与上游失败 | `TestSiteCatalogIconStatsAndBreachProxy` |
+| `/v1/` 与 `/v2/` 能力兼容 | `TestVersionedRouteCompatibility` |
+| 邮件用途、回复地址、UTF-8/Base64、中文/默认英文与有效期 | `TestEmailValidationAndReplyRouting`、`TestVerificationMailLanguageAndPurpose` |
+
+Go 生产邮件当前为 UTF-8 纯文本。旧 Worker 的 multipart/HTML 布局断言随该实现退役，
+不代表 Go 提供 HTML 邮件；验证码内容、用途、语言及回复路由有独立测试。

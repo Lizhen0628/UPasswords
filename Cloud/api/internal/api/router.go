@@ -1,3 +1,4 @@
+// API 路由与授权边界；/v1 和兼容 /v2 共享同一行级同步协议。
 package api
 
 import (
@@ -8,8 +9,11 @@ import (
 	"time"
 )
 
+// param reads a chi route parameter; callers still validate identity syntax and account ownership.
 func param(r *http.Request, name string) string { return chi.URLParam(r, name) }
-func intString(n int64) string                  { return strconv.FormatInt(n, 10) }
+
+// intString formats an integer in base ten for headers and query metadata.
+func intString(n int64) string { return strconv.FormatInt(n, 10) }
 
 // Handler exposes v1 routes and keeps v2 as a compatibility alias for installed clients.
 func (s *Server) Handler() http.Handler {

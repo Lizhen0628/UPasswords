@@ -110,7 +110,7 @@
   - 写入时将注册信息／signCount 合并到最新盘面，减少扩展与主 App 的覆盖冲突。
     扩展写共享本地库而非直接发起云同步；主 App 内存刷新与上行衔接仍需完善，
     因此 Passkey 的即时跨设备同步列为部分实现。
-- **用户资料存储**：独立 UserProfile 模型和本地加密存储；设置提供编辑、删除，姓名、邮箱、电话、地址和填充偏好均随本地库加密，并参与备份、恢复及改密。RowSync 使用 kind=3，但当前生产 Go API 与 Worker 均仅接受 kind=1/2，个人资料云同步尚未闭环；数据库方案见 [Cloud/DATABASE.md](Cloud/DATABASE.md)。
+- **用户资料存储**：独立 UserProfile 模型和本地加密存储；设置提供编辑、删除，姓名、邮箱、电话、地址和填充偏好均随本地库加密，并参与备份、恢复及改密。RowSync 使用 kind=3，但当前生产 Go API 仅接受 kind=1/2，个人资料云同步尚未闭环；数据库方案见 [Cloud/DATABASE.md](Cloud/DATABASE.md)。
 - **网站注册资料**：iOS App 内置 Safari 网页扩展，与 macOS 网页扩展共用实现；
   系统设置启用并授权网站后，在扩展中登录、解锁本地密码库并选择已有个人资料填充。
   此功能依赖该设备的本地加密库中已有资料；资料提示默认开启，
@@ -170,7 +170,7 @@
 - **同步协议**：客户端保存 revision、游标与脏集合，经 `/v1` 按游标增量拉取、
   批量写入并校验基础 revision（CAS）。卡片和标签采用 UUID，
   修改冲突以条目修改时间较新者胜出，相等时保留本地；删除胜出。
-  UserProfile 本地编码为 kind=3，但当前 Go API 与 Worker 不接受该 kind；不应视为已完成云同步。
+  UserProfile 本地编码为 kind=3，但当前 Go API 不接受该 kind；不应视为已完成云同步。
   当前不是用户逐次选择的冲突裁决弹窗，也不是完整历史版本保留。
 - **删除语义**：回收站条目仍是卡片；永久删除后本地移除，由服务端变更日志和
   条目表缺席传播删除事实，不以永久墓碑卡片保存。
@@ -211,7 +211,7 @@
   `xcodegen generate`；Web 扩展 `pnpm build && pnpm test`；发行打包
   `./scripts/make-app.sh`（含 release 编译 + 签名 + Safari 容器同步）。
 - **测试面**：Core（含 L10n 双表齐平）、Persistence（库文件／备份／导入导出／
-  同步／Relay／钥匙串）、Networking、macOS、Worker 与 Web 扩展测试；
+  同步／Relay／钥匙串）、Networking、macOS、Go API 与 Web 扩展测试；
   钥匙串用例在锁钥匙串环境下可跳过。用例数量以实际运行结果为准，不在此维护固定数字。
   跨端向量 fixture（`vault-vector.json`、`item-vector.json`）检查 Swift／WebCrypto 互通。
 - **CI**：四包测试 → xcodegen + xcodebuild 双平台 → pnpm → 打包上传产物。
@@ -371,8 +371,8 @@
 - 菜单栏：[StatusItemController.swift](Apple/macOS/Sources/UPasswords/App/StatusItemController.swift)。
 - 附件编辑：[macOS](Apple/macOS/Sources/UPasswords/Views/Sheets/EditCardSheet.swift)、
   [iOS](Apple/iOS/Views/CardEditView.swift)。
-- 同步／共享归属：[云端库操作](Cloud/worker/src/vaults.ts)、
-  [账户与会话](Cloud/worker/src/auth.ts)。
+- 同步／共享归属：[云端库操作](Cloud/api/internal/api/vaults.go)、
+  [账户与会话](Cloud/api/internal/api/auth.go)。
 
 主要差距集中在：**浏览器保存／更新完整流程、跨端 Passkey、个人／家庭共享、
 扩展安全提醒与非 Apple 客户端覆盖**。当前基础密码库、生成器、TOTP、

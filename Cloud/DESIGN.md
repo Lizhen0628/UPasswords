@@ -1,6 +1,6 @@
 # UPasswords v1 云服务设计
 
-> 当前生产服务由 Cloud/api 的 Go + chi 实现。Cloud/worker 保留为兼容与回退运行时。产品开发版本 v1 不等同于 API 路径版本或同步协议版本。
+> 当前生产服务由 Cloud/api 的 Go + chi 实现。产品开发版本 v1 不等同于 API 路径版本或同步协议版本。
 
 ## 版本约定
 
@@ -10,7 +10,7 @@
 | HTTP 路径 | 客户端使用 /v1；服务端保留 /v2 兼容别名 |
 | 能力协商 | version: 2 表示行级同步协议版本 |
 | 本地加密容器 | UPWDB2 / UPWKEY1，容器格式版本 2 |
-| SQL | Cloud/worker/sql/0001_init.sql 为当前初始化 DDL |
+| SQL | Cloud/database/0001_init.sql 为当前初始化 DDL；后续迁移同目录按序维护 |
 
 这些版本独立演进。不要把 /v1 路径解释为同步协议版本 1。
 
@@ -28,7 +28,7 @@ flowchart LR
         NGINX["Nginx 反向代理"]
     end
     API["Go + chi API<br/>Cloud/api"]
-    DB[("MariaDB 11.4<br/>Cloud/worker/sql/0001_init.sql")]
+    DB[("MariaDB 11.4<br/>Cloud/database/0001_init.sql")]
     R2[("Cloudflare R2<br/>附件密文 / 站点图标")]
     SMTP["SMTP 邮件服务"]
     CF --> NGINX --> API
@@ -72,11 +72,11 @@ macOS/iOS 原生同步状态包括游标、revision、脏修改与删除集合�
 
 公开 API 的当前路径、请求字段及错误行为以[服务端 API 与运维说明](README.md)和 Go 路由实现为准。生产入口为 Cloudflare → Nginx → Go API；MariaDB 通过私网 TLS 访问；每日维护任务执行到期清理、日志保留、附件清扫、计数核对和审计保留。
 
-Cloudflare Worker 的 TypeScript 代码与 Go API 共用 MariaDB 初始化 DDL，保留作回退实现，不是当前生产请求处理路径。Worker 部署细节和 Go API 部署检查分别见 [Cloud/README.md](README.md) 与 [api/README.md](api/README.md)。
+生产恢复通过回滚到已保存的 Go API 镜像，并在必要时从 MariaDB 备份恢复；R2 对象保存在独立桶中，不随数据库恢复回退。发布、备份与恢复步骤见 [Cloud/README.md](README.md) 和 [api/README.md](api/README.md)。
 
 ## 当前缺口与待讨论
 
-- UserProfile 已进入本地数据模型，RowSync 使用 kind=3；当前 Go API 与 Worker 只接受 kind=1/2，个人资料的云同步尚未实现。存储方案待定，见 [DATABASE.md](DATABASE.md)。
+- UserProfile 已进入本地数据模型，RowSync 使用 kind=3；已提交 Go 基线只接受 kind=1/2。独立密文表的增量迁移已归档到 database/0002_user_profiles.sql，配套 Go 实现仍是服务器未提交工作；发布状态见 [DATABASE.md](DATABASE.md)。
 - 独立附件云存储的服务端接口已实现，原生客户端尚未将附件生命周期接入该接口。
 - 服务端提供只读运营统计，但客户端没有可配置服务器地址或自托管切换流程。
 - /v2 兼容别名的下线时机尚未确定；下线前需要用客户端最低支持版本和实际请求数据评估。
@@ -84,8 +84,7 @@ Cloudflare Worker 的 TypeScript 代码与 Go API 共用 MariaDB 初始化 DDL�
 ## 维护入口
 
 - 生产 API：Cloud/api
-- 回退 Worker：Cloud/worker
-- MariaDB 初始化 DDL：Cloud/worker/sql/0001_init.sql
+- MariaDB 初始化 DDL 与迁移：Cloud/database/
 - 隔离 Go API 集成测试：Cloud/api/compose.test.yaml
-- Worker 测试：Cloud/TESTING.md
+- Go API 场景覆盖：Cloud/TESTING.md
 - 部署与生产检查：Cloud/api/README.md

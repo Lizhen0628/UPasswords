@@ -91,6 +91,7 @@ struct PreferencesView: View {
 
 // MARK: - 标签条按钮
 
+/// 设置窗口侧边页签按钮，选择状态由外层容器持有。
 private struct TabButton: View {
     let tab: PreferencesView.Tab
     let isSelected: Bool
@@ -157,6 +158,7 @@ private struct PopupPicker<Tag: Hashable>: View {
     }
 }
 
+/// 为弹出选择器提供 AppKit 样式适配的背景视图。
 private struct PopupPickerBacking<Tag: Hashable>: NSViewRepresentable {
     let selection: Binding<Tag>
     let items: [(String, Tag)]
@@ -206,6 +208,7 @@ private struct PopupPickerBacking<Tag: Hashable>: NSViewRepresentable {
 
 // MARK: - Appearance
 
+/// 编辑应用外观和密码展示偏好，不修改密码库内容。
 struct AppearancePane: View {
     @EnvironmentObject var settings: AppSettings
 
@@ -276,6 +279,7 @@ struct AppearancePane: View {
 
 // MARK: - Security
 
+/// 安全偏好面板，协调生物识别、锁定策略与主密码修改入口。
 struct SecurityPane: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
@@ -400,6 +404,7 @@ struct SecurityPane: View {
 
 // MARK: - Auto backup
 
+/// 管理自动备份周期、备份清单与日志维护入口。
 struct AutoBackupPane: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
@@ -592,6 +597,7 @@ struct AutoBackupPane: View {
 
 // MARK: - Autofill
 
+/// 展示浏览器扩展与自动填充相关配置。
 struct AutofillPane: View {
     @EnvironmentObject private var ctx: AppContext
     @EnvironmentObject private var settings: AppSettings
@@ -633,6 +639,7 @@ struct AutofillPane: View {
 
 // MARK: - Lock screen
 
+/// 编辑锁屏背景和纹理选择，图片持久化交由专用存储服务。
 struct LockScreenPane: View {
     @EnvironmentObject var settings: AppSettings
 
@@ -767,6 +774,7 @@ struct LockScreenPane: View {
 
 // MARK: - Cloud sync
 
+/// 云同步设置入口，组合账户授权、库绑定与同步状态。
 struct CloudPane: View {
     var body: some View {
         ConfigureCloudSheetContents()

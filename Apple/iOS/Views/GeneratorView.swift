@@ -4,6 +4,7 @@ import UPasswordsCore
 
 // MARK: - 密码生成器 Tab
 
+/// 绑定共享生成偏好的密码生成界面；生成值与历史均为敏感明文。
 struct GeneratorView: View {
     @EnvironmentObject var vault: Vault
     @ObservedObject private var settings = PasswordSettings.shared

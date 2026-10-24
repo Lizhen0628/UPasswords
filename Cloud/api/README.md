@@ -39,6 +39,51 @@ duplicate runs. Database `GET_LOCK` values are scoped to their owning connection
 Production maintenance must only be enabled on one deployment.
 
 Cloudflare's zone SSL mode must remain Full (strict), with the API origin certificate
-installed in Nginx. To roll back, point the proxied API DNS record back to its previous
-Worker target, restore the Worker custom-domain route in Cloudflare, and re-enable its
-04:00 UTC schedule before stopping this Compose stack.
+installed in Nginx. The Cloudflare proxy continues to provide DNS, TLS and WAF; the
+API origin remains the Go service.
+
+## Release Backup and Rollback
+
+Before deploying a release, preserve the current Go image and take a verified MariaDB
+backup before any schema change. Keep database credentials in a protected client option
+file rather than on the command line:
+
+```sh
+docker image tag upasswords-api:local upasswords-api:rollback
+mariadb-dump --defaults-extra-file=/secure/path/mariadb-client.cnf \
+  --single-transaction --routines --events upasswords \
+  > /secure/backups/upasswords-before-release.sql
+```
+
+For an application-only failure, restore the saved image. Restore the matching database
+backup only when the release changed the schema or wrote data that the old image cannot
+read. Database restoration requires downtime and discards database writes made after
+that backup:
+
+```sh
+docker compose stop api maintenance
+docker image tag upasswords-api:rollback upasswords-api:local
+docker compose up -d --no-build api maintenance
+docker compose run --rm --no-deps api check
+```
+
+If database recovery is required, keep both services stopped while restoring the
+verified backup, then start and check the saved image:
+
+```sh
+docker compose stop api maintenance
+docker image tag upasswords-api:rollback upasswords-api:local
+mariadb --defaults-extra-file=/secure/path/mariadb-client.cnf upasswords \
+  < /secure/backups/upasswords-before-release.sql
+docker compose up -d --no-build api maintenance
+docker compose run --rm --no-deps api check
+```
+
+For migrations that add tables, importing a dump into the existing database does
+not remove those extra tables. Rehearse recovery into an empty database and compare
+the restored schema before switching production to it. Preserve database grants,
+TLS settings and the protected client option file separately.
+
+Keep `APP_KEK` unchanged when restoring. MariaDB backups do not include R2 objects;
+R2 recovery is a separate operation, and the production bucket must not be deleted as
+part of Worker retirement or database rollback.

@@ -15,6 +15,7 @@ public enum FieldType: String, CaseIterable, Codable, Identifiable {
     case expiry
     case secret
 
+    /// 持久化类型词条，也是列表中的稳定标识。
     public var id: String { rawValue }
 
     /// Localized type name (strings table `*_type`).
@@ -36,19 +37,25 @@ public enum FieldType: String, CaseIterable, Codable, Identifiable {
     }
 
     // Type predicates
+    /// 字段是否默认遮蔽显示；不代表字段被单独加密。
     public var isHidden: Bool {
         switch self {
         case .password, .pin, .oneTimePassword, .secret: return true
         default: return false
         }
     }
+    /// 字段是否保存一次性密码配置。
     public var isOneTimePassword: Bool { self == .oneTimePassword }
+    /// 字段是否可作为登录标识，包含用户名与邮箱。
     public var isLogin: Bool { self == .login || self == .email }
+    /// 字段是否使用数字输入语义。
     public var isNumber: Bool { self == .number }
+    /// 字段是否参加搜索；一次性密码配置除外。
     public var isSearchable: Bool { self != .oneTimePassword }
     /// Password-like fields participate in weak/same/compromised analysis.
     public var needsScoring: Bool { self == .password }
 
+    /// 该字段类型使用的 SF Symbols 名称。
     public var systemImage: String {
         switch self {
         case .login: return "person.crop.circle"
@@ -108,6 +115,7 @@ public enum Autofill: String, CaseIterable, Codable, Identifiable {
     case ccExp = "cc-exp"
     case ccCsc = "cc-csc"
 
+    /// HTML autocomplete 词条，也是列表中的稳定标识。
     public var id: String { rawValue }
 
     /// Localized autofill name (strings table `*_autofill`).
@@ -140,18 +148,35 @@ public enum Autofill: String, CaseIterable, Codable, Identifiable {
 /// A single field value change, kept per-field
 /// (stored as JSON on the field: values + modification times).
 public struct HistoryEntry: Codable, Equatable, Identifiable {
+    /// 创建一条字段历史记录。
+    ///
+    /// - Parameters:
+    ///   - value: 旧字段明文。
+    ///   - time: 旧值对应的 Unix 毫秒时间戳。
     public init(value: String, time: TimeInterval) {
         self.value = value
         self.time = time
     }
 
+    /// 历史字段明文，随所在密码库一起加密；不得写入日志。
     public var value: String
+    /// 此次历史值的 Unix 时间戳，单位为毫秒。
     public var time: TimeInterval // millis since epoch
+    /// 用于界面列表识别历史项的毫秒时间戳。
     public var id: TimeInterval { time }
 }
 
 /// A single named field on a card.
 public struct Field: Codable, Equatable, Identifiable {
+    /// 创建具有独立内存身份的字段值。
+    ///
+    /// - Parameters:
+    ///   - id: 内存中的字段 UUID；XML 不保留该身份。
+    ///   - name: 展示名。
+    ///   - type: 字段语义类型。
+    ///   - value: 当前明文值。
+    ///   - autofill: 自动填充词条。
+    ///   - history: 随库加密的旧值集合。
     public init(id: UUID = UUID(), name: String, type: FieldType = .text, value: String = "",
                 autofill: Autofill = .off, history: [HistoryEntry] = []) {
         self.id = id
@@ -162,16 +187,30 @@ public struct Field: Codable, Equatable, Identifiable {
         self.history = history
     }
 
+    /// 当前内存模型中的字段标识；XML 字段元素不持久化该标识。
     public var id: UUID = UUID()
+    /// 字段展示名称，与字段类型和自动填充词条相互独立。
     public var name: String
+    /// 字段的展示、输入和安全分析类型。
     public var type: FieldType = .text
+    /// 字段明文；只允许在已解锁会话中使用。
     public var value: String = ""
+    /// 自动填充的语义词条；off 表示不参与语义匹配。
     public var autofill: Autofill = .off
+    /// 旧字段值及其修改时间，最多由 putHistoryValue 保留 20 项。
     public var history: [HistoryEntry] = []
 
+    /// 当前值是否为非空字符串；不自动裁剪空白。
     public var hasValue: Bool { !value.isEmpty }
+    /// 是否保存过历史字段值。
     public var hasHistory: Bool { !history.isEmpty }
 
+    /// 追加与当前值不同的非空历史值，并去重后保留最近 20 项。
+    ///
+    /// 此方法仅维护历史集合，不会修改 value；调用方负责提交当前字段值。
+    /// - Parameters:
+    ///   - v: 待保存的历史明文。
+    ///   - time: 该值的 Unix 毫秒时间戳。
     public mutating func putHistoryValue(_ v: String, time: TimeInterval) {
         guard !v.isEmpty, v != value else { return }
         history.removeAll { $0.value == v }
@@ -182,21 +221,40 @@ public struct Field: Codable, Equatable, Identifiable {
 
 /// Attached binary payload (base64 in XML).
 public struct Attachment: Codable, Equatable, Identifiable {
+    /// 创建一个尚未单独加密的附件值。
+    ///
+    /// - Parameters:
+    ///   - id: 内存中的附件身份；XML 不保留该身份。
+    ///   - name: 附件展示名。
+    ///   - data: 附件原始字节。
     public init(id: UUID = UUID(), name: String, data: Data) {
         self.id = id
         self.name = name
         self.data = data
     }
 
+    /// 当前内存模型中的附件标识；XML 附件元素不持久化该标识。
     public var id: UUID = UUID()
+    /// 附件的展示文件名。
     public var name: String
+    /// 已解码的附件明文字节；XML 序列化时转为 Base64。
     public var data: Data // decoded bytes; serialized base64 into XML
 
+    /// 附件明文字节数。
     public var length: Int { data.count }
 }
 
 /// A user label (`<label name id/>`).
 public struct CardLabel: Codable, Equatable, Identifiable {
+    /// 创建同步身份稳定的标签。
+    ///
+    /// - Parameters:
+    ///   - id: 跨端稳定 UUID。
+    ///   - name: 展示名。
+    ///   - color: 可选颜色词条。
+    ///   - type: 可选内置分类词条。
+    ///   - pinToTop: 是否置顶。
+    ///   - timeStamp: 最后修改的 Unix 毫秒时间戳。
     public init(id: UUID = UUID(), name: String, color: String? = nil, type: String? = nil,
                 pinToTop: Bool = false, timeStamp: TimeInterval = 0) {
         self.id = id
@@ -207,14 +265,29 @@ public struct CardLabel: Codable, Equatable, Identifiable {
         self.timeStamp = timeStamp
     }
 
+    /// 跨设备同步的稳定标签身份。
     public var id: UUID = UUID()
+    /// 用户可见的标签名称。
     public var name: String
+    /// 可选颜色词条；nil 使用界面默认颜色。
     public var color: String? = nil
+    /// 内置标签的语义分类词条；用户标签可以为空。
     public var type: String? = nil            // e.g. "web_accounts"
+    /// 标签是否在侧栏优先显示。
     public var pinToTop: Bool = false
+    /// 标签最后修改的 Unix 毫秒时间戳，用于冲突裁决。
     public var timeStamp: TimeInterval = 0    // millis
 
+    /// 仅使用稳定身份生成标签哈希，与标签相等性保持一致。
+    ///
+    /// - Parameter hasher: 标准库提供的哈希累计器。
     public func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    /// 比较标签身份；名称、颜色和修改时间不参与相等判断。
+    ///
+    /// - Parameters:
+    ///   - l: 左侧标签。
+    ///   - r: 右侧标签。
+    /// - Returns: 两个标签是否拥有相同 UUID。
     public static func == (l: CardLabel, r: CardLabel) -> Bool { l.id == r.id }
 }
 
@@ -223,26 +296,47 @@ public struct CardLabel: Codable, Equatable, Identifiable {
 /// trashed/expiration/reminder/created/modified);id 为 UUID v4
 /// (客户端生成,行级同步的条目身份,离线多端无碰撞)。
 public struct Card: Codable, Equatable, Identifiable {
+    /// 创建空卡片，其他内容由默认属性值初始化。
+    ///
+    /// - Parameters:
+    ///   - id: 跨端稳定 UUID。
+    ///   - title: 展示标题；创建时间与修改时间由提交入口设置。
     public init(id: UUID = UUID(), title: String = "") {
         self.id = id
         self.title = title
     }
 
+    /// 客户端生成的稳定 UUID，作为同步行身份及加密 AAD 的来源。
     public var id: UUID = UUID()
+    /// 卡片展示标题。
     public var title: String = ""
+    /// 可选 SF Symbols 名称。
     public var symbol: String? = nil
+    /// 卡片的颜色词条。
     public var color: String? = nil
+    /// 兼容导入数据的自定义图标名称；独立于 iconSource。
     public var customIconName: String? = nil
+    /// 是否为模板卡；模板不参与普通密码列表与安全统计。
     public var template: Bool = false
+    /// 卡片是否允许提供自动填充候选。
     public var autofillEnabled: Bool = false          // card-level autofill="on|off"
+    /// 是否收藏；不改变卡片所属标签。
     public var favorite: Bool = false                 // favorite="true"
+    /// 是否归档；与回收站状态分别保存。
     public var archived: Bool = false                 // archived="true"
+    /// 是否处于回收站；永久删除由会话层另外执行。
     public var trashed: Bool = false                  // trashed="true"
+    /// 可选到期时间，使用 Unix 毫秒时间戳。
     public var expiration: TimeInterval? = nil        // expiration millis
+    /// 可选提醒时间，使用 Unix 毫秒时间戳。
     public var reminder: TimeInterval? = nil          // reminder millis
+    /// 创建时间，使用 Unix 毫秒时间戳。
     public var created: TimeInterval = 0              // created millis
+    /// 最后修改时间，使用 Unix 毫秒时间戳；同步以此进行 LWW 裁决。
     public var modified: TimeInterval = 0             // modified millis
+    /// 兼容旧数据的网站图标偏好；当前图标来源另见 iconSource。
     public var useWebsiteIcon: Bool = false
+    /// 保留的手表展示标志。
     public var watch: Bool = false                    // atWatch
     /// 图标来源词表（IconService 常量）：website / custom / url:<…> / builtin:<key>。
     /// nil = 未设置，走默认符号/颜色圆形图标。
@@ -250,44 +344,82 @@ public struct Card: Codable, Equatable, Identifiable {
     /// 图标像素数据（≤128×128 PNG，XML 里 base64 存 <icon> 元素）。
     /// builtin 来源不带数据（随 App 分发），其余来源均有数据。
     public var iconData: Data? = nil
+    /// 按用户展示顺序保存的字段；包含凭据明文。
     public var fields: [Field] = []
+    /// 明文备注，随整个密码库加密。
     public var notes: String = ""
+    /// 关联标签 UUID；名称变化不影响关联。
     public var labelIds: [UUID] = []
+    /// 随卡片保存的图片附件。
     public var images: [Attachment] = []
+    /// 随卡片保存的普通文件附件。
     public var files: [Attachment] = []
 
-    // XCard derived accessors ---------------------------------------------
+    // MARK: - 派生字段与到期状态
+    /// 卡片是否作为模板使用。
     public var isTemplate: Bool { template }
 
+    /// 首个用户名或邮箱字段。
+    ///
+    /// - Complexity: O(n)，n 为字段数。
     public var loginField: Field? { fields.first { $0.type.isLogin } }
+    /// 首个密码类型字段。
+    ///
+    /// - Complexity: O(n)，n 为字段数。
     public var passwordField: Field? { fields.first { $0.type == .password } }
+    /// 首个网站类型字段。
+    ///
+    /// - Complexity: O(n)，n 为字段数。
     public var websiteField: Field? { fields.first { $0.type == .website } }
 
+    /// 首个登录字段的明文值；没有该字段时为空字符串。
+    ///
+    /// - Complexity: O(n)，n 为字段数。
     public var login: String { loginField?.value ?? "" }
+    /// 首个密码字段的明文值；没有该字段时为空字符串。
+    ///
+    /// - Complexity: O(n)，n 为字段数。
     public var password: String { passwordField?.value ?? "" }
+    /// 首个网站字段的原始值；此处不校验或规范化 URL。
+    ///
+    /// - Complexity: O(n)，n 为字段数。
     public var website: String { websiteField?.value ?? "" }
+    /// 备注是否为非空字符串。
     public var hasNotes: Bool { !notes.isEmpty }
+    /// 是否包含图片附件。
     public var hasImages: Bool { !images.isEmpty }
+    /// 是否包含普通文件附件。
     public var hasFiles: Bool { !files.isEmpty }
 
+    /// 按当前日历计算目标时间相对指定日期的整日差。
+    ///
+    /// - Parameters:
+    ///   - ms: 目标 Unix 毫秒时间戳。
+    ///   - date: 比较起点，默认使用当前时间。
+    /// - Returns: 未来日期为正值，过去日期为负值；计算失败返回 0。
     public static func days(fromMillis ms: TimeInterval, to date: Date = Date()) -> Int {
         let d = Date(timeIntervalSince1970: ms / 1000)
         return Calendar.current.dateComponents([.day], from: date, to: d).day ?? 0
     }
+    /// 到期日是否在当前日历的未来 0 至 30 天范围内。
     public var isExpiring: Bool {
         guard let e = expiration else { return false }
         let d = Card.days(fromMillis: e)
         return d >= 0 && d <= 30
     }
+    /// 按当前日历计算的剩余天数；没有到期日时为 0。
     public var expiringInDays: Int {
         expiration.map { Card.days(fromMillis: $0) } ?? 0
     }
+    /// 到期日相对当前日历是否已过去至少一天。
     public var isExpired: Bool {
         guard let e = expiration else { return false }
         return Card.days(fromMillis: e) < 0
     }
 
-    /// XCard.size — total byte size of the card payload.
+    /// 字段值、备注、附件及图标数据的累计字节数，不含标题与 XML 结构开销。
+    ///
+    /// - Complexity: O(n + b)，n 为字段和附件数，b 为统计的文本字节数。
     public var size: Int {
         notes.utf8.count
             + fields.reduce(0) { $0 + $1.value.utf8.count }
@@ -296,7 +428,9 @@ public struct Card: Codable, Equatable, Identifiable {
             + (iconData?.count ?? 0)
     }
 
-    /// XCard.asPlainText — plain-text dump used by TXT export.
+    /// 按标题、字段和备注的顺序生成 TXT 导出的明文。
+    ///
+    /// - Returns: 含敏感字段值的多行文本；调用方负责导出位置与生命周期。
     public func asPlainText() -> String {
         var lines = [title]
         for f in fields { lines.append("\(f.name): \(f.value)") }
@@ -305,10 +439,12 @@ public struct Card: Codable, Equatable, Identifiable {
     }
 }
 
-// MARK: - Security flags (from XCard)
+// MARK: - 安全分析
 
 extension Card {
-    /// Weak-password flag recomputed on demand (XCard.hasWeakPasswords).
+    /// 是否包含评分不高于 1 的非空密码字段，按需计算。
+    ///
+    /// - Complexity: O(n + s)，n 为字段数，s 为尚未命中缓存的密码评分开销。
     public var hasWeakPasswords: Bool {
         fields.contains { $0.type.needsScoring && !$0.value.isEmpty && PasswordStrength.score($0.value).score <= 1 }
     }

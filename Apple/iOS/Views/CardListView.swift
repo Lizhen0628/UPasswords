@@ -4,6 +4,7 @@ import UPasswordsCore
 
 // MARK: - 列表筛选器
 
+/// 卡片列表的筛选路由，关联标签时携带稳定身份与展示名。
 enum CardFilter: Hashable {
     case all, passkeys, otp, wifi, trash, favorites, finance, notes, expiring, archived
     case label(UUID, String)
@@ -46,6 +47,7 @@ enum CardFilter: Hashable {
 
 // MARK: - 条目行(列表 / 首页最近使用 / 搜索结果共用)
 
+/// 列表中的卡片摘要；点击和数据变更由上层列表与会话处理。
 struct CardRowView: View {
     let card: Card
 
@@ -106,6 +108,7 @@ struct CardRowView: View {
 
 // MARK: - 条目列表(拼音分组 + 排序 + 收藏置顶 + 长按菜单)
 
+/// 按筛选和搜索状态组织卡片列表，将用户动作交给会话层。
 struct CardListView: View {
     @EnvironmentObject var vault: Vault
     let filter: CardFilter

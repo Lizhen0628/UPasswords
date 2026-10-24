@@ -4,6 +4,7 @@ import UPasswordsCore
 
 // MARK: - 品牌色板（iOS 主 App 与 AutoFill 扩展共用；不入 macOS target）
 
+/// iOS 主应用和 AutoFill 扩展共用的颜色与视觉常量；不在 macOS target 中编译。
 enum Brand {
     static let bg      = Color(hex: 0x222221)   // 页面底
     static let surface = Color(hex: 0x252523)   // 分组容器底
@@ -42,6 +43,7 @@ extension Color {
 
 // MARK: - 三钥匙品牌标识（黄左、绿中、蓝右）
 
+/// 由共享颜色与几何形状组成的品牌标识视图。
 struct BrandLogo: View {
     var size: CGFloat = 92
 

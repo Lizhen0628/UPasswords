@@ -4,10 +4,19 @@ import UPasswordsCore
 
 /// 本地库与 API 注册表的绑定:哪个账户下的哪个 vaultId。
 public struct RelayBinding: Codable, Equatable {
+    /// 绑定账户的邮箱；与密码库内容分开管理。
     public let email: String
+    /// 账户下的服务端密码库身份。
     public let vaultId: String
+    /// 服务端密码库展示名。
     public let vaultName: String
 
+    /// 创建本地库与账户注册表的绑定值。
+    ///
+    /// - Parameters:
+    ///   - email: 账户邮箱。
+    ///   - vaultId: 服务端库身份。
+    ///   - vaultName: 服务端库展示名。
     public init(email: String, vaultId: String, vaultName: String) {
         self.email = email
         self.vaultId = vaultId
@@ -17,8 +26,22 @@ public struct RelayBinding: Codable, Equatable {
 
 /// 账户令牌存取(协议化以便测试注入内存实现)。
 public protocol RelayTokenStoring: AnyObject {
+    /// 更新账户令牌；实现须限制明文令牌的存储与日志访问。
+    ///
+    /// - Parameters:
+    ///   - token: Bearer 令牌明文。
+    ///   - email: 令牌所属账户邮箱。
     func saveToken(_ token: String, for email: String)
+
+    /// 读取账户令牌；缺失或不可读时返回 nil。
+    ///
+    /// - Parameter email: 账户邮箱。
+    /// - Returns: 调用云 API 所需的令牌明文。
     func token(for email: String) -> String?
+
+    /// 移除本地账户令牌；远端会话撤销由调用方负责。
+    ///
+    /// - Parameter email: 账户邮箱。
     func deleteToken(for email: String)
 }
 
@@ -26,8 +49,14 @@ public protocol RelayTokenStoring: AnyObject {
 public final class RelayTokenKeychain: RelayTokenStoring {
     private let service = "com.upasswords.relay.account"
 
+    /// 创建使用本机非同步钥匙串项的账户令牌存储。
     public init() {}
 
+    /// 更新账户令牌钥匙串项，失败通过安全日志报告。
+    ///
+    /// - Parameters:
+    ///   - token: Bearer 令牌明文。
+    ///   - email: 令牌所属账户邮箱。
     public func saveToken(_ token: String, for email: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -51,6 +80,10 @@ public final class RelayTokenKeychain: RelayTokenStoring {
         Log.debug("sync", "relay token saved for email-length=\(email.count)")
     }
 
+    /// 读取账户钥匙串令牌。
+    ///
+    /// - Parameter email: 账户邮箱。
+    /// - Returns: 可读令牌；缺失、无权限或编码无效时返回 nil。
     public func token(for email: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -65,6 +98,9 @@ public final class RelayTokenKeychain: RelayTokenStoring {
         return String(data: data, encoding: .utf8)
     }
 
+    /// 删除指定账户的本机钥匙串令牌。
+    ///
+    /// - Parameter email: 账户邮箱；服务端会话撤销由调用方另行执行。
     public func deleteToken(for email: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -86,6 +122,11 @@ public final class RelayStore {
     private let cacheLock = NSLock()
     private var tokenCache: [String: String] = [:]
 
+    /// 创建库绑定与账户状态存储，令牌通过独立存储接口读写。
+    ///
+    /// - Parameters:
+    ///   - defaults: macOS 使用标准偏好，iOS 使用 App Group suite。
+    ///   - tokens: 令牌存储依赖，可注入测试实现。
     public init(defaults: UserDefaults, tokens: RelayTokenStoring = RelayTokenKeychain()) {
         self.defaults = defaults
         self.tokens = tokens
@@ -95,12 +136,21 @@ public final class RelayStore {
 
     private func bindingKey(_ database: String) -> String { "sync.relay.binding.\(database)" }
 
+    /// 读取指定本地库的云端绑定。
+    ///
+    /// - Parameter database: 本地库名。
+    /// - Returns: 已保存的绑定；不存在或记录损坏时为 nil。
     public func binding(database: String) -> RelayBinding? {
         defaults.data(forKey: bindingKey(database)).flatMap {
             try? JSONDecoder().decode(RelayBinding.self, from: $0)
         }
     }
 
+    /// 保存或移除本地库绑定，同时记录该库曾经绑定的事实。
+    ///
+    /// - Parameters:
+    ///   - binding: 新绑定；nil 仅移除当前绑定，不重置曾绑定标记。
+    ///   - database: 本地库名。
     public func setBinding(_ binding: RelayBinding?, database: String) {
         guard let binding else {
             defaults.removeObject(forKey: bindingKey(database))
@@ -142,11 +192,20 @@ public final class RelayStore {
 
     private func versionKey(_ database: String) -> String { "sync.relay.version.\(database)" }
 
+    /// 读取本机已确认的远端改密版本。
+    ///
+    /// - Parameter database: 本地库名。
+    /// - Returns: 已记录版本；尚无记录时为 nil。
     public func knownPasswordVersion(database: String) -> Int? {
         let value = defaults.integer(forKey: versionKey(database))
         return value > 0 ? value : nil
     }
 
+    /// 持久化指定库已确认的密码版本。
+    ///
+    /// - Parameters:
+    ///   - version: 服务端返回的改密版本。
+    ///   - database: 本地库名。
     public func recordPasswordVersion(_ version: Int, database: String) {
         let known = knownPasswordVersion(database: database) ?? 0
         guard version > known else { return }

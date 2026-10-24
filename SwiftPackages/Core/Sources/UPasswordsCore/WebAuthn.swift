@@ -7,10 +7,12 @@ import Foundation
 /// 参考:WebAuthn Level 2 §6.1 authenticatorData、§6.5 attestationObject。
 public enum WebAuthn {
 
+    /// 通行密钥报文构造过程中遇到的密钥格式错误。
     public enum WebAuthnError: LocalizedError {
         case invalidPrivateKey
         case invalidPublicKey
 
+        /// 供界面展示的本地化通行密钥数据错误。
         public var errorDescription: String? { L10n.t("invalid_value_text") }
     }
 
@@ -95,6 +97,7 @@ public enum WebAuthn {
 
 // MARK: - 定长 CBOR 编码器(仅 WebAuthn 需要的子集)
 
+/// 仅支持 WebAuthn 所需定长值的 CBOR 编码器，不是通用 CBOR 解析器。
 enum CBOR {
     indirect enum Value {
         case unsigned(UInt64)

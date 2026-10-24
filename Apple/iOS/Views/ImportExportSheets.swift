@@ -6,6 +6,7 @@ import UPasswordsPersistence
 
 // MARK: - 导出(XML/CSV/TXT,与 macOS ExportCardsTask 同一套格式;XML 可回导)
 
+/// 选择导出格式并生成明文文件；加密库备份由独立备份流程负责。
 struct ExportAsSheet: View {
     @EnvironmentObject var vault: Vault
     @Environment(\.dismiss) private var dismiss
@@ -131,6 +132,7 @@ struct ExportAsSheet: View {
 
 // MARK: - 导入(18 种来源格式,复用 Persistence 的 ImportFormatFactory)
 
+/// 读取用户选择的明文文件，使用共享导入器追加记录。
 struct ImportDataSheet: View {
     @EnvironmentObject var vault: Vault
     @Environment(\.dismiss) private var dismiss

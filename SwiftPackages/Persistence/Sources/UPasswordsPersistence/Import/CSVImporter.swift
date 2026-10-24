@@ -4,13 +4,24 @@ import UPasswordsCore
 /// Shared CSV card extraction with header auto-detection
 /// (column names probed case-insensitively).
 public struct CSVImporter: ImportFormat {
+    /// 此导入源的稳定格式标识。
     public let id: String
+    /// 此导入源在格式选择器中的展示名称。
     public let title: String
+    /// 此导入器建议的文件扩展名。
     public let fileExtension = "csv"
     /// required/optional column aliases → field slot
     public let columnMap: [String: [String]]
+    /// 记录格式声明的 TSV 偏好；当前 CSV.rows 同时接受逗号与制表符。
     public let tabSeparated: Bool
 
+    /// 创建基于表头别名映射的 CSV 导入器。
+    ///
+    /// - Parameters:
+    ///   - id: 格式稳定标识。
+    ///   - title: 展示名称。
+    ///   - tabSeparated: 保留的格式偏好；当前解析器同时处理逗号和制表符。
+    ///   - columnMap: name、login、password、url、notes 槽位对应的候选表头别名。
     public init(id: String, title: String, tabSeparated: Bool = false,
          columnMap: [String: [String]]) {
         self.id = id
@@ -19,6 +30,7 @@ public struct CSVImporter: ImportFormat {
         self.tabSeparated = tabSeparated
     }
 
+    /// 通过此格式的表头或结构特征进行快速探测，完整错误由 parse 报告。
     public func canParse(_ text: String) -> Bool {
         guard let header = CSV.rows(text).first else { return false }
         let lower = header.map { $0.lowercased() }
@@ -37,6 +49,7 @@ public struct CSVImporter: ImportFormat {
         return nil
     }
 
+    /// 按此格式的字段映射将记录导入工作副本；参数与错误约定见 ImportFormat。
     public func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int {
         var rows = CSV.rows(text)
         guard rows.count >= 2 else { throw ImportError.cannotParse }

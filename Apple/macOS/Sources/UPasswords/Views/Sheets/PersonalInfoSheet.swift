@@ -1,6 +1,7 @@
 import SwiftUI
 import UPasswordsCore
 
+/// 以独立草稿编辑加密库内的个人资料，提交时与密码卡片分别存储。
 struct PersonalInfoSheet: View {
     @EnvironmentObject private var ctx: AppContext
     @Environment(\.dismiss) private var dismiss

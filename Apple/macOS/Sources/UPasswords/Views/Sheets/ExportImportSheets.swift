@@ -5,6 +5,7 @@ import UPasswordsPersistence
 
 // MARK: - Export
 
+/// 选择导出格式并生成明文文件；加密库备份由独立备份流程负责。
 struct ExportAsSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -67,6 +68,7 @@ struct ExportAsSheet: View {
 
 // MARK: - Import
 
+/// 选择共享导入格式并将解析记录交给会话数据入口。
 struct ImportSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss

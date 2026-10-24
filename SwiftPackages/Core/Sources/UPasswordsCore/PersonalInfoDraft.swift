@@ -2,17 +2,28 @@ import Foundation
 
 /// Contact details collected during onboarding, kept in memory until a vault is ready.
 public struct PersonalInfoDraft {
+    /// 创建所有输入为空的个人资料草稿，仅驻留在内存中。
     public init() {}
 
+    /// 名字。
     public var givenName = ""
+    /// 姓氏。
     public var familyName = ""
+    /// 联系邮箱明文。
     public var email = ""
+    /// 电话号码明文。
     public var phone = ""
+    /// 街道地址第一行。
     public var addressLine1 = ""
+    /// 街道地址第二行。
     public var addressLine2 = ""
+    /// 城市，对应 address-level2 自动填充词条。
     public var city = ""
+    /// 省或地区，对应 address-level1 自动填充词条。
     public var region = ""
+    /// 邮政编码。
     public var postalCode = ""
+    /// 国家或地区名称。
     public var country = ""
 
     /// Loads an existing profile into the editing form.

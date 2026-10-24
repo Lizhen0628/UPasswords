@@ -8,7 +8,7 @@
 import Foundation
 
 /// 搜索输入防抖器:逐键记录文本,停顿 `interval` 后回调一次;输入清空或主动
-/// 清除则立即回调。AppContext 用它分离「逐键 searchText(不广播)」与
+/// 清除则立即回调。iOS 视图用它分离「逐键 searchText(不广播)」与
 /// 「防抖 searchQuery(驱动列表过滤)」,消除逐键整树重渲染的输入卡顿。
 @MainActor
 final class SearchInputDebouncer {

@@ -13,7 +13,7 @@ import UPasswordsNetworking
 /// - 本文件:会话状态、启动引导、锁定/解锁生命周期、持久化、自动锁
 /// - AppContext+CardList:侧栏卡片列表策略、搜索、最近打开
 /// - AppContext+Actions:卡片/标签 CRUD、初始化清单、历史
-/// - AppContext+Sync:修改密码、备份、云同步(WebDAV / iCloud Drive)
+/// - AppContext+Sync:修改密码、备份、行级云同步及本地同步快照提交
 @MainActor
 final class AppContext: ObservableObject {
     enum Phase: Equatable {
@@ -297,6 +297,13 @@ final class AppContext: ObservableObject {
 
     // MARK: - Setup / lifecycle
 
+    /// 创建默认内容的本地库，配置可选生物识别副本后解锁。
+    ///
+    /// - Parameters:
+    ///   - name: 仅含字母数字的新库名。
+    ///   - password: 本地库主密码。
+    ///   - touchID: 是否尝试启用快速解锁。
+    /// - Throws: 建库或解锁失败的格式、加密及文件错误。
     func createDatabase(name: String, password: String, touchID: Bool) throws {
         Log.info("lifecycle", "createDatabase \"\(name)\" touchID=\(touchID)")
         do {
@@ -313,6 +320,13 @@ final class AppContext: ObservableObject {
         activeSheet = .setupPlan
     }
 
+    /// 完成本地文件校验和解密后装载会话，启动同步、备份及安全检查。
+    ///
+    /// 所有必需本地组件加载成功后才发布解锁状态。
+    /// - Parameters:
+    ///   - name: 本地库名。
+    ///   - password: 主密码明文，仅会话期持有。
+    /// - Throws: 文件、同步状态、信封、解密或 XML 错误。
     func unlock(name: String, password: String) throws {
         Log.info("lifecycle", "unlock \"\(name)\"")
         let loaded: (PasswordDatabase, SymmetricKey, RowSyncState)
@@ -521,6 +535,7 @@ final class AppContext: ObservableObject {
     private static let failedAttemptWindow: TimeInterval = 15 * 60
     private var lastFailedUnlockAt: Date?
 
+    /// 在十五分钟滑动窗口内累计真实密码失败，达到已配置阈值时抹除本地数据。
     func registerFailedAttempt() {
         if let last = lastFailedUnlockAt, Date().timeIntervalSince(last) > Self.failedAttemptWindow {
             failedUnlockAttempts = 0
@@ -575,6 +590,9 @@ final class AppContext: ObservableObject {
         }
     }
 
+    /// 使用当前库密钥保存整库并推送 Safari 加密快照，失败时记录日志并提示。
+    ///
+    /// 锁定状态或密钥缺失时不写盘；调用方不能将返回视为可捕获的成功凭据。
     func save() {
         guard phase == .unlocked else { return }
         do {
@@ -592,6 +610,9 @@ final class AppContext: ObservableObject {
     }
 
     private var saveDebounce: AnyCancellable? = nil
+    /// 合并连续编辑，距最后一次调用 600 毫秒后在主 runloop 调用 save。
+    ///
+    /// 新调用取消之前的待保存订阅；需要立即落盘的边界应显式调用 save。
     func saveDebounced() {
         saveDebounce?.cancel()
         saveDebounce = Just(())

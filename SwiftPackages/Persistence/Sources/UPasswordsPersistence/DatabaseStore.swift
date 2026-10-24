@@ -5,6 +5,13 @@ import UPasswordsCore
 
 /// Databases live in `~/Library/Application Support/UPasswords/Databases/<name>.upw`.
 public struct DatabaseFile: Codable, Identifiable, Equatable {
+    /// 创建本地库文件描述，不执行文件访问。
+    ///
+    /// - Parameters:
+    ///   - name: 本地库名。
+    ///   - fileName: 含扩展名的本体文件名。
+    ///   - created: 文件创建时间。
+    ///   - isMain: 是否为默认主库。
     public init(name: String, fileName: String, created: Date, isMain: Bool) {
         self.name = name
         self.fileName = fileName
@@ -12,22 +19,36 @@ public struct DatabaseFile: Codable, Identifiable, Equatable {
         self.isMain = isMain
     }
 
+    /// 当前本地库名，重命名后此界面身份随之变化。
     public var id: String { name }
+    /// 本地库名，也是文件路径派生依据。
     public var name: String
+    /// 数据库本体文件名，包含 .upw 扩展名。
     public var fileName: String         // "<name>.upw"
+    /// 文件系统记录的创建日期。
     public var created: Date
+    /// 此库是否为当前默认选择的主库。
     public var isMain: Bool
 }
 
+/// 本地加密库、信封、同步状态与备份文件的存储入口。
+///
+/// 根目录可注入以支持 App Group 和隔离测试。同步事务用进程内递归锁串行化，
+/// 不等同于跨进程文件锁；调用方仍须处理主应用与扩展的会话和刷新边界。
 public final class DatabaseStore {
+    /// 使用默认 Application Support 根目录的进程共享存储实例。
     public static let shared = DatabaseStore()
 
+    /// 本实例的存储根目录；所有库文件和备份均由此派生。
     public let root: URL
     private let fm = FileManager.default
     // 同一进程的多个 Store 实例也必须串行访问事务组件。
     private static let syncTransactionLock = NSRecursiveLock()
     var transactionFaultInjector: ((String) throws -> Void)?
 
+    /// 创建指向指定根目录的存储实例，并尝试准备数据和备份目录。
+    ///
+    /// - Parameter root: 注入目录；nil 使用系统 Application Support 并尝试旧目录迁移。
     public init(root: URL? = nil) {
         if let root {
             self.root = root
@@ -66,9 +87,15 @@ public final class DatabaseStore {
         #endif
     }
 
+    /// 存放加密本体、信封、同步状态和事务暂存文件的目录。
     public var databasesDir: URL { root.appendingPathComponent("Databases", isDirectory: true) }
+    /// 按本地库名分目录保存的备份根目录。
     public var backupsDir: URL { root.appendingPathComponent("Backups", isDirectory: true) }
 
+    /// 派生数据库本体文件 URL，不执行读写或库名校验。
+    ///
+    /// - Parameter name: 已验证的本地库名。
+    /// - Returns: Databases 下对应的 .upw 文件位置。
     public func url(for name: String) -> URL { databasesDir.appendingPathComponent("\(name).upw") }
     /// v2 信封文件路径:库密钥由主密码包裹存放在此(<名>.upwkey)。
     public func keyURL(for name: String) -> URL { databasesDir.appendingPathComponent("\(name).upwkey") }
@@ -231,11 +258,15 @@ public final class DatabaseStore {
         try data.write(to: syncStateURL(for: name), options: .atomic)
     }
 
+    /// 默认密码库名，通过 UserDefaults 保存。
     public var mainDatabaseName: String {
         get { UserDefaults.standard.string(forKey: "db.main") ?? "Main" }
         set { UserDefaults.standard.set(newValue, forKey: "db.main") }
     }
 
+    /// 枚举本体文件并按库名排序；不解密内容。
+    ///
+    /// - Returns: 库文件描述；目录读取失败时返回空数组。
     public func list() -> [DatabaseFile] {
         let files = (try? fm.contentsOfDirectory(at: databasesDir, includingPropertiesForKeys: [.creationDateKey])) ?? []
         return files
@@ -248,6 +279,10 @@ public final class DatabaseStore {
             .sorted { $0.name < $1.name }
     }
 
+    /// 检查指定库的本体文件是否存在。
+    ///
+    /// - Parameter name: 本地库名。
+    /// - Returns: 只表示 .upw 文件存在，不证明信封齐备或可以解锁。
     public func exists(_ name: String) -> Bool { fm.fileExists(atPath: url(for: name).path) }
 
     /// 库名只允许字母数字(create 与 rename 共用,防两处规则漂移)。
@@ -260,6 +295,14 @@ public final class DatabaseStore {
         }
     }
 
+    /// 创建含默认标签与模板的新加密库，并保存密码钥匙串副本。
+    ///
+    /// - Parameters:
+    ///   - name: 仅含字母或数字且未被占用的本地库名。
+    ///   - password: 用于包裹新随机库密钥的主密码。
+    ///   - now: 新建内容使用的时间，测试可注入固定值。
+    /// - Returns: 新库的文件描述。
+    /// - Throws: 名称非法、文件已存在、加密或写入失败；信封写入失败时回滚本体。
     @discardableResult
     public func create(name: String, password: String, now: Date = Date()) throws -> DatabaseFile {
         Self.syncTransactionLock.lock()
@@ -329,6 +372,13 @@ public final class DatabaseStore {
         return (db, vek)
     }
 
+    /// 解锁并加载数据库，丢弃返回的会话库密钥。
+    ///
+    /// - Parameters:
+    ///   - name: 本地库名。
+    ///   - password: 主密码。
+    /// - Returns: 已解密的数据库值。
+    /// - Throws: 与 loadUnlocked 相同的事务恢复、格式、解密及文件错误。
     public func load(name: String, password: String) throws -> PasswordDatabase {
         try loadUnlocked(name: name, password: password).0
     }
@@ -381,6 +431,12 @@ public final class DatabaseStore {
         }
     }
 
+    /// 重命名本体及关联文件，并迁移本地偏好和钥匙串项。
+    ///
+    /// - Parameters:
+    ///   - old: 现有本地库名。
+    ///   - new: 未被占用的新合法库名。
+    /// - Throws: 名称校验或文件移动失败；云端名称迁移由会话层另行编排。
     public func rename(_ old: String, to new: String) throws {
         Self.syncTransactionLock.lock()
         defer { Self.syncTransactionLock.unlock() }
@@ -417,6 +473,12 @@ public final class DatabaseStore {
         renameBackups(of: old, to: new)
     }
 
+    /// 删除本地库文件、相关状态和钥匙串项。
+    ///
+    /// - Parameters:
+    ///   - name: 本地库名。
+    ///   - alsoBackups: 是否同时删除该库备份目录，默认为 true。
+    /// - Throws: 事务恢复或文件删除失败；不会自行删除云端注册记录。
     public func delete(name: String, alsoBackups: Bool = true) throws {
         Self.syncTransactionLock.lock()
         defer { Self.syncTransactionLock.unlock() }
@@ -444,8 +506,19 @@ public final class DatabaseStore {
         try? fm.moveItem(at: from, to: to)
     }
 
+    /// 返回指定库的备份目录，不保证目录已创建。
+    ///
+    /// - Parameter name: 本地库名。
+    /// - Returns: Backups 下按库名划分的目录。
     public func backupDir(for name: String) -> URL { backupsDir.appendingPathComponent(name, isDirectory: true) }
 
+    /// 复制当前加密本体并尝试保存配套信封，保留最近十份本体备份。
+    ///
+    /// - Parameters:
+    ///   - name: 本地库名。
+    ///   - now: 备份文件名使用的时间。
+    /// - Throws: 事务恢复、本体读取或备份本体写入失败。信封缺失或写入失败不会抛错，
+    ///   因此调用方不可仅凭本方法成功判断该备份一定可恢复。
     public func backup(name: String, now: Date = Date()) throws {
         Self.syncTransactionLock.lock()
         defer { Self.syncTransactionLock.unlock() }
@@ -462,6 +535,7 @@ public final class DatabaseStore {
         Log.info("backup", "backup \"\(name)\" → \(stamp).upw (\(data.count)B), kept \(pruneBackups(name: name, keep: 10)) most recent")
     }
 
+    /// 备份文件名时间戳格式；使用 POSIX locale 和当前默认时区。
     public static let backupStampFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyyMMdd-HHmmss"
@@ -469,6 +543,10 @@ public final class DatabaseStore {
         return f
     }()
 
+    /// 按文件修改时间从新到旧列出 .upw 备份。
+    ///
+    /// - Parameter name: 本地库名。
+    /// - Returns: 本体 URL 数组；不校验配套信封是否存在。
     public func backups(name: String) -> [URL] {
         let files = (try? fm.contentsOfDirectory(at: backupDir(for: name), includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         return files.filter { $0.pathExtension == "upw" }
@@ -498,6 +576,12 @@ public final class DatabaseStore {
         Log.info("backup", "backup deleted: \"\(name)\"/\(url.lastPathComponent)")
     }
 
+    /// 校验备份容器和配套信封后，覆盖指定本地库的两个文件。
+    ///
+    /// - Parameters:
+    ///   - backup: .upw 备份文件；同目录必须有同名 .upwkey 信封。
+    ///   - name: 被覆盖的本地库名。
+    /// - Throws: 文件读取、格式或写入错误；此方法不验证主密码，两个文件分别原子写入。
     public func restore(backup: URL, to name: String) throws {
         Self.syncTransactionLock.lock()
         defer { Self.syncTransactionLock.unlock() }
@@ -563,9 +647,15 @@ public final class DatabaseStore {
         return DatabaseFile(name: name, fileName: "\(name).upw", created: Date(), isMain: list().count == 1)
     }
 
+    /// 本地存储校验或文件管理失败的错误描述。
     public struct StoreError: LocalizedError {
+        /// 存储失败的展示描述，不得包含敏感字段或密钥。
         public let message: String
+        /// 创建存储错误描述。
+        ///
+        /// - Parameter message: 不含敏感值的展示消息。
         public init(_ message: String) { self.message = message }
+        /// 向界面提供的存储错误描述。
         public var errorDescription: String? { message }
     }
 }

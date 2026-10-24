@@ -8,6 +8,7 @@ private let cloudSheetContentWidth: CGFloat = 452
 
 // MARK: - Compromised passwords
 
+/// 运行泄露检查并展示命中卡片；密码明文只在当前会话中比对。
 struct CompromisedSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss

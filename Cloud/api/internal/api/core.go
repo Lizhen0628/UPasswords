@@ -1,4 +1,4 @@
-// Package api implements the v2 encrypted-vault protocol.
+// Package api implements row-sync protocol version 2 under /v1 and its /v2 compatibility alias.
 package api
 
 import (
@@ -115,6 +115,8 @@ type Server struct {
 	Log     *slog.Logger
 	HTTP    *http.Client
 }
+
+// apiError carries a stable public error code, HTTP status and optional retry delay; internal errors are redacted.
 type apiError struct {
 	Status int
 	Code   string
@@ -124,8 +126,10 @@ type apiError struct {
 func (e *apiError) Error() string        { return e.Code }
 func fail(status int, code string) error { return &apiError{Status: status, Code: code} }
 
+// endpoint is a handler that returns errors for centralized response and logging.
 type endpoint func(http.ResponseWriter, *http.Request) error
 
+// endpoint adapts returned errors to the public error shape and logs route templates, status and duration only.
 func (s *Server) endpoint(fn endpoint) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
@@ -153,6 +157,7 @@ func (s *Server) endpoint(fn endpoint) http.HandlerFunc {
 	}
 }
 
+// statusWriter captures the response status used by the request summary log.
 type statusWriter struct {
 	http.ResponseWriter
 	status int
@@ -173,6 +178,8 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	}
 	return w.ResponseWriter.Write(b)
 }
+
+// writeJSON writes the selected status and JSON response; callers must supply only the permitted public projection.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
@@ -199,6 +206,8 @@ func body(w http.ResponseWriter, r *http.Request, max int64, v any) error {
 	}
 	return nil
 }
+
+// decode64 validates and decodes a standard Base64 payload before ciphertext size checks.
 func decode64(v string) ([]byte, error) {
 	b, e := base64.StdEncoding.DecodeString(v)
 	if e != nil {
@@ -207,6 +216,8 @@ func decode64(v string) ([]byte, error) {
 	return b, nil
 }
 func b64(v []byte) string { return base64.StdEncoding.EncodeToString(v) }
+
+// randomHex returns a cryptographically random identifier containing n random bytes encoded as hex.
 func randomHex(n int) string {
 	b := make([]byte, n)
 	if _, e := rand.Read(b); e != nil {
@@ -214,13 +225,21 @@ func randomHex(n int) string {
 	}
 	return hex.EncodeToString(b)
 }
-func now() int64             { return time.Now().UnixMilli() }
+
+// now returns Unix time in milliseconds, matching the cross-client wire contract.
+func now() int64 { return time.Now().UnixMilli() }
+
+// digest returns a lowercase SHA-256 hex digest; hashing does not make low-entropy secrets safe to log.
 func digest(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
+
+// mac computes a keyed digest under the application KEK for private lookup identifiers.
 func (s *Server) mac(v string) string {
 	h := hmac.New(sha256.New, s.Config.KEK)
 	_, _ = h.Write([]byte(v))
 	return hex.EncodeToString(h.Sum(nil))
 }
+
+// seal wraps application-owned metadata with APP_KEK; client vault ciphertext remains independently encrypted.
 func (s *Server) seal(b []byte) (string, error) {
 	block, e := aes.NewCipher(s.Config.KEK)
 	if e != nil {
@@ -236,6 +255,8 @@ func (s *Server) seal(b []byte) (string, error) {
 	}
 	return "v1." + b64(g.Seal(n, n, b, nil)), nil
 }
+
+// open authenticates application-encrypted metadata; changing APP_KEK would invalidate existing stored values.
 func (s *Server) open(v sql.NullString) ([]byte, error) {
 	if !v.Valid {
 		return nil, nil
@@ -261,15 +282,21 @@ func (s *Server) open(v sql.NullString) ([]byte, error) {
 	return g.Open(nil, b[:g.NonceSize()], b[g.NonceSize():], nil)
 }
 func equal(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }
+
+// uuid validates a canonical UUID shape and normalizes storage to lowercase; clients restore uppercase for row AAD.
 func uuid(v string) (string, error) {
 	if !uuidPattern.MatchString(v) {
 		return "", fail(400, "bad_request")
 	}
 	return strings.ToLower(v), nil
 }
+
+// validEnvelope checks only envelope size and magic; the client authenticates and unwraps it.
 func validEnvelope(b []byte) bool {
 	return len(b) >= 100 && len(b) <= 4096 && bytes.Equal(b[:8], []byte("UPWKEY1\x00"))
 }
+
+// email normalizes and validates an account address before keyed lookup.
 func email(v string) (string, error) {
 	v = strings.ToLower(strings.TrimSpace(v))
 	if len(v) > 254 || !emailPattern.MatchString(v) {
@@ -277,6 +304,8 @@ func email(v string) (string, error) {
 	}
 	return v, nil
 }
+
+// vaultName validates a user-visible registry name; it is never used as a filesystem path.
 func vaultName(v string) (string, error) {
 	v = strings.TrimSpace(v)
 	if v == "" || len([]rune(v)) > 64 || strings.HasPrefix(v, ".") || strings.ContainsAny(v, "\\/:*?\"<>|") {
@@ -294,6 +323,8 @@ func vaultName(v string) (string, error) {
 	}
 	return v, nil
 }
+
+// deviceName trims and bounds a device display name; it does not establish device identity.
 func deviceName(v string) string {
 	v = strings.Map(func(r rune) rune {
 		if r < 32 {
@@ -307,6 +338,8 @@ func deviceName(v string) string {
 	}
 	return string(r)
 }
+
+// platform restricts device metadata to the supported platform vocabulary.
 func platform(v string) string {
 	switch v {
 	case "macos", "ios", "autofill", "ext-safari", "ext-chrome", "ext-edge", "ext-firefox":
@@ -314,6 +347,8 @@ func platform(v string) string {
 	}
 	return "other"
 }
+
+// ip trusts the forwarded address only from the configured proxy peer; other requests use the socket address.
 func (s *Server) ip(r *http.Request) string {
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
 	if host == s.Config.TrustedProxy && host != "" {
@@ -323,6 +358,8 @@ func (s *Server) ip(r *http.Request) string {
 	}
 	return host
 }
+
+// transaction commits only after the callback succeeds and otherwise rolls back; external I/O cannot be rolled back by SQL.
 func (s *Server) transaction(ctx context.Context, fn func(*sql.Tx) error) error {
 	t, e := s.DB.BeginTx(ctx, nil)
 	if e != nil {
@@ -339,6 +376,8 @@ func (s *Server) transaction(ctx context.Context, fn func(*sql.Tx) error) error 
 	return t.Commit()
 }
 func duplicate(e error) bool { var m *mysql.MySQLError; return errors.As(e, &m) && m.Number == 1062 }
+
+// audit records action identifiers and permitted metadata only; failure must not disclose request bodies or credentials.
 func (s *Server) audit(ctx context.Context, action, uid, vid string, detail any) {
 	b, e := json.Marshal(detail)
 	if e != nil {
@@ -368,6 +407,8 @@ func intOrNil(v sql.NullInt64) any {
 	}
 	return nil
 }
+
+// requireAffected rejects an unexpected empty mutation result rather than reporting a write that did not occur.
 func requireAffected(res sql.Result, e error) error {
 	if e != nil {
 		return e

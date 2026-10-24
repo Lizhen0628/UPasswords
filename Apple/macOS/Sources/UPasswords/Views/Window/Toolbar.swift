@@ -147,6 +147,7 @@ struct MainToolbarView: View {
 
 // MARK: - 按钮描述(10 项,纯图标无文字标签)
 
+/// 自绘工具栏按钮的静态描述，集中保存展示和可用性信息。
 struct ToolbarButtonSpec {
     let labelKey: String
     let helpKey: String
@@ -223,6 +224,7 @@ struct ToolbarButtonSpec {
 
 // MARK: - 胶囊按钮组(发丝描边 + 组内发丝竖线分段,悬停逐段高亮)
 
+/// 将工具栏内容按连续按钮组布局的容器。
 struct MailToolbarGroup<Content: View>: View {
     @ViewBuilder let content: Content
 
@@ -277,6 +279,7 @@ struct AddMenuButton: View {
 
 // MARK: - 胶囊分段按钮:14pt 字形,悬停段内高亮,激活/禁用三态
 
+/// 统一自绘工具栏按钮尺寸、悬停反馈和操作回调。
 struct ToolbarButton: View {
     let spec: ToolbarButtonSpec
     @ObservedObject var ctx: AppContext

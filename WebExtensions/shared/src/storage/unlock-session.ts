@@ -2,6 +2,7 @@ import { decryptItemBodyWithKey, importVaultDecryptKey } from "../core/vault-cry
 import type { ExtensionItem } from "../core/types.js";
 import type { VaultSessionRequest, VaultSessionResponse } from "../messaging/protocol.js";
 
+/** 可信解锁会话默认空闲时限，单位为毫秒。 */
 export const UNLOCK_SESSION_TTL_MS = 15 * 60 * 1000;
 const SESSION_KEY = "upw.unlockSession";
 const SESSION_KEYS = [SESSION_KEY];
@@ -30,6 +31,7 @@ type SessionContext = { token: string; vaultId: string; userId?: string };
 type UnlockRequest = VaultSessionRequest;
 type SessionResponse = VaultSessionResponse;
 
+/** 解锁会话的存储、时钟和日志依赖；缺少 session 存储时使用后台内存。 */
 export interface UnlockSessionOptions {
     local: StorageArea;
     session?: StorageArea | null;

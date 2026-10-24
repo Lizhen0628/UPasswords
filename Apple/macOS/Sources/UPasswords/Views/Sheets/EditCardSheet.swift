@@ -66,6 +66,7 @@ struct EditCardSheet: View {
     }
 }
 
+/// 承载编辑器页签与局部卡片草稿的主体，保存后才进入会话数据源。
 private struct EditCardBody: View {
     @EnvironmentObject var ctx: AppContext
     @Binding var draft: EditCardModel
@@ -299,6 +300,7 @@ fileprivate struct AccentButtonStyle: ButtonStyle {
 
 // MARK: - Fields tab (条目详情卡片 + 字段行)
 
+/// 编辑草稿中的字段顺序、类型和明文值。
 private struct FieldsTab: View {
     @EnvironmentObject var ctx: AppContext
     @Binding var card: Card
@@ -434,6 +436,7 @@ struct FieldEditorState: Identifiable {
     var field: Field
 }
 
+/// 编辑单个字段草稿，确认后通过绑定写回卡片编辑副本。
 struct FieldEditorSheet: View {
     @Environment(\.dismiss) var dismiss
     let state: FieldEditorState
@@ -514,6 +517,7 @@ extension View {
     }
 }
 
+/// 单字段的编辑行，负责输入展示与当前行操作。
 private struct FieldEditRow: View {
     @EnvironmentObject var ctx: AppContext
     @Binding var field: Field
@@ -789,6 +793,7 @@ final class NotesSelectionTracker {
     var selectedRange = NSRange(location: 0, length: 0)
 }
 
+/// 备注编辑页签，连接富文本输入与 Markdown 存储文本。
 private struct NotesTab: View {
     @Binding var card: Card
     private let limit = 2000
@@ -1238,6 +1243,7 @@ private struct NotesTab: View {
 
 // MARK: - Images tab (EditCardImagesTab + EditCardImageCell)
 
+/// 管理卡片草稿中的图片附件。
 private struct ImagesTab: View {
     @Binding var card: Card
     @State private var dropped = false
@@ -1304,6 +1310,7 @@ private struct ImagesTab: View {
 
 // MARK: - Files tab (EditCardFilesTab + EditCardFileCell)
 
+/// 管理卡片草稿中的普通附件及文件导入入口。
 private struct FilesTab: View {
     @Binding var card: Card
 

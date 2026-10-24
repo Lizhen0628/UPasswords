@@ -14,6 +14,7 @@ import UPasswordsPersistence
 // UI 测试通过,判定为个别真机环境的手势仲裁问题),故行尾加 Menu 作为
 // 不依赖手势的可靠入口,swipeActions 保留。
 
+/// 展示当前库的加密备份，并将恢复与删除动作交由会话层执行。
 struct BackupListSheet: View {
     @EnvironmentObject var vault: Vault
     @Environment(\.dismiss) private var dismiss

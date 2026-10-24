@@ -19,6 +19,7 @@ import os
 /// 用法:`Log.info("db", "created \"main.upw\" (7.3KB, 12ms)")`
 /// 输出:`2026-09-22 21:47:03.123 [info][db] created "main.upw" (7.3KB, 12ms)`
 public enum Log {
+    /// 从详细诊断到错误的日志严重级别，按 debug、info、warn、error 排序。
     public enum Level: String, CaseIterable, Comparable {
         case debug, info, warn, error
         private var rank: Int {
@@ -29,13 +30,21 @@ public enum Log {
             case .error: return 3
             }
         }
+        /// 按严重程度比较日志级别。
+        ///
+        /// - Parameters:
+        ///   - l: 左侧级别。
+        ///   - r: 右侧级别。
+        /// - Returns: 左侧是否比右侧更详细。
         public static func < (l: Level, r: Level) -> Bool { l.rank < r.rank }
     }
 
+    /// 当前进程 Application Support 下的日志目录。
     public static var dir: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return base.appendingPathComponent("UPasswords/Logs", isDirectory: true)
     }
+    /// 当前主日志文件位置，达到容量阈值后保留一代轮转文件。
     public static var fileURL: URL { dir.appendingPathComponent("UPasswords.log") }
 
     /// 超过该大小轮转为 .old.log(保留一代),避免无限膨胀。
@@ -58,6 +67,7 @@ public enum Log {
         }()
     )
 
+    /// 线程安全的最低输出级别；直接赋值只修改内存，持久化使用 setMinLevel。
     public static var minLevel: Level {
         get { minLevelStorage.withLock { $0 } }
         set { minLevelStorage.withLock { $0 = newValue } }
@@ -84,18 +94,38 @@ public enum Log {
     }()
 
     // @autoclosure:被级别门控挡掉的日志不做字符串插值,零开销。
+    /// 按门控异步记录高频诊断；被过滤时不求值消息。
+    ///
+    /// - Parameters:
+    ///   - category: 短英文分类。
+    ///   - message: 不包含密码、字段值、密钥或笔记的延迟消息。
     public static func debug(_ category: String, _ message: @autoclosure () -> String) {
         guard minLevel <= .debug else { return }
         write(.debug, category, message())
     }
+    /// 按门控异步记录用户动作和关键状态，默认在 Release 可见。
+    ///
+    /// - Parameters:
+    ///   - category: 短英文分类。
+    ///   - message: 不含敏感内容的延迟消息。
     public static func info(_ category: String, _ message: @autoclosure () -> String) {
         guard minLevel <= .info else { return }
         write(.info, category, message())
     }
+    /// 按门控异步记录异常或降级。
+    ///
+    /// - Parameters:
+    ///   - category: 短英文分类。
+    ///   - message: 包含操作和对象上下文、不含敏感值的延迟消息。
     public static func warn(_ category: String, _ message: @autoclosure () -> String) {
         guard minLevel <= .warn else { return }
         write(.warn, category, message())
     }
+    /// 按门控同步写入错误，确保返回前已执行日志队列的写入。
+    ///
+    /// - Parameters:
+    ///   - category: 短英文分类。
+    ///   - message: 不含敏感内容的失败上下文。
     public static func error(_ category: String, _ message: @autoclosure () -> String) {
         guard minLevel <= .error else { return }
         write(.error, category, message())

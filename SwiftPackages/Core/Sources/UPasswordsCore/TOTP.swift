@@ -5,12 +5,19 @@ import CryptoKit
 /// Accepts a bare base32 secret or a full `otpauth://` URI
 /// (secret / digits / period / algorithm / issuer).
 public enum TOTP {
+    /// 一次性密码生成配置；调用方直接构造时负责保证位数和周期有效。
     public struct Config: Equatable {
+        /// Base32 解码后的共享密钥字节，不得进入日志。
         public var secret: [UInt8]
+        /// 验证码位数；直接构造配置时调用方须保证在 6 至 8 范围内。
         public var digits: Int = 6
+        /// 时间步长，单位为秒；直接构造配置时必须大于 0。
         public var period: Int = 30
+        /// HMAC 算法名称，支持 SHA1、SHA256、SHA512。
         public var algorithm: String = "SHA1"
+        /// 可选的凭据发行方描述。
         public var issuer: String? = nil
+        /// 可选的账户描述；当前 URI 解析器不从路径填充此字段。
         public var account: String? = nil
     }
 
@@ -20,12 +27,19 @@ public enum TOTP {
     private static let defaultDigits = 6
     private static let defaultPeriod = 30
 
+    /// 密钥缺失或 HMAC 算法不受支持的配置错误。
     public enum TOTPError: LocalizedError {
         case invalidSecret
         case unsupportedAlgorithm
+        /// 供用户界面展示的本地化配置错误。
         public var errorDescription: String? { L10n.t("invalid_value_text") }
     }
 
+    /// 宽松解码 Base32 文本，跳过填充符和字母表外字符。
+    ///
+    /// - Parameter s: 不区分大小写的 Base32 文本。
+    /// - Returns: 解码字节；没有有效字符时为空数组。
+    /// - Throws: 当前实现不主动抛错，保留 throws 供既有调用接口使用。
     public static func base32Decode(_ s: String) throws -> [UInt8] {
         let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
         var bits = 0
@@ -84,6 +98,13 @@ public enum TOTP {
         return try hotp(config: config, counter: counter)
     }
 
+    /// 按 RFC 4226 对计数器进行 HMAC 和动态截断。
+    ///
+    /// - Parameters:
+    ///   - config: 位数为 6 至 8、算法受支持的密钥配置。
+    ///   - counter: 无符号计数器，按 8 字节大端形式参与 HMAC。
+    /// - Returns: 保留前导零的验证码字符串。
+    /// - Throws: 算法名称不受支持时抛出 TOTPError.unsupportedAlgorithm。
     public static func hotp(config: Config, counter: UInt64) throws -> String {
         var msg = [UInt8](repeating: 0, count: 8)
         for i in 0..<8 { msg[i] = UInt8((counter >> (56 - 8 * UInt64(i))) & 0xFF) }

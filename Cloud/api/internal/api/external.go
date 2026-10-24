@@ -1,3 +1,4 @@
+// 对象存储和邮件传输适配；处理器经接口注入，测试不触发真实邮件。
 package api
 
 import (
@@ -33,18 +34,25 @@ type ObjectStore interface {
 	Delete(context.Context, string) error
 	List(context.Context, string, string) ([]Object, string, error)
 }
+
+// S3Store implements the object-store boundary using the configured R2 S3 endpoint.
 type S3Store struct {
 	Client *s3.Client
 	Bucket string
 }
 
+// NewS3 creates an R2 client from validated configuration; credentials must never be logged.
 func NewS3(c Config) *S3Store {
 	return &S3Store{Client: s3.NewFromConfig(aws.Config{Region: "auto", Credentials: credentials.NewStaticCredentialsProvider(c.R2AccessKey, c.R2SecretKey, "")}, func(o *s3.Options) { o.BaseEndpoint = aws.String(c.R2Endpoint) }), Bucket: c.R2Bucket}
 }
+
+// Put writes one object under the supplied key without interpreting encrypted payload bytes.
 func (s *S3Store) Put(ctx context.Context, key string, b []byte, mime string) error {
 	_, e := s.Client.PutObject(ctx, &s3.PutObjectInput{Bucket: &s.Bucket, Key: &key, Body: bytes.NewReader(b), ContentType: &mime})
 	return e
 }
+
+// Get opens an object stream; the caller owns closing the returned io.ReadCloser.
 func (s *S3Store) Get(ctx context.Context, key string) (io.ReadCloser, Object, error) {
 	v, e := s.Client.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.Bucket, Key: &key})
 	if e != nil {
@@ -56,10 +64,14 @@ func (s *S3Store) Get(ctx context.Context, key string) (io.ReadCloser, Object, e
 	}
 	return v.Body, Object{Key: key, Size: aws.ToInt64(v.ContentLength), ContentType: aws.ToString(v.ContentType), Modified: aws.ToTime(v.LastModified)}, nil
 }
+
+// Delete removes an object key; database references must be coordinated separately.
 func (s *S3Store) Delete(ctx context.Context, key string) error {
 	_, e := s.Client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.Bucket, Key: &key})
 	return e
 }
+
+// List returns one object page and continuation token; callers must follow the token to exhaust a prefix.
 func (s *S3Store) List(ctx context.Context, prefix, cursor string) ([]Object, string, error) {
 	in := &s3.ListObjectsV2Input{Bucket: &s.Bucket, Prefix: &prefix}
 	if cursor != "" {
@@ -75,6 +87,8 @@ func (s *S3Store) List(ctx context.Context, prefix, cursor string) ([]Object, st
 	}
 	return out, aws.ToString(v.NextContinuationToken), nil
 }
+
+// deletePrefix exhausts object-store pagination while deleting a vault-scoped prefix.
 func (s *Server) deletePrefix(ctx context.Context, prefix string) error {
 	cursor := ""
 	for {
@@ -101,8 +115,11 @@ func (s *Server) deletePrefix(ctx context.Context, prefix string) error {
 type Mailer interface {
 	Send(context.Context, string, string, string, bool) error
 }
+
+// SMTPMailer delivers verification mail over authenticated TLS using purpose-specific reply addresses.
 type SMTPMailer struct{ Config Config }
 
+// Send transmits one purpose-scoped verification message; recipient, code and credentials are never log fields.
 func (m SMTPMailer) Send(ctx context.Context, to, code, purpose string, zh bool) error {
 	c := m.Config
 	d := net.Dialer{Timeout: 10 * time.Second}
@@ -145,6 +162,8 @@ func (m SMTPMailer) Send(ctx context.Context, to, code, purpose string, zh bool)
 	}
 	return client.Quit()
 }
+
+// verificationMessage assembles the localized verification email with the configured sender and reply address.
 func verificationMessage(c Config, to, code, purpose string, zh bool) string {
 	subject := "UPasswords sign-in code"
 	text := "Your UPasswords verification code: " + code + "\nThis code expires in 10 minutes.\nIf you did not request it, please ignore this email."

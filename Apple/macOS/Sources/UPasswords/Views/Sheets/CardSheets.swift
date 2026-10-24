@@ -3,6 +3,7 @@ import UPasswordsCore
 
 // MARK: - Add card
 
+/// 从所选模板创建卡片草稿并打开编辑器。
 struct AddCardSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -61,6 +62,7 @@ struct AddCardSheet: View {
 
 // MARK: - Add note (add_note_command)
 
+/// 收集便笺标题和内容，确认后经 AppContext 写入卡片。
 struct AddNoteSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -100,6 +102,7 @@ struct AddNoteSheet: View {
 
 // MARK: - Add / rename label
 
+/// 收集新标签名称与颜色，确认后提交给 AppContext。
 struct AddLabelSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -128,6 +131,7 @@ struct AddLabelSheet: View {
     }
 }
 
+/// 编辑指定标签的展示属性，不改变其稳定 UUID。
 struct EditLabelSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -165,6 +169,7 @@ struct EditLabelSheet: View {
     }
 }
 
+/// 选择用于卡片筛选的颜色分类。
 struct SelectColorLabelSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -190,6 +195,7 @@ struct SelectColorLabelSheet: View {
 
 // MARK: - Sorting
 
+/// 编辑卡片排序与分组偏好，列表按会话设置重新派生。
 struct SortingSheet: View {
     @EnvironmentObject var settings: AppSettings
     @Environment(\.dismiss) var dismiss
@@ -230,6 +236,7 @@ struct SortingSheet: View {
 
 // MARK: - Generator
 
+/// macOS 密码生成弹层，消费共享生成设置与内存历史。
 struct GeneratorSheet: View {
     @EnvironmentObject var pwd: PasswordSettings
     @Environment(\.dismiss) var dismiss
@@ -334,6 +341,7 @@ struct GeneratorSheet: View {
 
 // MARK: - Set labels
 
+/// 编辑单张卡片关联的标签身份集合。
 struct SetLabelsSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -406,6 +414,7 @@ struct SetLabelsSheet: View {
 
 // MARK: - Symbol picker
 
+/// 选择卡片的 SF Symbols 图标词条。
 struct SelectSymbolSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -516,6 +525,7 @@ struct SelectColorSheet: View {
 
 // MARK: - Template picker inside editor (select_template_title)
 
+/// 选择内置或自定义模板作为新卡片草稿来源。
 struct SelectTemplateSheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss
@@ -571,6 +581,7 @@ struct SelectTemplateSheet: View {
 
 // MARK: - Color grid
 
+/// 将颜色词条呈现为可选择的规则网格。
 struct ColorGrid: View {
     @Binding var selection: String
     var large = false
@@ -599,6 +610,7 @@ struct ColorGrid: View {
 
 // MARK: - Password history
 
+/// 展示字段历史明文与修改时间，数据仅在解锁会话中消费。
 struct PasswordHistorySheet: View {
     @EnvironmentObject var ctx: AppContext
     @Environment(\.dismiss) var dismiss

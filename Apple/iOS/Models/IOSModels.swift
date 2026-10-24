@@ -67,6 +67,7 @@ extension Card {
 
 // MARK: - 模板展示适配(Core Templates 是字符串键名制,此处补 UI 分组与配色)
 
+/// 将 Core 模板映射为 iOS 展示分组，不改变模板稳定编号。
 enum TemplateGroups {
     struct Item: Identifiable {
         let id: Int

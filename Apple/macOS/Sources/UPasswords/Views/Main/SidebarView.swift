@@ -7,6 +7,7 @@ import UPasswordsNetworking
 // 行内 SF Symbol 图标 + 右对齐计数,选中态为圆角灰底 + 强调蓝图标与蓝字;
 // 「显示」菜单挂在面板底部)
 
+/// macOS 侧栏导航，展示分类与标签，并绑定 AppContext 的筛选选择。
 struct SidebarView: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
@@ -309,6 +310,7 @@ struct SidebarRow: View {
     }
 }
 
+/// 展示单个标签的颜色、名称与计数，并提供标签操作入口。
 struct SidebarLabelRow: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings
@@ -332,6 +334,7 @@ struct SidebarLabelRow: View {
     }
 }
 
+/// 统一侧栏点击范围与选中外观的行按钮。
 private struct SidebarRowButton: View {
     let title: String
     let system: String

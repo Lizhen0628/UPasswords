@@ -1,3 +1,5 @@
+// 职责：在可信后台持有解锁会话，向网页只提供数量提示，并登记标签页地址。
+// 安全边界：会话消息的发送方检查与生命周期清理集中在 shared/unlock-session。
 // Safari/Firefox background: owns the unlock session and count-only site hints.
 import { canonicalizeHost, installSessionBackground, installSiteHints, hostnameOf } from "./shared/index.js";
 

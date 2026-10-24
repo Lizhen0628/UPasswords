@@ -26,18 +26,34 @@ public struct RelayClient {
 
     /// 登录会话(令牌只在签发响应出现一次,本地经 RelayTokenKeychain 保存)。
     public struct Session: Equatable {
+        /// 账户会话的 Bearer 令牌；不得写入日志、通知或普通偏好。
         public let token: String
+        /// 服务端毫秒时间戳转换后的会话过期日期。
         public let expiresAt: Date
+        /// 服务端账户身份。
         public let userId: String
     }
 
     /// 已登录设备(会话管理页展示与撤销)。isCurrent=发起列表请求的本机会话。
     public struct DeviceSession: Identifiable, Equatable {
+        /// 服务端会话标识，用于撤销设备授权。
         public let id: String
+        /// 设备展示名，与会话身份无关。
         public let deviceName: String
+        /// 服务端保存的平台词条，未知词条由展示层回退处理。
         public let platform: String
+        /// 是否为发起此次设备列表查询的会话。
         public let isCurrent: Bool
+        /// 最近活动日期；服务端缺失该字段时为 nil。
         public let lastSeenAt: Date?
+        /// 创建设备会话的展示值。
+        ///
+        /// - Parameters:
+        ///   - id: 服务端会话标识。
+        ///   - deviceName: 设备展示名。
+        ///   - platform: 平台词条。
+        ///   - isCurrent: 是否为请求方当前会话。
+        ///   - lastSeenAt: 可选最近活动日期。
         public init(id: String, deviceName: String, platform: String,
                     isCurrent: Bool = false, lastSeenAt: Date? = nil) {
             self.id = id
@@ -50,26 +66,52 @@ public struct RelayClient {
 
     /// 注册表单库记录;envelope 密文仅单库查询返回。
     public struct VaultRecord: Equatable {
+        /// 服务端密码库稳定身份，与本地库名分开保存。
         public let vaultId: String
+        /// 密码库展示名称。
         public let name: String
+        /// 服务端库密钥轮换版本；前进时需重新解锁。
         public let passwordVersion: Int
+        /// 服务端记录的最近改密日期。
         public let passwordChangedAt: Date?
+        /// 密钥信封记录的最近变化日期。
         public let envelopeChangedAt: Date?
+        /// 服务端是否保存有信封；列表接口不一定同时返回信封内容。
         public let hasEnvelope: Bool
+        /// 可选的加密库密钥信封，单库详情接口返回。
         public let envelope: Data?
+        /// 该库当前的变更序列高水位，不等同于单条目 revision。
         public let headSeq: Int
+        /// 服务端记录的条目数量。
         public let itemCount: Int
     }
 
     /// 条目上行操作(§6.2):upsert 携新密文体,delete 携原 baseRevision。
     public struct ItemOp {
+        /// 条目的稳定 UUID；加解密时须与 AAD 使用同一身份。
         public let uuid: UUID
+        /// 同步类型码，与 DatabaseItem.syncKind 及服务端约定一致。
         public let kind: UInt8          // 1=card 2=label(与 DatabaseItem.syncKind 对齐)
+        /// 是否请求永久删除；删除操作不携带新密文体。
         public let isDelete: Bool
+        /// 此次写入预期的服务端版本；0 仅用于创建。
         public let baseRevision: UInt64
+        /// 可选的 AES-GCM 条目密文 Base64，包含 nonce 和认证标签。
         public let bodyB64: String?
+        /// 条目密文字节的 SHA-256 十六进制摘要。
         public let sha256: String?
+        /// 客户端条目的 Unix 毫秒修改时间，用于冲突合并。
         public let modifiedMs: TimeInterval
+        /// 创建一个不执行网络请求的 CAS 操作值。
+        ///
+        /// - Parameters:
+        ///   - uuid: 稳定条目身份。
+        ///   - kind: 同步类型码。
+        ///   - isDelete: 是否永久删除。
+        ///   - baseRevision: 预期现行版本；0 仅用于创建。
+        ///   - bodyB64: upsert 的完整 AES-GCM 密文 Base64。
+        ///   - sha256: 可选密文摘要。
+        ///   - modifiedMs: 客户端 Unix 毫秒修改时间。
         public init(uuid: UUID, kind: UInt8, isDelete: Bool, baseRevision: UInt64,
                     bodyB64: String? = nil, sha256: String? = nil, modifiedMs: TimeInterval) {
             self.uuid = uuid
@@ -91,14 +133,33 @@ public struct RelayClient {
 
     /// 变更日志条目(§6.3 下行)。
     public struct ChangeEntry {
+        /// 库级变更序列，用于增量下行游标。
         public let seq: Int
+        /// 条目的稳定 UUID；加解密时须与 AAD 使用同一身份。
         public let uuid: UUID
+        /// 变更操作词条：upsert、purge 或库级 rekey。
         public let op: String            // upsert | purge | rekey
+        /// 条目版本；库级 rekey 事件中承载新的密码版本。
         public let revision: UInt64
+        /// 是否应移除本地条目；删除收敛优先于未上行修改。
         public let deleted: Bool
+        /// 可选的 AES-GCM 条目密文 Base64，包含 nonce 和认证标签。
         public let bodyB64: String?
+        /// 同步类型码，与 DatabaseItem.syncKind 及服务端约定一致。
         public let kind: UInt8?
+        /// 客户端条目的 Unix 毫秒修改时间，用于冲突合并。
         public let modifiedMs: TimeInterval?
+        /// 创建一个已解码的变更事件值。
+        ///
+        /// - Parameters:
+        ///   - seq: 库级变更序列。
+        ///   - uuid: 条目身份；库级 rekey 使用全零 UUID。
+        ///   - op: 操作词条。
+        ///   - revision: 条目版本或 rekey 的密码版本。
+        ///   - deleted: 是否移除本地条目。
+        ///   - bodyB64: 可选密文。
+        ///   - kind: 可选同步类型码。
+        ///   - modifiedMs: 可选客户端 Unix 毫秒修改时间。
         public init(seq: Int, uuid: UUID, op: String, revision: UInt64, deleted: Bool,
                     bodyB64: String?, kind: UInt8?, modifiedMs: TimeInterval?) {
             self.seq = seq
@@ -114,13 +175,19 @@ public struct RelayClient {
 
     /// 全量重建条目(§6.3 快照分页)。
     public struct ListedItem {
+        /// 条目的稳定 UUID；加解密时须与 AAD 使用同一身份。
         public let uuid: UUID
+        /// 同步类型码，与 DatabaseItem.syncKind 及服务端约定一致。
         public let kind: UInt8
+        /// 条目版本；库级 rekey 事件中承载新的密码版本。
         public let revision: UInt64
+        /// 可选的 AES-GCM 条目密文 Base64，包含 nonce 和认证标签。
         public let bodyB64: String
+        /// 客户端条目的 Unix 毫秒修改时间，用于冲突合并。
         public let modifiedMs: TimeInterval
     }
 
+    /// 中继协议、授权、配额及传输失败的可识别错误域。
     public enum RelayError: LocalizedError, Equatable {
         case invalidEmail
         case invalidCode
@@ -137,6 +204,7 @@ public struct RelayClient {
         case server(Int)
         case network(String)
 
+        /// 供界面展示的本地化协议或传输错误。
         public var errorDescription: String? {
             switch self {
             case .invalidEmail: return L10n.t("invalid_email_error")
@@ -170,6 +238,11 @@ public struct RelayClient {
         Date(timeIntervalSince1970: ms / 1000)
     }
 
+    /// 创建可注入 API 根地址和 URLSession 的客户端。
+    ///
+    /// - Parameters:
+    ///   - baseURL: API 根地址，默认值为合法 HTTPS 字面量。
+    ///   - session: 请求使用的会话；测试可注入 URLProtocol 桩。
     public init(baseURL: URL = URL(string: "https://api.upasswords.com")!,
                 session: URLSession = .shared) {
         self.baseURL = baseURL

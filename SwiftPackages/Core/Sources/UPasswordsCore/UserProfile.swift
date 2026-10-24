@@ -2,14 +2,22 @@ import Foundation
 
 /// Personal information stored independently from password cards inside the encrypted vault.
 public struct UserProfile: Codable, Equatable, Identifiable {
+    /// 创建空的独立个人资料记录。
+    ///
+    /// - Parameter id: 跨端稳定 UUID；首次创建默认生成，迁移时可沿用旧卡片身份。
     public init(id: UUID = UUID()) {
         self.id = id
     }
 
+    /// 独立资料记录的稳定 UUID；迁移时沿用原联系卡身份。
     public var id: UUID
+    /// 个人资料的明文字段，随密码库加密。
     public var fields: [Field] = []
+    /// 是否允许将此资料提供给注册表单自动填充。
     public var registrationAutofillEnabled = true
+    /// 创建时间，使用 Unix 毫秒时间戳。
     public var created: TimeInterval = 0
+    /// 最后修改时间，使用 Unix 毫秒时间戳，参与同步冲突裁决。
     public var modified: TimeInterval = 0
 }
 

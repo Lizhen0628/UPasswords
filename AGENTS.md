@@ -28,7 +28,7 @@
 | `SwiftPackages/Persistence/` | 库文件、备份恢复、钥匙串、同步、中继 API、导入导出 |
 | `SwiftPackages/Networking/` | HIBP k-匿名泄露检查与本地清单 |
 | `WebExtensions/` | pnpm workspace；shared 为严格模式 TS，共享存储/消息/平台适配；Safari/Chrome/Edge/Firefox 消费共享逻辑 |
-| `Cloud/` | 云端协调服务；生产 API 为 `api/` Go + chi，Worker 为回退实现；MariaDB 存账户与条目密文，R2 存附件和网站图标；数据库设计见 `DATABASE.md` |
+| `Cloud/` | 云端协调服务；生产 API 为 `api/` Go + chi；MariaDB 存账户与条目密文，R2 存附件和网站图标；数据库设计见 `DATABASE.md`，DDL 与迁移位于 `database/` |
 | `Contracts/` | 跨端 schema 与协议说明；改动须同步 Core 模型、shared TS 和 schemas |
 | `FEATURES.md` | 功能清单；改功能时同步更新 |
 | `scripts/make-app.sh` | Release 打包主应用与 Safari 宿主，复制资源 bundle、同步 `/Applications` 并注册扩展 |
@@ -89,8 +89,8 @@
 | `SwiftPackages/Core`、`Persistence`、`Networking`（分别执行） | `swift build && swift test` |
 | `Apple/macOS` | `swift build && swift test` |
 | `Apple` | `xcodegen generate`，随后从仓库根用 `xcodebuild -workspace UPasswords.xcworkspace …` 构建所需 scheme |
+| `Cloud/api` | `docker compose -f compose.test.yaml up --abort-on-container-exit --exit-code-from test` |
 | 仓库根（Web 扩展） | `pnpm install && pnpm build && pnpm test` |
-| `service-admin:~/UPasswords/Cloud/worker` | `npm install && npm test`；部署按 `Cloud/README.md` |
 
 - 【推荐】新逻辑在所属包的测试目录或 `WebExtensions/shared/test/` 配测试。
 - 【必须】测试不得依赖机器语言、时区或绝对路径；文案期望值通过同一 L10n 键获取，fixture 路径由 `#filePath` 推导仓库根。

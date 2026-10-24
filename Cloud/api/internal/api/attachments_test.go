@@ -93,16 +93,23 @@ func TestCodeHourlyQuota(t *testing.T) {
 	h := s.Handler()
 	s.Config.Limits["CODE_HOURLY_PER_EMAIL"] = 2
 	em := "quota-" + randomHex(5) + "@example.com"
-	for i := 0; i < 2; i++ {
-		if code, out := call(t, h, "POST", "/v1/auth/code", "", map[string]any{"email": em}); code != 202 {
-			t.Fatalf("send %d %v", code, out)
-		}
-		if m.get(em, "login") == "" {
-			t.Fatal("mail missing")
-		}
-		if _, e := s.DB.Exec("UPDATE email_codes SET created_ms=created_ms-120000 WHERE email_hmc=?", s.mac("email:"+em)); e != nil {
-			t.Fatal(e)
-		}
+	if code, out := call(t, h, "POST", "/v1/auth/code", "", map[string]any{"email": em}); code != 202 {
+		t.Fatalf("first send %d %v", code, out)
+	}
+	if code, _ := call(t, h, "POST", "/v1/auth/code", "", map[string]any{"email": em}); code != 429 {
+		t.Fatalf("resend cooldown not enforced: %d", code)
+	}
+	if _, e := s.DB.Exec("UPDATE email_codes SET created_ms=created_ms-120000 WHERE email_hmc=?", s.mac("email:"+em)); e != nil {
+		t.Fatal(e)
+	}
+	if code, out := call(t, h, "POST", "/v1/auth/code", "", map[string]any{"email": em}); code != 202 {
+		t.Fatalf("second send %d %v", code, out)
+	}
+	if m.get(em, "login") == "" {
+		t.Fatal("mail missing")
+	}
+	if _, e := s.DB.Exec("UPDATE email_codes SET created_ms=created_ms-120000 WHERE email_hmc=?", s.mac("email:"+em)); e != nil {
+		t.Fatal(e)
 	}
 	if code, _ := call(t, h, "POST", "/v1/auth/code", "", map[string]any{"email": em}); code != 429 {
 		t.Fatalf("hourly quota not enforced: %d", code)

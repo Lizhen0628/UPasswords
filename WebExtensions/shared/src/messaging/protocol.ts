@@ -51,6 +51,7 @@ export interface VaultSessionResponse {
     code?: string;
 }
 
+/** 扩展普通请求的判别联合；解锁会话消息使用独立的 VaultSessionRequest。 */
 export type RequestMessage =
     | VaultSessionRequest
     | { type: "ping" }
@@ -65,6 +66,7 @@ export type RequestMessage =
     /** popup→bg:取当前活动页地址(tab.url 不可见时的回落) */
     | { type: "active-location" };
 
+/** 普通扩展消息的响应联合；敏感内容仅向获准的扩展上下文返回。 */
 export type ResponseMessage =
     | VaultSessionResponse
     | { type: "pong" }
@@ -77,6 +79,7 @@ export type ResponseMessage =
     | { type: "locked" }
     | { type: "error"; message: string };
 
+/** 对普通消息入口做最小标签检查；每个处理器仍须验证负载与发送方。 */
 export function isRequestMessage(value: unknown): value is RequestMessage {
     if (typeof value !== "object" || value === null) {
         return false;

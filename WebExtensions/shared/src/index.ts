@@ -1,3 +1,4 @@
+// 共享扩展 API 出口；浏览器目录只消费本入口构建出的模块，不直接依赖 Swift 类型。
 export * from "./core/types.js";
 export * from "./core/domain.js";
 export * from "./core/crypto.js";

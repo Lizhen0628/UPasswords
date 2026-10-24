@@ -3,6 +3,7 @@ import UPasswordsCore
 
 // MARK: - Select texture
 
+/// 从内置纹理词条中选择锁屏背景，并更新绑定草稿。
 struct SelectTextureSheet: View {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var settings: AppSettings

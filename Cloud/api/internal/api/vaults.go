@@ -1,3 +1,4 @@
+// 按账户授权的库注册表；库内容仅以客户端加密密文存储。
 package api
 
 import (
@@ -7,18 +8,22 @@ import (
 	"net/http"
 )
 
+// vault is registry metadata loaded under account authorization; envelope remains application-wrapped at rest.
 type vault struct {
 	ID, UserID, Name                                                    string
 	Version, Changed, Head, Floor, Count, AttachBytes, Created, Updated int64
 	Envelope                                                            sql.NullString
 	EnvelopeChanged                                                     sql.NullInt64
 }
+
+// queryer is the shared query boundary for pooled reads and transaction-scoped locked reads.
 type queryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
 const vaultColumns = "vault_id,user_id,name,password_version,password_changed_ms,envelope_enc,envelope_changed_ms,head_seq,changes_floor_seq,item_count,attach_bytes,created_ms,updated_ms"
 
+// loadVault verifies account ownership and optionally locks the registry row to serialize vault writes.
 func loadVault(ctx context.Context, q queryer, uid, id string, lock bool) (vault, error) {
 	var v vault
 	if !idPattern.MatchString(id) {
@@ -34,9 +39,13 @@ func loadVault(ctx context.Context, q queryer, uid, id string, lock bool) (vault
 	}
 	return v, e
 }
+
+// meta projects registry metadata without disclosing the stored application-encrypted envelope.
 func (v vault) meta() map[string]any {
 	return map[string]any{"vaultId": v.ID, "name": v.Name, "passwordVersion": v.Version, "passwordChangedAt": v.Changed, "envelopeChangedAt": intOrNil(v.EnvelopeChanged), "hasEnvelope": v.Envelope.Valid, "headSeq": v.Head, "itemCount": v.Count, "attachBytes": v.AttachBytes, "createdAt": v.Created, "updatedAt": v.Updated}
 }
+
+// vaultCreate registers a bounded account-owned vault with its initial encrypted key envelope.
 func (s *Server) vaultCreate(w http.ResponseWriter, r *http.Request) error {
 	var b struct {
 		Name     string
@@ -92,6 +101,8 @@ func (s *Server) vaultCreate(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 201, map[string]any{"vaultId": id, "passwordVersion": 1})
 	return nil
 }
+
+// vaultList returns registry metadata for the authenticated account, without envelope contents.
 func (s *Server) vaultList(w http.ResponseWriter, r *http.Request) error {
 	rows, e := s.DB.QueryContext(r.Context(), "SELECT "+vaultColumns+" FROM vaults WHERE user_id=? ORDER BY created_ms", identity(r).UserID)
 	if e != nil {
@@ -112,6 +123,8 @@ func (s *Server) vaultList(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 200, map[string]any{"vaults": out})
 	return nil
 }
+
+// vaultGet returns one owned registry entry and its client-encrypted key envelope.
 func (s *Server) vaultGet(w http.ResponseWriter, r *http.Request) error {
 	v, e := loadVault(r.Context(), s.DB, identity(r).UserID, param(r, "vaultID"), false)
 	if e != nil {
@@ -129,6 +142,8 @@ func (s *Server) vaultGet(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 200, out)
 	return nil
 }
+
+// vaultSeq returns the cheap change high-water mark and password version for polling.
 func (s *Server) vaultSeq(w http.ResponseWriter, r *http.Request) error {
 	v, e := loadVault(r.Context(), s.DB, identity(r).UserID, param(r, "vaultID"), false)
 	if e != nil {
@@ -137,6 +152,8 @@ func (s *Server) vaultSeq(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 200, map[string]any{"headSeq": v.Head, "passwordVersion": v.Version})
 	return nil
 }
+
+// vaultRename changes registry display metadata without changing vault identity or encrypted rows.
 func (s *Server) vaultRename(w http.ResponseWriter, r *http.Request) error {
 	var b struct{ Name string }
 	if e := body(w, r, smallJSON, &b); e != nil {
@@ -162,6 +179,8 @@ func (s *Server) vaultRename(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 200, map[string]bool{"ok": true})
 	return nil
 }
+
+// vaultDelete consumes a sensitive code, removes object storage and deletes the owned vault registry.
 func (s *Server) vaultDelete(w http.ResponseWriter, r *http.Request) error {
 	a := identity(r)
 	id := param(r, "vaultID")
@@ -193,6 +212,8 @@ func (s *Server) vaultDelete(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 200, map[string]bool{"ok": true})
 	return nil
 }
+
+// vaultTransfer verifies both account codes before moving ownership and issuing a destination-account session.
 func (s *Server) vaultTransfer(w http.ResponseWriter, r *http.Request) error {
 	var b struct{ Email, Code, CurrentCode, DeviceName, Platform string }
 	if e := body(w, r, smallJSON, &b); e != nil {

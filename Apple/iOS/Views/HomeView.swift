@@ -4,6 +4,7 @@ import UPasswordsCore
 
 // MARK: - 首页(密码 Tab):搜索 + 六宫格 + 类别 + 标签 + 最近使用
 
+/// iOS 密码首页，组合搜索、分类、标签和最近修改卡片入口。
 struct HomeView: View {
     @EnvironmentObject var vault: Vault
     @Binding var selectedTab: Int
@@ -283,6 +284,7 @@ struct HomeView: View {
 
 // MARK: - 新建 / 编辑标签弹层
 
+/// 以局部草稿编辑标签名称和颜色，确认后由 Vault 提交。
 struct LabelEditorSheet: View {
     @EnvironmentObject var vault: Vault
     @Environment(\.dismiss) private var dismiss
@@ -353,6 +355,7 @@ struct LabelEditorSheet: View {
 
 // MARK: - 自适应 chips 流式容器
 
+/// 将调用方内容放入可换行的标签流布局。
 struct FlowChips<Content: View>: View {
     var spacing: CGFloat = 8
     @ViewBuilder var content: Content
@@ -362,6 +365,7 @@ struct FlowChips<Content: View>: View {
     }
 }
 
+/// 根据可用宽度逐行排列子视图的 SwiftUI Layout 实现。
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
 

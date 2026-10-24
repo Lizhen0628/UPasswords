@@ -8,6 +8,7 @@ import UPasswordsPersistence
 
 // MARK: 修改主密码
 
+/// 收集当前与新主密码，将验证、密钥轮换及持久化交由会话层。
 struct ChangePasswordSheet: View {
     @EnvironmentObject var vault: Vault
     @Environment(\.dismiss) private var dismiss
@@ -59,6 +60,7 @@ struct ChangePasswordSheet: View {
 
 // MARK: 系统分享面板
 
+/// 将待分享内容交给系统分享控制器的 SwiftUI 桥接。
 struct ActivityView: UIViewControllerRepresentable {
     let items: [Any]
 
@@ -71,6 +73,7 @@ struct ActivityView: UIViewControllerRepresentable {
 
 // MARK: 自动填充开启指引
 
+/// 展示系统凭据自动填充的配置步骤。
 struct AutoFillGuideView: View {
     @Environment(\.dismiss) private var dismiss
 

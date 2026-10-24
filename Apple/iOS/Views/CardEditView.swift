@@ -6,6 +6,7 @@ import UPasswordsCore
 
 // MARK: - 模板选择(新建入口)
 
+/// 从内置或用户模板生成独立卡片草稿，通过回调交给编辑入口。
 struct TemplatePickerView: View {
     @EnvironmentObject var vault: Vault
     @Environment(\.dismiss) private var dismiss
@@ -69,6 +70,7 @@ struct TemplatePickerView: View {
 
 // MARK: - 编辑 / 新建条目
 
+/// 持有卡片值副本的编辑表单，仅在保存时交由 Vault 提交变更。
 struct CardEditView: View {
     @EnvironmentObject var vault: Vault
     @Environment(\.dismiss) private var dismiss

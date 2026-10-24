@@ -4,6 +4,7 @@ import UPasswordsCore
 
 // MARK: - 安全检查 Tab
 
+/// 基于 Vault 的派生卡片集合展示弱密码、重复密码与泄露检查结果。
 struct SecurityView: View {
     @EnvironmentObject var vault: Vault
 

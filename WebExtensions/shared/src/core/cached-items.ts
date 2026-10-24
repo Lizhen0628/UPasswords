@@ -1,6 +1,7 @@
 import type { ExtensionItem } from "./types.js";
 import { fragmentsToXml, parseVaultXml, VaultCryptoError } from "./vault-crypto.js";
 
+/** 一条已解密 XML 片段及其原始同步身份；只保存在可信解锁会话。 */
 export interface VaultFragment {
     uuid: string;
     xml: string;

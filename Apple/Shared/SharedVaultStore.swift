@@ -10,6 +10,7 @@ import UPasswordsPersistence
 // 未配置 App Group entitlement 时回退到本进程 Application Support——
 // 此时扩展读不到主 App 的库(界面会引导先开主 App),但不影响各自运行。
 
+/// 连接主应用与 AutoFill 的 App Group 存储配置及当前库指针。
 enum SharedVaultStore {
     /// 默认库名(首次创建时的初始名;多库管理下可由用户新建/切换)。
     static let defaultDatabaseName = "Main"

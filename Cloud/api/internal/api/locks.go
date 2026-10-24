@@ -1,3 +1,4 @@
+// 验证码竞争控制；MariaDB 命名锁必须由同一物理连接持有和释放。
 package api
 
 import (

@@ -5,6 +5,7 @@ import UPasswordsPersistence
 
 // MARK: - 锁屏 / 首次创建主密码(含服务端账户库恢复)
 
+/// iOS 建库和解锁入口，管理输入草稿及远端恢复的交互状态。
 struct LockScreen: View {
     @EnvironmentObject var vault: Vault
 
@@ -574,6 +575,7 @@ extension View {
     }
 }
 
+/// 用于输入失败提示的水平位移动画几何效果。
 struct Shake: GeometryEffect {
     var animatableData: CGFloat
     func effectValue(size: CGSize) -> ProjectionTransform {

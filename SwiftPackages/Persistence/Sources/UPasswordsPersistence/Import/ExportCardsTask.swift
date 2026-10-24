@@ -6,7 +6,9 @@ import UPasswordsCore
 /// 导出格式;name 走 Localizable `*_format_text`。
 public enum ExportFormat: String, CaseIterable, Identifiable {
     case xml, csv, txt
+    /// 导出格式的稳定词条。
     public var id: String { rawValue }
+    /// 当前语言下的导出格式名称。
     public var name: String { L10n.t("\(rawValue)_format_text") }
 }
 

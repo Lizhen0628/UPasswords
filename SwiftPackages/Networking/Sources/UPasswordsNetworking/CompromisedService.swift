@@ -17,6 +17,12 @@ public enum CompromisedService {
         "monkey", "letmein", "football", "shadow", "superman", "michael", "trustno1",
     ]
 
+    /// 为每个明文密码计算完整 SHA-1，以便随后按前缀分组。
+    ///
+    /// - Parameters:
+    ///   - passwords: 仅供本次内存计算的密码集合。
+    ///   - prefixLength: 保留的兼容参数，当前实现不据此截断结果。
+    /// - Returns: 明文密码到完整小写 SHA-1 的映射；不能持久化或记录到日志。
     public static func sha1Prefixes(_ passwords: [String], prefixLength: Int = 5) -> [String: String] {
         var out: [String: String] = [:]
         for p in passwords {
@@ -31,9 +37,13 @@ public enum CompromisedService {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
+    /// 一次泄露检查的命中值和离线状态，仅在解锁会话内消费。
     public struct Result {
+        /// 本次命中的密码明文集合，不得持久化或记录日志。
         public var compromisedPasswords: Set<String> = []
+        /// 本次结果是否使用离线演示集合回退；不表示完整覆盖全部泄露库。
         public var offline: Bool = false
+        /// 保留的错误描述字段；当前检查流程主要通过安全日志报告失败。
         public var error: String? = nil
     }
 

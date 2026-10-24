@@ -3,14 +3,21 @@ import Foundation
 /// The 15 built-in card templates.
 /// `@string/…` references are resolved through the strings table at access time.
 public enum Templates {
+    /// 一个内置模板的静态描述，保留本地化键以便展示时取词。
     public struct Spec: Identifiable {
+        /// 内置模板稳定编号；持久化或测试引用时不可随展示顺序改变。
         public let id: Int
+        /// 模板标题的 Database 字符串表键。
         public let titleKey: String
+        /// 模板默认使用的 SF Symbols 名称。
         public let symbol: String?
+        /// 由模板创建的卡片是否默认允许自动填充。
         public let autofill: Bool
+        /// 依次排列的字段名称键、字段类型与自动填充语义。
         public let fields: [(nameKey: String, type: FieldType, autofill: Autofill)]
     }
 
+    /// 按展示顺序排列的内置模板定义。
     public static let all: [Spec] = [
         Spec(id: 101, titleKey: "credit_card_template", symbol: "credit_card", autofill: true, fields: [
             ("number_field", .number, .ccNumber),
@@ -108,6 +115,10 @@ public enum Templates {
         Spec(id: 114, titleKey: "custom_template", symbol: nil, autofill: false, fields: []),
     ]
 
+    /// 按稳定编号查找内置模板。
+    ///
+    /// - Parameter id: 模板编号。
+    /// - Returns: 匹配的定义；未知编号返回 nil。
     public static func spec(id: Int) -> Spec? { all.first { $0.id == id } }
 
     /// 默认标签(键名 + 类型);标签 id 为 UUID,创建时现场生成。
@@ -141,9 +152,11 @@ public enum Templates {
 }
 
 extension Date {
+    /// 对应时间的 Unix 毫秒值。
     public var millis: TimeInterval { timeIntervalSince1970 * 1000 }
 }
 
 extension TimeInterval {
+    /// 将当前 Unix 毫秒值转换为 Date。
     public var date: Date { Date(timeIntervalSince1970: self / 1000) }
 }

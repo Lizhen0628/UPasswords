@@ -6,8 +6,17 @@ import UPasswordsCore
 /// Per-database keychain storage, with an optional biometry-protected entry
 /// for fast unlock (Touch ID).
 public enum PasswordStore {
+    /// 派生指定库使用的钥匙串 service 名称。
+    ///
+    /// - Parameter name: 本地库名。
+    /// - Returns: 与现有钥匙串记录兼容的 service 标识。
     public static func service(forDatabaseName name: String) -> String { "UPasswords-\(name)" }
 
+    /// 保存普通密码钥匙串副本，失败通过安全日志报告。
+    ///
+    /// - Parameters:
+    ///   - password: 本地库主密码。
+    ///   - databaseName: 本地库名。
     public static func savePassword(_ password: String, databaseName: String) {
         save(password: password, account: "database", databaseName: databaseName)
     }
@@ -92,6 +101,10 @@ public enum PasswordStore {
         Log.logKeychain("remove password copies for \(service(forDatabaseName: databaseName))", status: errSecSuccess)
     }
 
+    /// 仅查询是否存在生物识别保护项，不读取密码、不触发认证。
+    ///
+    /// - Parameter databaseName: 本地库名。
+    /// - Returns: 是否能查到相应钥匙串项。
     public static func hasBiometricItem(databaseName: String) -> Bool {        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service(forDatabaseName: databaseName),
@@ -159,10 +172,16 @@ public enum PasswordStore {
         return String(data: data, encoding: .utf8)
     }
 
+    /// 检查设备当前是否支持生物识别认证。
+    ///
+    /// - Returns: LocalAuthentication 的能力检查结果；不代表已有本库密码项。
     public static func biometricAvailable() -> Bool {
         LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
     }
 
+    /// 移除指定库的生物识别钥匙串副本。
+    ///
+    /// - Parameter databaseName: 本地库名；不会删除普通密码副本。
     public static func removeBiometricPassword(databaseName: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

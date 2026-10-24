@@ -9,6 +9,7 @@ import {
 } from "../api/relay.js";
 import type { CacheScope, EncryptedCache, EncryptedSnapshot } from "../storage/encrypted-cache.js";
 
+/** 同步验证、会话或分页边界失败的机器可识别错误。 */
 export class VaultSyncError extends Error {
     constructor(public readonly code: string) {
         super(`vault sync failed: ${code}`);
@@ -16,12 +17,15 @@ export class VaultSyncError extends Error {
     }
 }
 
+/** 同步所需的账户、密文缓存及会话校验依赖，解密验证由调用方注入。 */
 export interface SynchronizeVaultOptions {
     token: string;
     scope: CacheScope;
     cache: EncryptedCache;
     keyVersion?: number;
+    /** 每个异步边界检查账户、库和解锁代次；失效时必须抛错。 */
     validate: () => Promise<void>;
+    /** 缓存提交前认证解密并验证行身份；失败时保留旧快照。 */
     verifyRows: (rows: RelayItemRow[]) => Promise<void>;
 }
 

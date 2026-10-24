@@ -17,4 +17,5 @@ enum SafariAppMain {
     }
 }
 
+/// 处理应用级生命周期回调的系统代理；业务会话由独立会话对象持有。
 final class AppDelegate: NSObject, NSApplicationDelegate {}

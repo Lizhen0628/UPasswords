@@ -2,6 +2,7 @@ import Foundation
 
 /// Localization helper over the `Localizable` / `Database` strings tables.
 public enum L10n {
+    /// Core 包的资源 bundle，包含各语言的字符串表。
     public static let bundle: Bundle = .module
 
     /// 语言覆盖(设置页「语言」选项):为空时跟随系统,否则使用对应 lproj。
@@ -10,6 +11,7 @@ public enum L10n {
     /// L10n 会在主线程之外被调用(评分缓存、扩展进程),缓存读写须有锁保护
     private static let cacheLock = NSLock()
 
+    /// 按应用内语言覆盖选择的资源 bundle；缺失时回退到包资源。
     public static var activeBundle: Bundle {
         let lang = UserDefaults.standard.string(forKey: "app.language") ?? ""
         guard lang.isEmpty else { return overrideBundle(for: lang) }

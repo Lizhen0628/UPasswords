@@ -2,7 +2,7 @@ import Foundation
 import UPasswordsCore
 import UPasswordsNetworking
 
-/// 卡片列表策略(CardListStrategy)、搜索、最近打开(RecentModel)。
+/// 按侧栏选择派生卡片列表，并管理搜索与最近打开的卡片身份。
 extension AppContext {
 
     // MARK: - Selection

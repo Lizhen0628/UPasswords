@@ -1,3 +1,4 @@
+// 邮箱验证码、账户身份和设备会话；主密码及库密钥不进入本模块。
 package api
 
 import (
@@ -12,13 +13,19 @@ import (
 	"strings"
 )
 
+// authKey is the private request-context key for authenticated identity.
 type authKey struct{}
+
+// auth holds validated account and session metadata; it must not carry plaintext credentials.
 type auth struct {
 	UserID, EmailHMC, SessionID string
 	Created                     int64
 }
 
+// identity reads authentication populated by middleware; protected handlers must run behind authenticated.
 func identity(r *http.Request) auth { a, _ := r.Context().Value(authKey{}).(auth); return a }
+
+// authenticated validates a Bearer token hash, loads account identity and updates sliding session activity.
 func (s *Server) authenticated(next http.Handler) http.Handler {
 	return s.endpoint(func(w http.ResponseWriter, r *http.Request) error {
 		token := r.Header.Get("Authorization")
@@ -52,6 +59,8 @@ func (s *Server) authenticated(next http.Handler) http.Handler {
 		return nil
 	})
 }
+
+// admin requires the separate administrator token before dispatching maintenance or catalog management requests.
 func (s *Server) admin(next http.Handler) http.Handler {
 	return s.endpoint(func(w http.ResponseWriter, r *http.Request) error {
 		v := r.Header.Get("X-Admin-Token")
@@ -91,11 +100,15 @@ func (s *Server) consumeCode(ctx context.Context, t *sql.Tx, eh, purpose, code s
 	_, e = t.ExecContext(ctx, "UPDATE email_codes SET attempts=attempts+1,used_ms=? WHERE email_hmc=? AND purpose=?", spent, eh, purpose)
 	return valid, e
 }
+
+// checkCode runs code consumption in its own transaction so an accepted code cannot be replayed.
 func (s *Server) checkCode(ctx context.Context, eh, purpose, code string) (bool, error) {
 	var ok bool
 	e := s.transaction(ctx, func(t *sql.Tx) error { var e error; ok, e = s.consumeCode(ctx, t, eh, purpose, code); return e })
 	return ok, e
 }
+
+// sensitive requires a fresh code for the authenticated account before destructive or account-transfer operations.
 func (s *Server) sensitive(r *http.Request, code string) error {
 	ok, e := s.checkCode(r.Context(), identity(r).EmailHMC, "sensitive", code)
 	if e != nil {
@@ -106,6 +119,8 @@ func (s *Server) sensitive(r *http.Request, code string) error {
 	}
 	return nil
 }
+
+// code issues a purpose-scoped email code under email/IP limits and returns an enumeration-resistant accepted response.
 func (s *Server) code(w http.ResponseWriter, r *http.Request) error {
 	var b struct {
 		Email   string
@@ -178,6 +193,8 @@ func (s *Server) code(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 202, map[string]bool{"ok": true})
 	return nil
 }
+
+// getOrCreateUser resolves the keyed email identity and creates an account with application-encrypted email when absent.
 func (s *Server) getOrCreateUser(ctx context.Context, em string) (auth, error) {
 	eh := s.mac("email:" + em)
 	var a auth
@@ -207,6 +224,8 @@ func (s *Server) getOrCreateUser(ctx context.Context, em string) (auth, error) {
 	}
 	return a, e
 }
+
+// issueSession creates a random Bearer token, persists only its hash and returns the plaintext token once.
 func (s *Server) issueSession(ctx context.Context, uid, name, plat string) (map[string]any, error) {
 	token := randomHex(32)
 	ts := now()
@@ -214,6 +233,8 @@ func (s *Server) issueSession(ctx context.Context, uid, name, plat string) (map[
 	_, e := s.DB.ExecContext(ctx, "INSERT INTO sessions(id,user_id,token_hash,device_name,platform,created_ms,last_seen_ms,expires_ms) VALUES(?,?,?,?,?,?,?,?)", randomHex(16), uid, digest([]byte(token)), deviceName(name), platform(plat), ts, ts, exp)
 	return map[string]any{"token": token, "expiresAt": exp, "userId": uid}, e
 }
+
+// verify consumes a login code, resolves the account and issues a device session.
 func (s *Server) verify(w http.ResponseWriter, r *http.Request) error {
 	var b struct{ Email, Code, DeviceName, Platform string }
 	if e := body(w, r, smallJSON, &b); e != nil {
@@ -246,6 +267,8 @@ func (s *Server) verify(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 200, v)
 	return nil
 }
+
+// sessions lists authenticated account sessions without returning token hashes or plaintext tokens.
 func (s *Server) sessions(w http.ResponseWriter, r *http.Request) error {
 	a := identity(r)
 	rows, e := s.DB.QueryContext(r.Context(), "SELECT id,device_name,platform,created_ms,last_seen_ms,expires_ms FROM sessions WHERE user_id=? AND revoked_ms IS NULL ORDER BY last_seen_ms DESC", a.UserID)
@@ -268,6 +291,8 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 200, map[string]any{"sessions": out})
 	return nil
 }
+
+// renameSession changes only the authenticated session device display name.
 func (s *Server) renameSession(w http.ResponseWriter, r *http.Request) error {
 	var b struct{ DeviceName string }
 	if e := body(w, r, smallJSON, &b); e != nil {
@@ -285,6 +310,8 @@ func (s *Server) renameSession(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 200, map[string]bool{"ok": true})
 	return nil
 }
+
+// revokeSession revokes the requested account-owned session, or the current session when no ID is supplied.
 func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) error {
 	a := identity(r)
 	id := param(r, "sessionID")
@@ -302,6 +329,8 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 200, map[string]bool{"ok": true})
 	return nil
 }
+
+// deleteUserObjects deletes encrypted attachment prefixes for all vaults owned by the account.
 func (s *Server) deleteUserObjects(ctx context.Context, uid string) error {
 	rows, e := s.DB.QueryContext(ctx, "SELECT vault_id FROM vaults WHERE user_id=?", uid)
 	if e != nil {
@@ -328,6 +357,8 @@ func (s *Server) deleteUserObjects(ctx context.Context, uid string) error {
 	}
 	return nil
 }
+
+// purgeUser clears account object storage before deleting account rows and recording a metadata-only audit action.
 func (s *Server) purgeUser(ctx context.Context, uid, eh string) error {
 	if e := s.deleteUserObjects(ctx, uid); e != nil {
 		return e
@@ -338,6 +369,8 @@ func (s *Server) purgeUser(ctx context.Context, uid, eh string) error {
 	_, e := s.DB.ExecContext(ctx, "DELETE FROM email_codes WHERE email_hmc=?", eh)
 	return e
 }
+
+// deregister requires a sensitive code and removes account data and sessions.
 func (s *Server) deregister(w http.ResponseWriter, r *http.Request) error {
 	var b struct{ Code string }
 	if e := body(w, r, smallJSON, &b); e != nil {

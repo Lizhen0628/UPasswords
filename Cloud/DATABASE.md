@@ -6,9 +6,9 @@
 
 UPasswords 没有本地 SQLite 数据库。原生客户端将领域模型序列化为 XML，再写入 AES-GCM 加密的 .upw 文件；主密码信封保存在同名 .upwkey 文件。同步游标和修订状态保存在 .upwsync 文件。浏览器扩展将逐条密文、信封和同步状态保存在 IndexedDB。
 
-云端生产 API 为 Cloud/api 中的 Go + chi 服务。MariaDB 存账户、会话、库注册表、条目密文、变更日志、附件元数据、改密暂存、审计记录和全局网站目录。附件密文与网站图标字节保存在 R2，不属于 MariaDB 表。Cloudflare Worker 回退实现使用同一套 MariaDB DDL。
+云端生产 API 为 Cloud/api 中的 Go + chi 服务。MariaDB 存账户、会话、库注册表、条目密文、变更日志、附件元数据、改密暂存、审计记录和全局网站目录。附件密文与网站图标字节保存在 R2，不属于 MariaDB 表。
 
-MariaDB 初始化 DDL 的唯一仓库副本为 [0001_init.sql](worker/sql/0001_init.sql)。该 SQL 包含下方列出的全部 12 张表。Go API 集成测试从此文件加载 schema。建库、业务账号和权限单独由部署流程创建，应用账号不应拥有 DDL 权限。
+MariaDB 初始化 DDL 的唯一仓库副本为 [0001_init.sql](database/0001_init.sql)。该 SQL 包含下方列出的全部 12 张表。Go API 集成测试从此文件加载 schema。建库、业务账号和权限单独由部署流程创建，应用账号不应拥有 DDL 权限。后续 schema 变更按序放入 `Cloud/database/`，已在生产应用的迁移不得改写。
 
 ## 设计约定
 
@@ -171,7 +171,7 @@ email_codes 通过 HMAC 邮箱键匹配用户，没有外键；这使首次注�
 | email_codes | 验证码状态；(email_hmc, purpose) 复合主键，限制每种用途一个当前验证码。保存键控 code_hash、IP 限流字段、有效期、尝试次数和使用时间。 |
 | sessions | 设备授权；id 主键，token_hash 唯一，user_id 外键级联。按 (user_id, expires_ms) 查询用户设备和有效期。数据库不保存原始 bearer token。 |
 | vaults | 用户密码库注册表；vault_id 主键，(user_id, name) 唯一，user_id 外键级联。保存信封、密码版本、head_seq、变更保留地板及配额计数。 |
-| vault_items | 卡片与标签的行级密文；(vault_id, item_uuid) 复合主键。按 (vault_id, updated_ms, item_uuid) 建索引，服务全量重建的 keyset 分页。当前 Go API 与 Worker 接受 kind=1 卡片、kind=2 标签。 |
+| vault_items | 卡片与标签的行级密文；(vault_id, item_uuid) 复合主键。按 (vault_id, updated_ms, item_uuid) 建索引，服务全量重建的 keyset 分页。当前 Go API 接受 kind=1 卡片、kind=2 标签。 |
 | item_changes | 增量同步变更日志；seq 全局自增主键，(vault_id, seq) 支持游标扫描。op=1 表示 upsert，op=2 表示永久删除，op=3 表示库级 rekey。 |
 | attachments | 附件密文登记；(vault_id, attach_uuid) 复合主键，按 (vault_id, card_uuid) 索引清理卡片附件。object_key 指向 R2，dek_wrapped 保存经 VEK 包裹的 DEK。 |
 | rekeys | 每库改密任务；rekey_id 主键，vault_id 外键级联并有索引。有效任务使普通写入进入 rekey 锁定状态。 |
@@ -192,7 +192,7 @@ email_codes 通过 HMAC 邮箱键匹配用户，没有外键；这使首次注�
 
 ## SQL
 
-完整、可重复执行的表结构定义见 [Cloud/worker/sql/0001_init.sql](worker/sql/0001_init.sql)。该文件假设目标数据库已创建，不包含生产口令或应用账号。首次部署时由 DBA 先执行数据库与最小权限账号初始化，再对目标库应用 DDL：
+完整、可重复执行的表结构定义见 [Cloud/database/0001_init.sql](database/0001_init.sql)。该文件假设目标数据库已创建，不包含生产口令或应用账号。首次部署时由 DBA 先执行数据库与最小权限账号初始化，再对目标库应用 DDL：
 
 ~~~sql
 CREATE DATABASE upasswords
@@ -206,7 +206,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON upasswords.* TO 'upw_app'@'%';
 在已有目标数据库上应用表结构：
 
 ~~~sh
-mysql --default-character-set=utf8mb4 upasswords < Cloud/worker/sql/0001_init.sql
+mysql --default-character-set=utf8mb4 upasswords < Cloud/database/0001_init.sql
 ~~~
 
 应用运行账号不授予 CREATE、ALTER、DROP 或 mysql.* 权限。生产端迁移和环境变量管理按 [Cloud/api/README.md](api/README.md) 执行；不要将真实凭据写入仓库。
@@ -223,7 +223,7 @@ mysql --default-character-set=utf8mb4 upasswords < Cloud/worker/sql/0001_init.sq
 
 | 事项 | 当前实现 | 待讨论的决策及影响 |
 |---|---|---|
-| 个人资料云同步 | Swift Core 与 RowSync 使用 `kind=3`；Go API、Worker 和 MariaDB DDL 只覆盖 `kind=1/2`，没有 `vault_user_profiles` 表。 | 决定扩展 `vault_items` 支持 kind=3，还是新增独立密文表；需要同步评估 API 校验、分页、冲突规则、契约、DDL 和客户端升级。 |
+| 个人资料云同步 | Swift Core 与 RowSync 使用 `kind=3`；已提交的 Go 基线只接受 `kind=1/2`。`database/0002_user_profiles.sql` 保留专用密文表及合并视图的增量迁移，配套 Go 实现仍在服务器未提交工作中。 | 发布配套实现时核对 API 校验、分页、冲突规则、契约、迁移及客户端升级；仅有迁移文件不代表功能已部署。 |
 | 原生附件云同步 | 原生图片/文件内嵌在本地 `.upw`；Go API 有附件登记与 R2 密文接口，原生客户端尚未打通上传、下载、删除和恢复流程。 | 决定是否纳入当前开发版本的验收范围；若纳入，需明确本地附件迁移、离线队列、R2 失败补偿、配额和跨设备恢复行为。 |
 | TOTP 账户列 | `users.totp_secret` 存在于 DDL，但当前账户 API 未实现 TOTP 二次验证，也未使用该列。 | 决定移除预留列、保留为未启用字段，或先确定密钥加密和账户恢复方案再实现；当前不可描述为可用安全能力。 |
-| DDL 维护入口 | 唯一 DDL 文件位于 `Cloud/worker/sql/0001_init.sql`，同时供 Go API 集成测试与生产部署使用。 | 决定继续以该文件为唯一 schema 真源，还是迁入与运行时无关的迁移目录；变更时需保证 Go API 和 Worker 回退实现兼容。 |
+| DDL 维护入口 | 初始化 DDL 与后续迁移位于 `Cloud/database/`，供 Go API 集成测试与生产部署使用。 | 新迁移按序新增；部署前验证兼容性并备份数据库，已应用迁移保持不可变。 |

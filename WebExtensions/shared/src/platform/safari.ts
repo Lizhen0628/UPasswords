@@ -13,6 +13,7 @@ declare const browser: {
     };
 };
 
+/** 连接 Safari browser 命名空间的共享浏览器适配接口。 */
 export const safariAdapter: BrowserAdapter = {
     kind: "safari",
     activeTabURL: async () => {

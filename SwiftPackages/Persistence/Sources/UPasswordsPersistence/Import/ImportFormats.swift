@@ -34,14 +34,19 @@ public enum ImportFormatFactory {
 /// SafeInCloud XML — accepts full `<database>` docs or a bare
 /// list of `<card>` elements. 同名卡与模板不重复导入,id 冲突时改派新 id。
 public struct SafeInCloudXMLFormat: ImportFormat {
+    /// 此导入源的稳定格式标识。
     public let id = "safeincloud-xml"
+    /// 此导入源在格式选择器中的展示名称。
     public let title = "XML (SafeInCloud)"
+    /// 此导入器建议的文件扩展名。
     public let fileExtension = "xml"
 
+    /// 通过此格式的表头或结构特征进行快速探测，完整错误由 parse 报告。
     public func canParse(_ text: String) -> Bool {
         text.contains("<database") || text.contains("<card")
     }
 
+    /// 按此格式的字段映射将记录导入工作副本；参数与错误约定见 ImportFormat。
     public func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int {
         let parsed = try PasswordDatabase.parse(Data(text.utf8))
         let existingIds = Set(db.cards.map(\.id))
@@ -59,15 +64,21 @@ public struct SafeInCloudXMLFormat: ImportFormat {
 
 /// Chrome/Brave/Edge/Opera/Firefox 导出的 CSV(列名基本一致,仅品牌名不同)。
 public struct ChromeFormat: ImportFormat {
+    /// 浏览器展示名，用于派生格式标识与标题。
     public let browser: String
+    /// 此导入源的稳定格式标识。
     public var id: String { "chrome-\(browser.lowercased())" }
+    /// 此导入源在格式选择器中的展示名称。
     public var title: String { browser }
+    /// 此导入器建议的文件扩展名。
     public let fileExtension = "csv"
 
+    /// 通过此格式的表头或结构特征进行快速探测，完整错误由 parse 报告。
     public func canParse(_ text: String) -> Bool {
         text.lowercased().contains("name") && text.lowercased().contains("username")
     }
 
+    /// 按此格式的字段映射将记录导入工作副本；参数与错误约定见 ImportFormat。
     public func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int {
         let imp = CSVImporter(
             id: id, title: title,
@@ -83,10 +94,15 @@ public struct ChromeFormat: ImportFormat {
 
 /// LastPass 导出的 CSV(extra 列映射到笔记)。
 public struct LastPassFormat: ImportFormat {
+    /// 此导入源的稳定格式标识。
     public let id = "lastpass"
+    /// 此导入源在格式选择器中的展示名称。
     public let title = "LastPass"
+    /// 此导入器建议的文件扩展名。
     public let fileExtension = "csv"
+    /// 通过此格式的表头或结构特征进行快速探测，完整错误由 parse 报告。
     public func canParse(_ text: String) -> Bool { text.lowercased().contains("url") && text.lowercased().contains("username") }
+    /// 按此格式的字段映射将记录导入工作副本；参数与错误约定见 ImportFormat。
     public func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int {
         let imp = CSVImporter(id: id, title: title, columnMap: [
             "name": ["name"], "login": ["username"], "password": ["password"],
@@ -98,10 +114,15 @@ public struct LastPassFormat: ImportFormat {
 
 /// Bitwarden 导出的 CSV:folder 列映射为标签(不存在则创建)。
 public struct BitwardenCsvFormat: ImportFormat {
+    /// 此导入源的稳定格式标识。
     public let id = "bitwarden-csv"
+    /// 此导入源在格式选择器中的展示名称。
     public let title = "Bitwarden (CSV)"
+    /// 此导入器建议的文件扩展名。
     public let fileExtension = "csv"
+    /// 通过此格式的表头或结构特征进行快速探测，完整错误由 parse 报告。
     public func canParse(_ text: String) -> Bool { text.lowercased().contains("login_uri") || text.lowercased().contains("folder") }
+    /// 按此格式的字段映射将记录导入工作副本；参数与错误约定见 ImportFormat。
     public func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int {
         var rows = CSV.rows(text)
         guard rows.count >= 2 else { throw ImportError.cannotParse }
@@ -149,10 +170,15 @@ public struct BitwardenCsvFormat: ImportFormat {
 /// Bitwarden 导出的 JSON:兼容未加密导出的 `items` 与 `vault.items` 两种形状,
 /// folderId 经 folders 表映射为标签,totp 列映射为一次性验证码字段。
 public struct BitwardenJsonFormat: ImportFormat {
+    /// 此导入源的稳定格式标识。
     public let id = "bitwarden-json"
+    /// 此导入源在格式选择器中的展示名称。
     public let title = "Bitwarden (JSON)"
+    /// 此导入器建议的文件扩展名。
     public let fileExtension = "json"
+    /// 通过此格式的表头或结构特征进行快速探测，完整错误由 parse 报告。
     public func canParse(_ text: String) -> Bool { text.contains("\"items\"") || text.contains("\"vault\"") }
+    /// 按此格式的字段映射将记录导入工作副本；参数与错误约定见 ImportFormat。
     public func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int {
         guard let data = text.data(using: .utf8),
               let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ImportError.cannotParse }
@@ -198,10 +224,15 @@ public struct BitwardenJsonFormat: ImportFormat {
 
 /// Dashlane 导出的 CSV(login 列可兼容 username/email)。
 public struct DashlaneCsvFormat: ImportFormat {
+    /// 此导入源的稳定格式标识。
     public let id = "dashlane-csv"
+    /// 此导入源在格式选择器中的展示名称。
     public let title = "Dashlane (CSV)"
+    /// 此导入器建议的文件扩展名。
     public let fileExtension = "csv"
+    /// 通过此格式的表头或结构特征进行快速探测，完整错误由 parse 报告。
     public func canParse(_ text: String) -> Bool { text.lowercased().contains("login") && text.lowercased().contains("password") }
+    /// 按此格式的字段映射将记录导入工作副本；参数与错误约定见 ImportFormat。
     public func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int {
         let imp = CSVImporter(id: id, title: title, columnMap: [
             "name": ["title", "name"], "login": ["login", "username", "email"],
@@ -213,10 +244,15 @@ public struct DashlaneCsvFormat: ImportFormat {
 
 /// 1Password 导出的 CSV。
 public struct OnePasswordCsvFormat: ImportFormat {
+    /// 此导入源的稳定格式标识。
     public let id = "1password-csv"
+    /// 此导入源在格式选择器中的展示名称。
     public let title = "1Password (CSV)"
+    /// 此导入器建议的文件扩展名。
     public let fileExtension = "csv"
+    /// 通过此格式的表头或结构特征进行快速探测，完整错误由 parse 报告。
     public func canParse(_ text: String) -> Bool { text.lowercased().contains("username") && text.lowercased().contains("password") }
+    /// 按此格式的字段映射将记录导入工作副本；参数与错误约定见 ImportFormat。
     public func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int {
         let imp = CSVImporter(id: id, title: title, columnMap: [
             "name": ["title", "name"], "login": ["username"], "password": ["password"],
@@ -228,10 +264,15 @@ public struct OnePasswordCsvFormat: ImportFormat {
 
 /// Safari/Passwords.app 导出的 CSV。
 public struct ApplePasswordsFormat: ImportFormat {
+    /// 此导入源的稳定格式标识。
     public let id = "apple-passwords"
+    /// 此导入源在格式选择器中的展示名称。
     public let title = "Safari / Apple Passwords"
+    /// 此导入器建议的文件扩展名。
     public let fileExtension = "csv"
+    /// 通过此格式的表头或结构特征进行快速探测，完整错误由 parse 报告。
     public func canParse(_ text: String) -> Bool { text.lowercased().contains("username") }
+    /// 按此格式的字段映射将记录导入工作副本；参数与错误约定见 ImportFormat。
     public func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int {
         let imp = CSVImporter(id: id, title: title, columnMap: [
             "name": ["title"], "login": ["username"], "password": ["password"],
@@ -243,10 +284,15 @@ public struct ApplePasswordsFormat: ImportFormat {
 
 /// NordPass 导出的 CSV。
 public struct NordPassFormat: ImportFormat {
+    /// 此导入源的稳定格式标识。
     public let id = "nordpass"
+    /// 此导入源在格式选择器中的展示名称。
     public let title = "NordPass"
+    /// 此导入器建议的文件扩展名。
     public let fileExtension = "csv"
+    /// 通过此格式的表头或结构特征进行快速探测，完整错误由 parse 报告。
     public func canParse(_ text: String) -> Bool { text.lowercased().contains("username") }
+    /// 按此格式的字段映射将记录导入工作副本；参数与错误约定见 ImportFormat。
     public func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int {
         let imp = CSVImporter(id: id, title: title, columnMap: [
             "name": ["name"], "login": ["username"], "password": ["password"],
@@ -258,10 +304,15 @@ public struct NordPassFormat: ImportFormat {
 
 /// Proton Pass 导出的 CSV(username/email 双列名兼容)。
 public struct ProtonPassFormat: ImportFormat {
+    /// 此导入源的稳定格式标识。
     public let id = "protonpass"
+    /// 此导入源在格式选择器中的展示名称。
     public let title = "Proton Pass"
+    /// 此导入器建议的文件扩展名。
     public let fileExtension = "csv"
+    /// 通过此格式的表头或结构特征进行快速探测，完整错误由 parse 报告。
     public func canParse(_ text: String) -> Bool { text.lowercased().contains("username") || text.lowercased().contains("email") }
+    /// 按此格式的字段映射将记录导入工作副本；参数与错误约定见 ImportFormat。
     public func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int {
         let imp = CSVImporter(id: id, title: title, columnMap: [
             "name": ["name", "title"], "login": ["username", "email"], "password": ["password"],
@@ -273,10 +324,15 @@ public struct ProtonPassFormat: ImportFormat {
 
 /// KeePass/KeePassXC 导出的 CSV(title/account 双列名兼容)。
 public struct KeePassFormat: ImportFormat {
+    /// 此导入源的稳定格式标识。
     public let id = "keepass"
+    /// 此导入源在格式选择器中的展示名称。
     public let title = "KeePass / KeePassXC"
+    /// 此导入器建议的文件扩展名。
     public let fileExtension = "csv"
+    /// 通过此格式的表头或结构特征进行快速探测，完整错误由 parse 报告。
     public func canParse(_ text: String) -> Bool { text.lowercased().contains("password") }
+    /// 按此格式的字段映射将记录导入工作副本；参数与错误约定见 ImportFormat。
     public func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int {
         let imp = CSVImporter(id: id, title: title, columnMap: [
             "name": ["title", "account", "name"], "login": ["login", "username"],
@@ -288,10 +344,15 @@ public struct KeePassFormat: ImportFormat {
 
 /// Keeper 导出的 CSV。
 public struct KeeperFormat: ImportFormat {
+    /// 此导入源的稳定格式标识。
     public let id = "keeper"
+    /// 此导入源在格式选择器中的展示名称。
     public let title = "Keeper"
+    /// 此导入器建议的文件扩展名。
     public let fileExtension = "csv"
+    /// 通过此格式的表头或结构特征进行快速探测，完整错误由 parse 报告。
     public func canParse(_ text: String) -> Bool { text.lowercased().contains("login") }
+    /// 按此格式的字段映射将记录导入工作副本；参数与错误约定见 ImportFormat。
     public func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int {
         let imp = CSVImporter(id: id, title: title, columnMap: [
             "name": ["title", "record_type"], "login": ["login"], "password": ["password"],
@@ -303,10 +364,15 @@ public struct KeeperFormat: ImportFormat {
 
 /// RoboForm 导出的 CSV(密码列名为 pwd)。
 public struct RoboFormFormat: ImportFormat {
+    /// 此导入源的稳定格式标识。
     public let id = "roboform"
+    /// 此导入源在格式选择器中的展示名称。
     public let title = "RoboForm"
+    /// 此导入器建议的文件扩展名。
     public let fileExtension = "csv"
+    /// 通过此格式的表头或结构特征进行快速探测，完整错误由 parse 报告。
     public func canParse(_ text: String) -> Bool { text.lowercased().contains("login") || text.lowercased().contains("pwd") }
+    /// 按此格式的字段映射将记录导入工作副本；参数与错误约定见 ImportFormat。
     public func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int {
         let imp = CSVImporter(id: id, title: title, columnMap: [
             "name": ["name"], "login": ["login"], "password": ["pwd", "password"],
@@ -318,10 +384,15 @@ public struct RoboFormFormat: ImportFormat {
 
 /// CommonCsvFormat — best-effort generic CSV with header detection.
 public struct CommonCsvFormat: ImportFormat {
+    /// 此导入源的稳定格式标识。
     public let id = "csv"
+    /// 此导入源在格式选择器中的展示名称。
     public let title = "CSV"
+    /// 此导入器建议的文件扩展名。
     public let fileExtension = "csv"
+    /// 通过此格式的表头或结构特征进行快速探测，完整错误由 parse 报告。
     public func canParse(_ text: String) -> Bool { text.contains(",") && text.contains("\n") }
+    /// 按此格式的字段映射将记录导入工作副本；参数与错误约定见 ImportFormat。
     public func parse(_ text: String, into db: inout PasswordDatabase, now: Date) throws -> Int {
         let imp = CSVImporter(id: id, title: title, columnMap: [
             "name": ["name", "title", "account"],

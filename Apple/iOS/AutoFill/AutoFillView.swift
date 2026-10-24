@@ -4,6 +4,7 @@ import UPasswordsCore
 
 // MARK: - AutoFill 扩展界面(品牌深色体系,复用共享组件)
 
+/// 根据扩展模型阶段呈现建库提示、解锁表单或凭据候选。
 struct AutoFillRootView: View {
     @ObservedObject var model: AutoFillModel
 

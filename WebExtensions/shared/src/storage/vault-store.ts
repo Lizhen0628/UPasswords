@@ -1,5 +1,6 @@
 /**
- * browser.storage.local wrapper holding the unlocked extension snapshot.
+ * 兼容旧式 browser.storage.local 快照的存取与清理。
+ * 当前生产解锁流程使用 unlock-session；不要把此模块当作新明文持久化入口。
  *
  * 安全模型:明文条目只允许短驻留——TTL 过期后读取即自毁(空闲自动锁定);
  * 浏览器重启/扩展更新由 background 主动清空。令牌/会话由调用方管理,
@@ -36,6 +37,7 @@ function resolveArea(): BrowserStorageArea | null {
     return ns.browser?.storage?.local ?? ns.chrome?.storage?.local ?? null;
 }
 
+/** 写入旧式明文快照并记录 TTL 起点；新解锁流程使用 unlock-session。 */
 export async function saveItems(items: ExtensionItem[]): Promise<void> {
     const area = resolveArea();
     if (!area) {
@@ -44,6 +46,7 @@ export async function saveItems(items: ExtensionItem[]): Promise<void> {
     await area.set({ [itemsKey]: items, [updatedAtKey]: Date.now() });
 }
 
+/** 读取旧式快照，超时则先清除再返回空数组；不延长快照时限。 */
 export async function loadItems(): Promise<ExtensionItem[]> {
     const area = resolveArea();
     if (!area) {
@@ -90,6 +93,7 @@ export async function clearItems(): Promise<void> {
     await area.set({ [itemsKey]: null, [updatedAtKey]: 0 });
 }
 
+/** 读取旧式快照的更新时间，单位为 Unix 毫秒；未配置或缺失时返回 0。 */
 export async function updatedAt(): Promise<number> {
     const area = resolveArea();
     if (!area) {

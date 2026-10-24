@@ -1,7 +1,7 @@
 /**
  * Data contract between the extension front end and the native app.
  * Mirrors Contracts/schemas/upw-database.schema.json (Card/Field shapes);
- * never carry plaintext secrets beyond the fill moment.
+ * 明文只在可信解锁会话与用户主动填充期间使用；持久化缓存仅保存密文。
  */
 
 /** Field types — same vocabulary as the database XML `type` attribute. */
@@ -42,6 +42,7 @@ export type ExtensionAutofill =
     | "cc-exp"
     | "cc-csc";
 
+/** 扩展使用的字段投影，value 为明文，只在可信解锁会话和主动填充时消费。 */
 export interface ExtensionField {
     name: string;
     type: ExtensionFieldType;
@@ -75,6 +76,7 @@ export type FillItem = Omit<ExtensionItem, "source" | "notes"> & {
     notes?: never;
 };
 
+/** 一次主动填充的候选及提取出的登录凭据，不得加入日志。 */
 export interface FillCandidate {
     item: FillItem;
     username: string;

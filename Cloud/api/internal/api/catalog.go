@@ -1,3 +1,4 @@
+// 公开站点目录和泄露前缀代理；查询域名和哈希前缀不写入请求日志。
 package api
 
 import (
@@ -13,6 +14,7 @@ import (
 var domainPattern = regexp.MustCompile("^[a-z0-9.-]+$")
 var prefixPattern = regexp.MustCompile("(?i)^[0-9a-f]{5}$")
 
+// domain normalizes an input hostname or URL for public catalog lookup; it is not a general public-suffix parser.
 func domain(v string) string {
 	v = strings.TrimSpace(lower(v))
 	if strings.Contains(v, "://") {
@@ -31,6 +33,8 @@ func domain(v string) string {
 	}
 	return v
 }
+
+// siteLookup resolves public catalog metadata without logging the queried domain.
 func (s *Server) siteLookup(w http.ResponseWriter, r *http.Request) error {
 	d := domain(r.URL.Query().Get("domain"))
 	if d == "" {
@@ -77,6 +81,8 @@ func (s *Server) siteLookup(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 200, map[string]any{"siteId": id, "domain": d, "primaryDomain": pd, "nameZh": stringOrNil(nameZH), "nameEn": nameEN, "homeUrl": stringOrNil(home), "icon": icon})
 	return nil
 }
+
+// siteIcon streams a digest-addressed public icon with content caching headers.
 func (s *Server) siteIcon(w http.ResponseWriter, r *http.Request) error {
 	sha := lower(param(r, "sha256"))
 	if !hashPattern.MatchString(sha) {
@@ -97,6 +103,8 @@ func (s *Server) siteIcon(w http.ResponseWriter, r *http.Request) error {
 	_, e = io.Copy(w, stream)
 	return e
 }
+
+// sitePut validates administrator-supplied catalog entries and bounds downloaded icon payloads.
 func (s *Server) sitePut(w http.ResponseWriter, r *http.Request) error {
 	var b struct {
 		Sites []struct {
@@ -197,6 +205,8 @@ func (s *Server) sitePut(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 200, map[string]any{"ok": true, "upserted": len(b.Sites)})
 	return nil
 }
+
+// breach forwards only a validated five-character SHA-1 prefix to the range service; neither password nor full hash is accepted.
 func (s *Server) breach(w http.ResponseWriter, r *http.Request) error {
 	p := param(r, "prefix")
 	if !prefixPattern.MatchString(p) {

@@ -4,6 +4,7 @@ import UPasswordsNetworking
 
 // MARK: - SheetFactory
 
+/// 将 AppSheet 路由映射为具体弹层视图的统一登记入口。
 enum SheetFactory {
     @ViewBuilder
     static func view(for sheet: AppSheet) -> some View {

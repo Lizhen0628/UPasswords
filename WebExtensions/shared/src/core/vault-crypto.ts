@@ -20,6 +20,7 @@ import type { ExtensionItem } from "./types.js";
 const ENVELOPE_MAGIC = [0x55, 0x50, 0x57, 0x4b, 0x45, 0x59, 0x31, 0x00];
 const BODY_MAGIC = [0x55, 0x50, 0x57, 0x44, 0x42, 0x32, 0x00, 0x00];
 
+/** 密码库容器、密钥或 XML 校验失败的机器可识别错误。 */
 export class VaultCryptoError extends Error {
     constructor(message: string) {
         super(message);

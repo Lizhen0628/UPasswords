@@ -101,7 +101,7 @@ func testServer(t *testing.T) (*Server, *testMailer) {
 	if !strings.HasSuffix(dbName, "_test") {
 		t.Fatal("refusing integration tests against a non-test database")
 	}
-	schema, e := os.ReadFile(filepath.Join("..", "..", "..", "worker", "sql", "0001_init.sql"))
+	schema, e := os.ReadFile(filepath.Join("..", "..", "..", "database", "0001_init.sql"))
 	if e != nil {
 		t.Fatal(e)
 	}

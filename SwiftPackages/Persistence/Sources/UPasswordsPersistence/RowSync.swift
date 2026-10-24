@@ -10,10 +10,11 @@ import UPasswordsCore
 //
 // 条目体加密:AES-GCM(VEK),AAD 绑定条目 uuid(行搬运防护,§3.1);
 // 密文布局 = nonce(12) + ct + tag(16)。
-// 隐私红线:引擎只经手条目密文、uuid 与 revision;日志只记计数/耗时/结果。
+// 隐私边界:引擎在内存中编解码明文条目;日志只记计数、身份、耗时与结果。
 
 /// 同步游标与脏集合的持久化 sidecar(`<名>.upwsync`,JSON,无敏感值)。
 public struct RowSyncState: Codable, Equatable {
+    /// 最后已应用的库级变更序列；须与对应数据库快照一起提交。
     public var cursor: Int = 0
     /// 各条目已知的服务端 revision(baseRevision 来源;上行的 CAS 令牌)。
     public var revisions: [UUID: UInt64] = [:]
@@ -25,6 +26,7 @@ public struct RowSyncState: Codable, Equatable {
     /// 崩溃安全:重启后未上行的修改仍会被差分出来)。
     public var syncedMtimes: [UUID: TimeInterval] = [:]
 
+    /// 创建尚未同步的空游标、版本和脏集合。
     public init() {}
 
     /// 快照差分采集脏集合:与 syncedMtimes 比对,新改/新增入 upserts,
@@ -53,22 +55,32 @@ public struct RowSyncState: Codable, Equatable {
         dirtyDeletes[uuid] = ms
     }
 
+    /// 是否仍有待上行的修改或永久删除。
     public var hasPendingWork: Bool { !dirtyUpserts.isEmpty || !dirtyDeletes.isEmpty }
 }
 
 /// 增量/重建结果(供 UI 呈现同步状态)。
 public struct RowSyncOutcome: Equatable {
+    /// 实际改变本地内容的下行条目数，排除已知版本的回声。
     public var pulledItems = 0
+    /// 本轮服务端确认成功的上行操作数。
     public var pushedItems = 0
+    /// 本轮已收敛的冲突或远端删除数。
     public var conflictsResolved = 0
+    /// 本轮获知的服务端变更高水位。
     public var headSeq = 0
+    /// 创建全部统计为零的同步结果。
     public init() {}
 }
 
 /// 对端改密信号:password_version 前进,本端旧 VEK 将解不开新密文,
 /// 调用方应强制锁定并引导用户输入新密码后走全量重建(§6.5 步骤 5)。
 public struct RowSyncRekeySignal: Error, Equatable {
+    /// 触发重新解锁的远端密码版本。
     public let passwordVersion: Int
+    /// 创建需要重新解锁的远端改密信号。
+    ///
+    /// - Parameter passwordVersion: 服务端最新密码版本。
     public init(passwordVersion: Int) {
         self.passwordVersion = passwordVersion
     }
@@ -84,6 +96,7 @@ public struct RowSyncKey: Equatable {
     }
 }
 
+/// 同步条目的 AES-GCM 编解码，使用 UUID 字符串绑定认证附加数据。
 public enum RowSyncCipher {
     /// AES-GCM(VEK) 加密条目体;AAD 绑定条目 uuid。
     public static func encrypt(_ plaintext: Data, key: RowSyncKey, uuid: UUID) throws -> Data {
@@ -114,12 +127,25 @@ public enum RowSyncCipher {
     }
 }
 
+/// 对调用方传入的数据库与同步状态执行增量收敛的无持久化引擎。
+///
+/// 异步过程可能在失败前修改 inout 值。会话层应在局部副本上运行，
+/// 完成会话有效性检查后，经 DatabaseStore.commitSyncSnapshot 一起持久化。
 public enum RowSync {
 
     // MARK: - 下行(游标增量,§6.3)
 
-    /// 拉取并应用变更直到追平 headSeq。
-    /// - Throws: cursorExpired(调用方走全量重建)、RowSyncRekeySignal(对端改密)
+    /// 分页拉取并应用变更，追平 headSeq 或达到 200 页上限后返回。
+    ///
+    /// - Parameters:
+    ///   - client: 行级同步 API 客户端。
+    ///   - token: 当前账户的 Bearer 令牌。
+    ///   - vaultId: 已绑定的远端库身份。
+    ///   - key: 当前库的条目加密密钥。
+    ///   - database: 局部数据库副本，按条目更新。
+    ///   - state: 与数据库配对的局部游标和修订基线。
+    /// - Returns: 本轮应用统计；调用方须检查游标判断是否完全追平。
+    /// - Throws: 网络或协议错误、游标过期，或需重新解锁的 RowSyncRekeySignal。
     @discardableResult
     public static func pull(client: RelayClient, token: String, vaultId: String, key: RowSyncKey,
                             database: inout PasswordDatabase, state: inout RowSyncState) async throws -> RowSyncOutcome {
@@ -238,7 +264,17 @@ public enum RowSync {
 
     // MARK: - 上行(批量 CAS,§6.2)
 
-    /// 推送脏集合(修改 + 删除);冲突就地在端上按 LWW/删除胜合并后重试(至多 3 轮)。
+    /// 推送脏集合(修改 + 删除);冲突就地在端上按 LWW/删除胜合并；每批最多 200 项，最多处理 50 批。
+    ///
+    /// - Parameters:
+    ///   - client: 行级同步 API 客户端。
+    ///   - token: 当前账户的 Bearer 令牌。
+    ///   - vaultId: 已绑定的远端库身份。
+    ///   - key: 当前库的条目加密密钥。
+    ///   - database: 已采集脏集合的局部数据库副本，可能按冲突结果更新。
+    ///   - state: 待推送集合与已确认版本；成功操作从脏集合移除。
+    /// - Returns: 已确认的推送和冲突统计；达到批次上限时可能仍有待推送项。
+    /// - Throws: 加密、网络或协议错误；失败前已确认的远端写入不会回滚。
     @discardableResult
     public static func push(client: RelayClient, token: String, vaultId: String, key: RowSyncKey,
                             database: inout PasswordDatabase, state: inout RowSyncState) async throws -> RowSyncOutcome {
@@ -336,6 +372,16 @@ public enum RowSync {
 
     /// 新设备恢复 / 游标过期 / 手动修复:分页拉全部条目重建本地库。
     /// 完成后游标对齐重建开始时的 headSeq(重建期间的并发写由随后的增量补齐)。
+    ///
+    /// 最多读取 1000 页；无法解密或解析的条目会记录并跳过。
+    /// - Parameters:
+    ///   - client: 行级同步 API 客户端。
+    ///   - token: 当前账户的 Bearer 令牌。
+    ///   - vaultId: 要恢复的远端库身份。
+    ///   - key: 与远端信封对应的库密钥。
+    ///   - state: 重置为重建结果的版本基线、空脏集合和起始游标。
+    /// - Returns: 从可解码远端条目组成的数据库值，调用方负责后续增量和持久化。
+    /// - Throws: 获取序列或分页请求时的网络、鉴权和协议错误。
     public static func fullRebuild(client: RelayClient, token: String, vaultId: String, key: RowSyncKey,
                                    state: inout RowSyncState) async throws -> PasswordDatabase {
         let startedAt = Date()
@@ -374,7 +420,16 @@ public enum RowSync {
     // MARK: - 改密 rekey(§6.5)
 
     /// 改密上行:全部条目按新 VEK 重加密分块上传,终批原子切换。
-    /// - Parameter newEnvelope: 新密码包裹新 VEK 的 .upwkey 信封字节
+    ///
+    /// - Parameters:
+    ///   - client: 支持 rekey 事务的 API 客户端。
+    ///   - token: 当前账户的 Bearer 令牌。
+    ///   - vaultId: 目标远端库身份。
+    ///   - database: 要重加密的完整本地数据库快照。
+    ///   - newKey: 本轮新库密钥。
+    ///   - newEnvelope: 新密码包裹新库密钥的 .upwkey 信封字节。
+    ///   - state: 远端提交成功后重置游标和 revision，供下次对账。
+    /// - Throws: 加密、网络或 rekey 协议错误；调用方负责失败恢复与本地提交。
     public static func rekey(client: RelayClient, token: String, vaultId: String,
                              database: PasswordDatabase, newKey: RowSyncKey, newEnvelope: Data,
                              state: inout RowSyncState) async throws {
@@ -403,7 +458,10 @@ public enum RowSync {
         Log.info("sync", "rowsync rekey committed (\(items.count) item(s))")
     }
 
-    /// 全部条目(卡片 + 标签)。
+    /// 按卡片、标签、个人资料的顺序返回全部同步条目。
+    ///
+    /// - Parameter database: 已解锁的数据库值。
+    /// - Returns: 条目值副本；包含模板、归档和回收站中的卡片。
     public static func allItems(database: PasswordDatabase) -> [DatabaseItem] {
         database.cards.map(DatabaseItem.card) + database.labels.map(DatabaseItem.label)
             + database.userProfiles.map(DatabaseItem.userProfile)

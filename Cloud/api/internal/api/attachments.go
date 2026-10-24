@@ -1,3 +1,4 @@
+// 附件密文的暂存、校验、发布与下载；R2 与 SQL 不共享事务。
 package api
 
 import (
@@ -10,6 +11,8 @@ import (
 
 func lower(v string) string          { return strings.ToLower(v) }
 func attachPrefix(vid string) string { return "vaults/" + vid + "/attachments/" }
+
+// attachmentPut stores a bounded encrypted upload under a temporary object key; it does not publish a database reference.
 func (s *Server) attachmentPut(w http.ResponseWriter, r *http.Request) error {
 	vid := param(r, "vaultID")
 	if _, e := loadVault(r.Context(), s.DB, identity(r).UserID, vid, false); e != nil {
@@ -60,6 +63,9 @@ func (s *Server) attachmentPut(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 200, map[string]any{"ok": true, "received": len(raw)})
 	return nil
 }
+
+// attachmentCommit verifies staged size and digest, writes an immutable object, then transactionally publishes its reference.
+// Object storage is outside the SQL transaction; interrupted or replaced objects are reclaimed by maintenance.
 func (s *Server) attachmentCommit(w http.ResponseWriter, r *http.Request) error {
 	a := identity(r)
 	vid := param(r, "vaultID")
@@ -141,6 +147,8 @@ func (s *Server) attachmentCommit(w http.ResponseWriter, r *http.Request) error 
 	writeJSON(w, 200, map[string]any{"ok": true, "bytes": len(raw)})
 	return nil
 }
+
+// attachmentGet authorizes the vault owner and streams ciphertext from the referenced immutable object.
 func (s *Server) attachmentGet(w http.ResponseWriter, r *http.Request) error {
 	vid := param(r, "vaultID")
 	if _, e := loadVault(r.Context(), s.DB, identity(r).UserID, vid, false); e != nil {
@@ -174,6 +182,8 @@ func (s *Server) attachmentGet(w http.ResponseWriter, r *http.Request) error {
 	_, e = io.Copy(w, stream)
 	return e
 }
+
+// attachmentDelete removes the database reference and adjusts quota before deleting the encrypted object.
 func (s *Server) attachmentDelete(w http.ResponseWriter, r *http.Request) error {
 	a := identity(r)
 	vid := param(r, "vaultID")

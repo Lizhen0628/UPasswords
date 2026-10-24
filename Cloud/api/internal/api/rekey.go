@@ -1,3 +1,4 @@
+// 库密钥轮换的暂存会话、分块与事务提交；普通写入在轮换期间拒绝。
 package api
 
 import (
@@ -6,11 +7,13 @@ import (
 	"net/http"
 )
 
+// rekey is the locked staging manifest for a pending key rotation; counts are verified again at commit.
 type rekey struct {
 	ID, Envelope                                         string
 	Version, Items, Deks, ItemStaged, DekStaged, Expires int64
 }
 
+// loadRekey locks a vault-scoped manifest and rejects missing or expired staging sessions.
 func loadRekey(r *http.Request, t *sql.Tx, vid, rid string) (rekey, error) {
 	var k rekey
 	if !idPattern.MatchString(rid) {
@@ -25,6 +28,8 @@ func loadRekey(r *http.Request, t *sql.Tx, vid, rid string) (rekey, error) {
 	}
 	return k, e
 }
+
+// rekeyBegin records the new encrypted envelope and expected counts while holding the vault write lock.
 func (s *Server) rekeyBegin(w http.ResponseWriter, r *http.Request) error {
 	var b struct {
 		Envelope            string
@@ -69,9 +74,13 @@ func (s *Server) rekeyBegin(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// rekeyItem carries replacement ciphertext and its digest; the current row supplies the authoritative record kind.
 type rekeyItem struct{ UUID, BodyB64, SHA256 string }
+
+// rekeyDEK carries an attachment key wrapper, not a plaintext data-encryption key.
 type rekeyDEK struct{ UUID, DekB64 string }
 
+// rekeyChunk idempotently stages encrypted rows and attachment wrappers, then renews the staging expiry.
 func (s *Server) rekeyChunk(w http.ResponseWriter, r *http.Request) error {
 	var b struct {
 		Items    []rekeyItem
@@ -154,6 +163,8 @@ func (s *Server) rekeyChunk(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 200, map[string]any{"itemStaged": ni, "dekStaged": nd})
 	return nil
 }
+
+// rekeyCommit verifies counts and current identities before atomically replacing rows, envelope and password version.
 func (s *Server) rekeyCommit(w http.ResponseWriter, r *http.Request) error {
 	var b map[string]any
 	if e := body(w, r, smallJSON, &b); e != nil {
@@ -226,6 +237,8 @@ func (s *Server) rekeyCommit(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 200, map[string]any{"ok": true, "passwordVersion": version})
 	return nil
 }
+
+// rekeyAbort removes the pending manifest and staged payloads without changing live ciphertext.
 func (s *Server) rekeyAbort(w http.ResponseWriter, r *http.Request) error {
 	a := identity(r)
 	vid := param(r, "vaultID")

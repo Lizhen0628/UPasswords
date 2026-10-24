@@ -192,6 +192,7 @@ extension View {
     }
 }
 
+/// 将操作提示状态叠加到调用方视图，不持有密码库。
 private struct ToastActivityModifier: ViewModifier {
     @EnvironmentObject var ctx: AppContext
     @EnvironmentObject var toast: AppToast

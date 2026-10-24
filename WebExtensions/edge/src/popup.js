@@ -1,3 +1,6 @@
+// 职责：邮箱授权、密码库解锁、密文同步、条目编辑与用户主动填充。
+// 异步边界：operationGeneration 和解锁 generation 共同阻止旧结果写回新会话。
+// 数据边界：持久化缓存只存密文；详情草稿和生成密码仅由当前弹窗持有。
 // Relay authentication stays on disk; unlocked entries live only in the trusted browser session.
 import {
     base64ToBytes,
@@ -477,6 +480,7 @@ function projectFragments(fragments) {
     return items;
 }
 
+/** 通过主密码解封库密钥，再验证密文快照并建立可信后台会话。 */
 async function unlock() {
     let password = passwordInput.value;
     if (!password || unlockButton.disabled) return;
@@ -612,6 +616,7 @@ async function markCloudSessionExpired(context, operation, generation) {
     return expiredOperation === operationGeneration;
 }
 
+/** 对当前解锁代次执行同步；先验证并提交密文快照，再更新明文投影。 */
 async function syncVault(auto = false) {
     if (unlockedItems === null || syncInFlight || detailEditing || detailSaving || currentView === "new-login" || newLoginSaving) return;
     if (auto && Date.now() - lastSyncAttempt < SYNC_INTERVAL_MS) return;
@@ -936,6 +941,7 @@ async function quickFillCurrentSite() {
     }
 }
 
+/** 在点击时重新确认当前页面与会话有效性，只注入本次填充所需字段。 */
 async function fill(candidate, li) {
     const profile = isPersonalInfoItem(candidate.item);
     if (!tab?.id || !/^https?:\/\//i.test(pageUrl)
@@ -1204,6 +1210,7 @@ async function openItemDetail(id, editing = false) {
     }
 }
 
+/** 使用详情打开时的 XML 与 CAS revision 保存编辑；冲突不自动覆盖重试。 */
 async function saveItemDetail() {
     if (!detailEditing || detailSaving || !detailItem?.source || !selectedItemId) return;
     let password = detailPasswordInput.value;
@@ -1608,6 +1615,7 @@ function clearNewLoginForm() {
 
 // MARK: - 状态渲染
 
+/** 根据当前授权和解锁状态渲染弹窗；异步结果须仍属于当前渲染代次。 */
 async function render() {
     const rendering = ++renderGeneration;
     const operation = operationGeneration;
@@ -1722,6 +1730,7 @@ function updateSyncSummary() {
     document.getElementById("settingsSyncStatus").textContent = text;
 }
 
+/** 保存邮箱登录表单草稿，供弹窗失焦重开后恢复；不保存主密码。 */
 async function saveDraft() {
     await storageSet({ [DRAFT_KEY]: { email: emailInput.value, code: codeInput.value } });
 }
@@ -1913,6 +1922,7 @@ function clearUnlockedView() {
     suggestionsEl.replaceChildren();
 }
 
+/** 主动失效当前解锁会话，并清除弹窗持有的明文与编辑状态。 */
 async function lockSession() {
     operationGeneration += 1;
     unlockButton.disabled = false;

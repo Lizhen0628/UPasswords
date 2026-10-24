@@ -5,6 +5,7 @@ import UPasswordsCore
 
 // MARK: - 条目详情
 
+/// 按卡片身份从当前会话读取详情，并维护本视图的临时明文揭示状态。
 struct CardDetailView: View {
     @EnvironmentObject var vault: Vault
     let cardID: UUID
@@ -552,6 +553,7 @@ struct PasskeyRowView: View {
 
 // MARK: - 附件图片预览
 
+/// 将选定附件导出为临时预览内容的展示容器。
 struct AttachmentPreviewSheet: View {
     let attachment: Attachment
     @Environment(\.dismiss) private var dismiss

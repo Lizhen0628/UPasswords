@@ -1,3 +1,4 @@
+// MariaDB 连接与 TLS 校验；连接配置来自部署环境，不在源码保存凭据。
 package api
 
 import (

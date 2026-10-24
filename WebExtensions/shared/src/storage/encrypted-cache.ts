@@ -1,11 +1,13 @@
 import { RELAY_BASE_URL, isValidRelayItemRow, type RelayItemRow } from "../api/relay.js";
 
+/** 密文缓存隔离身份，由 API origin、账户 ID 与库 ID 共同决定。 */
 export interface CacheScope {
     userId: string;
     vaultId: string;
     origin?: string;
 }
 
+/** 可持久化的完整密文快照；禁止加入主密码、库密钥或解密片段。 */
 export interface EncryptedSnapshot {
     scope: CacheScope;
     envelope: string;
@@ -16,14 +18,20 @@ export interface EncryptedSnapshot {
     rows: RelayItemRow[];
 }
 
+/** 原子密文快照存储；version 防止并发覆盖，accountEpoch 防止登出后旧任务复写。 */
 export interface EncryptedCache {
+    /** 读取并验证快照；损坏记录应拒绝，不能当作合法空库。 */
     read(scope: CacheScope): Promise<EncryptedSnapshot | null>;
+    /** 在同一 IndexedDB 事务内检查预期版本和账户 epoch 后替换整份快照。 */
     commit(
         snapshot: Omit<EncryptedSnapshot, "version">,
         expectedVersion: number | null,
     ): Promise<EncryptedSnapshot>;
+    /** 删除该账户快照并推进 epoch，使先前在途任务无法提交。 */
     removeAccount(userId: string): Promise<void>;
+    /** 获取账户失效代次；应在发起网络工作前捕获。 */
     getEpoch(scope: CacheScope): Promise<number>;
+    /** 关闭连接并使此实例停止接受后续数据库工作。 */
     close(): void;
 }
 

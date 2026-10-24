@@ -2,6 +2,7 @@ import { safeWebsiteUrl } from "./domain.js";
 import type { ExtensionItem } from "./types.js";
 import { VaultCryptoError } from "./vault-crypto.js";
 
+/** 对现有卡片的可编辑投影；fieldValues 顺序必须与来源字段一致。 */
 export interface ItemEdit {
     title: string;
     fieldValues: string[];
@@ -18,6 +19,7 @@ interface EditableCard {
     note: Element | undefined;
 }
 
+/** 创建独立登录卡片所需的明文输入，不包含既有行的版本信息。 */
 export interface NewLoginItem {
     id: string;
     title: string;

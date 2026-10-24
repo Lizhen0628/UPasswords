@@ -1,3 +1,4 @@
+/** 随机密码的长度和字符类别配置；实际边界由生成函数校验。 */
 export interface PasswordGeneratorOptions {
     length: number;
     uppercase: boolean;

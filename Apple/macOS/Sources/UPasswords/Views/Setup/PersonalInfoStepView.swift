@@ -1,6 +1,7 @@
 import SwiftUI
 import UPasswordsCore
 
+/// 建库引导中的个人资料草稿表单；库可用后由会话层统一保存。
 struct PersonalInfoStepView: View {
     @Binding var draft: PersonalInfoDraft
     var onContinue: () -> Void

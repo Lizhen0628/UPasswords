@@ -13,6 +13,10 @@ import UPasswordsNetworking
 // 数据落在 SharedVaultStore(App Group 容器)里的加密容器;
 // 主密码经钥匙串存取(PasswordStore),解锁期间仅在内存持有。
 
+/// iOS 主 actor 会话，持有解锁数据库、密钥、偏好和同步任务状态。
+///
+/// 视图应通过本类型的方法提交数据变更；App Group 存储由 SharedVaultStore 注入。
+/// 跨 await 的同步结果须核对 syncSessionID、库名和密钥后才可提交。
 @MainActor
 final class Vault: ObservableObject {
     static let shared = Vault()
@@ -218,6 +222,10 @@ final class Vault: ObservableObject {
         }
     }
 
+    /// 从本地信封与库体解锁当前库，成功后装载会话并启动后续检查。
+    ///
+    /// - Parameter pw: 主密码明文。
+    /// - Returns: 是否完成解锁；失败由现有提示状态报告。
     @discardableResult
     func unlock(with pw: String) -> Bool {
         // 已解锁态的重复提交(锁屏过渡期双击/重复回调):幂等成功,不重跑副作用
@@ -313,6 +321,10 @@ final class Vault: ObservableObject {
         Log.info("keychain", "ios biometric entry healed for \(PasswordStore.service(forDatabaseName: databaseName))")
     }
 
+    /// 同步读取并尝试解密当前本地库，以验证输入的主密码。
+    ///
+    /// - Parameter pw: 用户输入的主密码。
+    /// - Returns: 是否成功加载；密码、文件或格式错误均返回 false。
     func verifyMaster(_ pw: String) -> Bool {
         (try? store.load(name: databaseName, password: pw)) != nil
     }
@@ -410,6 +422,7 @@ final class Vault: ObservableObject {
         }
     }
 
+    /// 废弃当前同步会话并清除会话密码、密钥与已解锁数据。
     func lock() {
         database = PasswordDatabase()
         password = ""
@@ -418,11 +431,13 @@ final class Vault: ObservableObject {
         Log.info("app", "ios vault locked")
     }
 
+    /// 按立即锁定偏好锁库，并记录后台时间供恢复前台时计算锁定间隔。
     func didEnterBackground() {
         if autoLockSeconds == 0 { lockIfNeeded() }
         backgroundAt = Date()
     }
 
+    /// 根据后台间隔执行自动锁定或恢复解锁态的同步检查。
     func didBecomeActive() {
         if autoLockSeconds > 0, let t = backgroundAt,
            Date().timeIntervalSince(t) > TimeInterval(autoLockSeconds) {
@@ -829,6 +844,9 @@ final class Vault: ObservableObject {
 
     // MARK: Toast 与剪贴板
 
+    /// 发布短暂操作提示，并取消旧的提示消失任务。
+    ///
+    /// - Parameter text: 已本地化且不包含敏感字段的展示文本。
     func showToast(_ text: String) {
         toastTask?.cancel()
         toast = text
@@ -839,6 +857,11 @@ final class Vault: ObservableObject {
         }
     }
 
+    /// 复制内容并按偏好延迟清除；仅当剪贴板字符串仍等于本次内容时清空。
+    ///
+    /// - Parameters:
+    ///   - text: 用户主动复制的明文。
+    ///   - label: 复制成功提示，不应包含复制的敏感值。
     func copyToClipboard(_ text: String, label: String = L10n.t("ios_copied_message")) {
         UIPasteboard.general.string = text
         showToast(label)
@@ -866,6 +889,9 @@ final class Vault: ObservableObject {
         database.templateCards.filter { !TemplateGroups.builtInTemplateTitles.contains($0.title) }
     }
 
+    /// 为新卡片设置创建与修改时间，加入当前库并持久化。
+    ///
+    /// - Parameter card: 新卡片值，须具有独立 UUID。
     func addCard(_ card: Card) {
         var c = card
         c.created = Date().millis
@@ -926,6 +952,7 @@ final class Vault: ObservableObject {
         Log.warn("app", "ios purgeCard id=\(card.id)")
     }
 
+    /// 永久移除当前库所有回收站卡片并持久化。
     func emptyTrash() {
         database.cards.removeAll { $0.trashed && !$0.template }
         persist()
@@ -1026,6 +1053,7 @@ final class Vault: ObservableObject {
 
     // MARK: 泄露检查(k-匿名,结果计入本地动态清单)
 
+    /// 检查活动卡片中的非空密码，将命中摘要与检查时间回写会话。
     func runBreachCheck() async {
         guard !breachChecking else { return }
         breachChecking = true
