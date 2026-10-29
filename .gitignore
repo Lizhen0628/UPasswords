@@ -10,6 +10,11 @@ dist/
 *.log
 node_modules/
 .claude-screens/
+.codex-remote-stage/
+Cloud/api/internal/api/*.orig
+Cloud/database/mariadb-ca.pem
+Cloud/database/upasswords-deploy.env
+Cloud/database/upasswords-deploy.my.cnf
 
 # WebExtensions 构建产物(shared TS 编译输出由 pnpm build 生成)
 WebExtensions/shared/dist/

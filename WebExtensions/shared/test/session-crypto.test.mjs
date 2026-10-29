@@ -122,14 +122,19 @@ test("serialized competing refreshes permit exactly one CAS winner", async () =>
     assert.equal(results[1].code, "session_snapshot_conflict");
 });
 
-test("missing legacy key and any corrupt row fail the whole decrypt batch", async () => {
+test("missing key and malformed rows reject, while an unreadable row is reported independently", async () => {
     const h = harness();
     const { generation } = await h.commit({ vaultKey: undefined, snapshotVersion: undefined });
     assert.equal((await h.unlock.handle(request("decrypt", { generation, rows: [row] }))).code, "session_key_missing");
     assert.equal((await h.unlock.handle(request("read"))).snapshotVersion, undefined);
     const next = await h.commit();
-    for (const rows of [[row, { ...row, uuid: "00000000-0000-4000-8000-000000000000" }],
-        [{ ...row, bodyB64: "!!!" }], [{ ...row, revision: 0 }], [row, row],
+    const damaged = { ...row, uuid: "00000000-0000-4000-8000-000000000000" };
+    const partial = await h.unlock.handle(request("decrypt", { generation: next.generation, rows: [row, damaged] }));
+    assert.equal(partial.unlocked, true);
+    assert.equal(partial.fragments.length, 1);
+    assert.deepEqual(partial.failures, [{ uuid: damaged.uuid, reason: "authenticationFailed" }]);
+    assertNoKey(partial);
+    for (const rows of [[{ ...row, bodyB64: "!!!" }], [{ ...row, revision: 0 }], [row, row],
         ...["card", "1", 0, 4, null, undefined].map(kind => [{ ...row, kind }])]) {
         const failed = await h.unlock.handle(request("decrypt", { generation: next.generation, rows }));
         assert.equal(failed.unlocked, false);

@@ -90,6 +90,11 @@
                 "name"
             ],
             "properties": {
+                "id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "Persistent field identity. Absent in legacy XML when identity cannot be established safely."
+                },
                 "name": {
                     "type": "string"
                 },
@@ -117,16 +122,34 @@
         "attachment": {
             "type": "object",
             "required": [
-                "name",
-                "data"
+                "name"
+            ],
+            "anyOf": [
+                {
+                    "required": ["data"]
+                },
+                {
+                    "required": ["id", "contentVersion"]
+                }
             ],
             "properties": {
+                "id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "Persistent attachment identity. Absent in legacy XML when identity cannot be established safely."
+                },
+                "contentVersion": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "Random persistent token for this content version. Changes when bytes change and remains stable across encryption-key rotation."
+                },
                 "name": {
                     "type": "string"
                 },
                 "data": {
                     "type": "string",
-                    "contentEncoding": "base64"
+                    "contentEncoding": "base64",
+                    "description": "Base64 bytes when locally available; omitted for a metadata-only remote reference."
                 }
             }
         },
@@ -164,7 +187,7 @@
                 "timeStamp": {
                     "type": "number",
                     "default": 0,
-                    "description": "Unix epoch millis; serialized as the XML <label time> attribute only when > 0 (0 keeps legacy byte-stable output). Drives label merge LWW."
+                    "description": "Unix epoch millis; serialized as the XML <label time> attribute only when > 0 (0 keeps legacy byte-stable output). Preserved as metadata; cloud sync does not use it to choose a conflict winner."
                 }
             }
         },

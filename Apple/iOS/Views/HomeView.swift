@@ -44,7 +44,7 @@ struct HomeView: View {
         }
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always),
                     prompt: L10n.t("ios_search_prompt"))
-        .onChange(of: searchText) { newText in
+        .onChange(of: searchText) { _, newText in
             searchDebouncer?.textChanged(newText)
         }
         .onAppear {

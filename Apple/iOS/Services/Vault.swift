@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Network
 import LocalAuthentication
 import UniformTypeIdentifiers
 import CryptoKit
@@ -24,9 +25,12 @@ final class Vault: ObservableObject {
     /// internal setter 供 Vault+Sync 合并/冲突裁决整库替换(见规范 3.7);
     /// 视图仍只经 Vault 方法改数据(规范 14.4)。
     @Published var database = PasswordDatabase()
+    let nativeStore = SharedVaultStore.nativeStore
     @Published private(set) var locked = true {
         didSet {
             syncSessionID = UUID()
+            if locked { cancelAttachmentDownloads() }
+            if locked { cancelBackupCapture() }
             savePendingPersonalInfoIfNeeded()
         }
     }
@@ -84,6 +88,8 @@ final class Vault: ObservableObject {
     enum DefaultsKey {
         static let autoSyncEnabled = "sync.autoEnabled"
         static let autoSyncSeconds = "sync.autoSeconds"
+        static let downloadAttachmentsOnCellular = "attachments.allowCellular"
+        static let downloadAttachmentsOnUnknownNetwork = "attachments.allowUnknownNetwork"
         /// 基线哈希按库分开:本地与远端均存明文 XML **内容**哈希
         /// (远端不比密文字节——密文每次上传换随机 nonce,同内容重传会被
         /// 误判为远端有修改)。
@@ -95,8 +101,16 @@ final class Vault: ObservableObject {
     // 云同步设置(共享 defaults;键名与 macOS 一致,便于对照排查)
     @Published var autoSyncEnabled: Bool { didSet { d.set(autoSyncEnabled, forKey: DefaultsKey.autoSyncEnabled) } }
     @Published var autoSyncSeconds: Int { didSet { d.set(autoSyncSeconds, forKey: DefaultsKey.autoSyncSeconds) } }
+    @Published var downloadAttachmentsOnCellular: Bool {
+        didSet { d.set(downloadAttachmentsOnCellular, forKey: DefaultsKey.downloadAttachmentsOnCellular) }
+    }
+    @Published var downloadAttachmentsOnUnknownNetwork: Bool {
+        didSet { d.set(downloadAttachmentsOnUnknownNetwork, forKey: DefaultsKey.downloadAttachmentsOnUnknownNetwork) }
+    }
+    @Published private(set) var attachmentDownloadStates: [UUID: RowSync.AttachmentDownloadState] = [:]
     /// 同步进行态与上次成功同步时间(持久化;Vault+Sync 扩展写入)。
     @Published var syncState: SyncPhase = .idle
+    @Published var syncCursorRecoveryRequired = false
     @Published var lastSync: Date? = nil
     /// 远端容器用当前密码解不开(常见于改主密码后):设置页据此展示覆盖云端的修复入口。
     @Published var syncRemoteUnreadable = false
@@ -110,10 +124,23 @@ final class Vault: ObservableObject {
     func relayStateChanged() {
         relayStateVersion += 1
     }
+
+    func setAttachmentDownloadState(
+        _ state: RowSync.AttachmentDownloadState?, cardID: UUID
+    ) {
+        var states = attachmentDownloadStates
+        states[cardID] = state
+        attachmentDownloadStates = states
+    }
+
+    func clearAttachmentDownloadStates() {
+        attachmentDownloadStates.removeAll()
+    }
     /// 未决同步冲突(密文现场);由 RootView 呈现裁决弹窗。
     /// 行级同步状态(游标/revision/脏集合/快照基线)。
     /// 故意不用 @Published:呈现走 syncState,这里高频读写不驱动逐条 UI。
     var rowSync = RowSyncState()
+    var backupCaptureTask: Task<Void, Never>?
     /// 本地数据库列表(设置页多库管理展示)。
     @Published private(set) var databases: [DatabaseFile] = []
     /// 最近一次同步尝试时间(成功或失败都算;自动同步失败退避用,仅内存)。
@@ -125,11 +152,17 @@ final class Vault: ObservableObject {
     let d = SharedVaultStore.defaults
     internal var databaseName = SharedVaultStore.defaultDatabaseName {
         didSet {
-            if oldValue != databaseName { syncSessionID = UUID() }
+            if oldValue != databaseName {
+                syncCursorRecoveryRequired = false
+                syncSessionID = UUID()
+                cancelAttachmentDownloads()
+                cancelBackupCapture()
+            }
         }
     }
     /// 跨文件同步扩展捕获此标识,锁定/解锁/切库后旧任务不得提交。
     var syncSessionID = UUID()
+    var conflictCandidateCopyOperationID: UUID?
     /// 解锁期间内存持有,绝不写入日志/持久化(隐私红线)。
     internal var password = ""
     /// v2 信封加密的库密钥(解锁时由信封解出;保存/同步解密本体用,与主密码解耦)。
@@ -139,6 +172,14 @@ final class Vault: ObservableObject {
     private var biometricUnlockInFlight = false
     internal var autoSyncTimer: Timer? = nil
     internal var syncInFlight = false
+    var attachmentNetworkMonitor: NWPathMonitor?
+    var attachmentNetworkState = AttachmentNetworkState.unknown
+    var attachmentDownloadQueue = AttachmentDownloadQueue()
+    var attachmentDownloadLedger: AttachmentDownloadLedger?
+    var attachmentNetworkObserved = false
+    var attachmentLedgerUnavailable = false
+    var attachmentRetryTask: Task<Void, Never>?
+    var attachmentDownloadTask: Task<Void, Never>?
     internal var breachCheckInFlight = false
 
     /// 锁屏质感(6 色渐变)。
@@ -167,6 +208,11 @@ final class Vault: ObservableObject {
         autoBackupIntervalDays = d.object(forKey: "set.autoBackupDays") as? Int ?? 7
         autoSyncEnabled = d.object(forKey: DefaultsKey.autoSyncEnabled) as? Bool ?? false
         autoSyncSeconds = d.object(forKey: DefaultsKey.autoSyncSeconds) as? Int ?? 60
+        downloadAttachmentsOnCellular = d.object(
+            forKey: DefaultsKey.downloadAttachmentsOnCellular) as? Bool ?? false
+        downloadAttachmentsOnUnknownNetwork = d.object(
+            forKey: DefaultsKey.downloadAttachmentsOnUnknownNetwork) as? Bool ?? false
+        startAttachmentNetworkMonitor()
         if let main = SharedVaultStore.mainDatabase() {
             databaseName = main.name
             if SharedVaultStore.currentDatabaseName == nil {
@@ -198,6 +244,8 @@ final class Vault: ObservableObject {
         do {
             _ = try store.create(name: databaseName, password: pw)
             let (createdDatabase, key) = try store.loadUnlocked(name: databaseName, password: pw)
+            _ = try nativeStore?.importLegacyIfNeeded(
+                name: databaseName, password: pw, legacyStore: store)
             database = createdDatabase
             rowSync = try store.loadSyncState(for: databaseName)
             password = pw
@@ -213,6 +261,7 @@ final class Vault: ObservableObject {
             // 引导登录在先的场景:库就绪即自动补绑(无需重启等下一次解锁)
             Task {
                 await relayBindCurrentVaultIfNeeded()
+                scheduleMissingAttachmentDownloads()
                 await relayRenameCurrentSession()
                 await checkRelayPasswordVersion()
             }
@@ -232,7 +281,17 @@ final class Vault: ObservableObject {
         guard locked else { return true }
         let loaded: (PasswordDatabase, SymmetricKey, RowSyncState)
         do {
-            let (db, key) = try store.loadUnlocked(name: databaseName, password: pw)
+            let dbAndKey: (PasswordDatabase, SymmetricKey)
+            if let nativeStore, try nativeStore.containsVault(name: databaseName) {
+                dbAndKey = try nativeStore.loadUnlocked(name: databaseName, password: pw)
+            } else {
+                dbAndKey = try store.loadUnlocked(name: databaseName, password: pw)
+                if let nativeStore {
+                    _ = try nativeStore.importLegacyIfNeeded(
+                        name: databaseName, password: pw, legacyStore: store)
+                }
+            }
+            let (db, key) = dbAndKey
             let state = try store.loadSyncState(for: databaseName)
             loaded = (db, key, state)
         } catch {
@@ -248,16 +307,23 @@ final class Vault: ObservableObject {
         Log.info("app", "ios vault unlocked db=\(databaseName) cards=\(db.cards.count)")
         healKeychainEntries(with: pw)
         startAutoSyncTickerIfNeeded()
+        scheduleMissingAttachmentDownloads()
         maybeRunAutoBreachCheck()
         maybeRunAutoBackup()
         // 引导登录在先的库在此自动补绑;信封先行:解锁后即拉取注册表,
         // 密码被他机修改能立刻提示
         Task {
             await relayBindCurrentVaultIfNeeded()
+            scheduleMissingAttachmentDownloads()
             await relayRenameCurrentSession()
             await checkRelayPasswordVersion()
         }
         return true
+    }
+
+    /// 远端使用新主密码而本机旧库仍存在时，要求验证本机原主密码。
+    enum RemoteUnlockOutcome {
+        case unlocked, wrongPassword, unavailable, previousPasswordRequired
     }
 
     /// 解锁(带远端兜底):本地解不开时拉远端信封+本体收敛后重试。
@@ -265,20 +331,36 @@ final class Vault: ObservableObject {
     /// 重建后一次提交新库体、同步状态和新信封。
     /// 密码真错时远端信封同样解不开 → 仍是密码错误,不误导。
     @discardableResult
-    func unlockWithRemoteFallback(with pw: String) async -> Bool {
-        if unlock(with: pw) { return true }
+    func unlockWithRemoteFallback(with pw: String) async -> RemoteUnlockOutcome {
+        if unlock(with: pw) { return .unlocked }
+        let localError: Error?
+        do {
+            _ = try store.loadUnlocked(name: databaseName, password: pw)
+            localError = nil
+        } catch {
+            localError = error
+        }
         guard let binding = relay.binding(database: databaseName),
-              let token = relay.token(database: databaseName) else { return false }
+              let token = relay.token(database: databaseName) else {
+            return localError.map(Self.isPasswordRejection) == true ? .wrongPassword : .unavailable
+        }
         let name = databaseName
         let originalKey = vaultKey
         let sessionID = syncSessionID
         do {
             let detail = try await relayClient.getVault(token: token, vaultId: binding.vaultId)
             try validateSyncSession(name: name, key: originalKey, sessionID: sessionID)
-            guard let envelopeBytes = detail.envelope,
-                  let vek = try? DatabaseCipher.unwrapVaultKey(envelopeBytes, password: pw) else {
-                Log.warn("app", "ios remote unlock fallback: password rejected by remote envelope")
-                return false
+            guard let envelopeBytes = detail.envelope else { return .unavailable }
+            let vek: SymmetricKey
+            do {
+                vek = try DatabaseCipher.unwrapVaultKey(envelopeBytes, password: pw)
+            } catch {
+                Log.warn("app", "ios remote unlock fallback: remote envelope rejected password")
+                return Self.isPasswordRejection(error) ? .wrongPassword : .unavailable
+            }
+            guard !store.exists(name) else {
+                Log.info("sync", "ios remote password accepted; local copy requires password verification")
+                return .previousPasswordRequired
             }
             // 远端是行级密文,走全量重建收敛本地(他机改密后本体随新 VEK 重加密)
             var state = try store.loadSyncState(for: name)
@@ -289,17 +371,23 @@ final class Vault: ObservableObject {
                     key: RowSyncKey(raw: vek.withUnsafeBytes { Data($0) }), state: &state)
             } catch {
                 Log.warn("sync", "ios remote unlock fallback: rows not reachable yet (\(error))")
-                return false
+                showToast(error.localizedDescription)
+                return .unavailable
             }
             try validateSyncSession(name: name, key: originalKey, sessionID: sessionID)
             try commitSyncSnapshot(
                 rebuilt, name: name, vaultKey: vek, state: state, envelope: envelopeBytes)
             Log.info("app", "ios remote unlock fallback converged local vault db=\(databaseName) (rows rebuilt)")
-            return unlock(with: pw)
+            return unlock(with: pw) ? .unlocked : .unavailable
         } catch {
             Log.warn("sync", "ios remote unlock fallback failed: \(error)")
-            return false
+            return .unavailable
         }
+    }
+
+    /// 供同步扩展区分主密码拒绝与文件、格式或信封故障。
+    static func isPasswordRejection(_ error: Error) -> Bool {
+        (error as? DatabaseCipher.CipherError)?.message == L10n.t("wrong_password_error")
     }
 
     /// 钥匙串条目自愈:主密码解锁成功后回写密码副本——
@@ -378,7 +466,7 @@ final class Vault: ObservableObject {
     func changeMasterPassword(old: String, new: String) -> Bool {
         guard verifyMaster(old), new.count >= PasswordPolicy.minimumMasterPasswordLength else { return false }
         // 只需确认会话持有库密钥;改密轮换用的是下方新生成的 effectiveKey
-        guard vaultKey != nil else {
+        guard let oldVaultKey = vaultKey else {
             Log.error("app", "ios master password change failed: no vault key in session")
             return false
         }
@@ -394,7 +482,8 @@ final class Vault: ObservableObject {
             }
             let envelope = try DatabaseCipher.wrapVaultKey(effectiveKey, password: new)
             try commitSyncSnapshot(database, name: databaseName, vaultKey: effectiveKey,
-                                   state: rowSync, envelope: envelope)
+                                   state: rowSync, envelope: envelope,
+                                   rekeyBackupHistoryFrom: oldVaultKey)
             password = new
             // guard let vaultKey 判空后不再使用;轮换密钥写回会话属性
             self.vaultKey = effectiveKey
@@ -410,7 +499,8 @@ final class Vault: ObservableObject {
                 Task { [weak self] in
                     guard let self, self.databaseName == name,
                           self.syncSessionID == sessionID, self.vaultKey == effectiveKey else { return }
-                    await self.relayRekeyUpload(newKey: effectiveKey, new: new)
+                    await self.relayRekeyUpload(
+                        oldKey: oldVaultKey, newKey: effectiveKey, new: new)
                 }
             } else {
                 Log.info("sync", "ios password changed with relay unbound — other devices adopt via next sync")
@@ -458,6 +548,7 @@ final class Vault: ObservableObject {
     /// 擦除全部数据(含钥匙串与备份),回到首次设置。
     func eraseAll() {
         do {
+            try nativeStore?.deleteVault(name: databaseName)
             try store.delete(name: databaseName)
             PasswordStore.eraseData(databaseName: databaseName)
             CompromisedService.clearDynamicList()
@@ -568,6 +659,7 @@ final class Vault: ObservableObject {
         startAutoSyncTickerIfNeeded()
         maybeRunAutoBreachCheck()
         maybeRunAutoBackup()
+        scheduleMissingAttachmentDownloads()
         Log.info("app", "ios switched database → \"\(name)\" (password verified)")
         return true
     }
@@ -578,6 +670,10 @@ final class Vault: ObservableObject {
     func createDatabase(name: String, password pw: String, biometric: Bool) -> Bool {
         do {
             _ = try store.create(name: name, password: pw) // store.create 已写入钥匙串主密码
+            if let nativeStore {
+                _ = try nativeStore.importLegacyIfNeeded(
+                    name: name, password: pw, legacyStore: store)
+            }
             // 会话带上库密钥:建库即解锁,后续保存/登录绑定都要用
             var vek: SymmetricKey? = nil
             if let (_, key) = try? store.loadUnlocked(name: name, password: pw) {
@@ -611,7 +707,28 @@ final class Vault: ObservableObject {
         guard !locked, newName != databaseName else { return false }
         do {
             let old = databaseName
-            try store.rename(old, to: newName)
+            var nativeRenamed = false
+            if let nativeStore {
+                guard try nativeStore.containsVault(name: newName) == false else {
+                    throw DatabaseStore.StoreError(L10n.t("database_already_exists_error"))
+                }
+                if try nativeStore.containsVault(name: old) {
+                    try nativeStore.renameVault(from: old, to: newName)
+                    nativeRenamed = true
+                }
+            }
+            do {
+                try store.rename(old, to: newName)
+            } catch {
+                if nativeRenamed {
+                    do {
+                        try nativeStore?.renameVault(from: newName, to: old)
+                    } catch {
+                        Log.error("db", "ios native rename rollback failed: \(error)")
+                    }
+                }
+                throw error
+            }
             clearSyncState(for: old)
             // 云端身份随改名迁移:网盘三件套改名 + 注册表 PATCH + 绑定换键
             Task { await relayMigrateAfterRename(from: old, to: newName) }
@@ -633,6 +750,7 @@ final class Vault: ObservableObject {
     /// 删除当前库时自动切到剩余第一个库;一个不剩则回到初始化流程。
     func deleteDatabase(_ name: String) {
         do {
+            try nativeStore?.deleteVault(name: name)
             try store.delete(name: name)
             clearSyncState(for: name)
             Log.warn("app", "ios database deleted name=\(name)")
@@ -813,10 +931,32 @@ final class Vault: ObservableObject {
     /// 提交配套本体/状态/信封;失败可能已落 journal,必须废弃旧会话防止覆盖前滚结果。
     /// - Throws: 事务持久化错误。
     func commitSyncSnapshot(_ snapshot: PasswordDatabase, name: String, vaultKey: SymmetricKey,
-                            state: RowSyncState, envelope: Data? = nil) throws {
+                            state: RowSyncState, envelope: Data? = nil,
+                            rekeyBackupHistoryFrom: SymmetricKey? = nil) throws {
         do {
+            if let nativeStore {
+                if let envelope {
+                    try nativeStore.replace(
+                        snapshot,
+                        name: name,
+                        envelope: envelope,
+                        vaultKey: vaultKey,
+                        revisions: state.revisions,
+                        previousVaultKey: rekeyBackupHistoryFrom
+                    )
+                } else {
+                    try nativeStore.replace(
+                        snapshot,
+                        name: name,
+                        vaultKey: vaultKey,
+                        revisions: state.revisions,
+                        previousVaultKey: rekeyBackupHistoryFrom
+                    )
+                }
+            }
             try store.commitSyncSnapshot(snapshot, name: name, vaultKey: vaultKey,
-                                         state: state, envelope: envelope)
+                                         state: state, envelope: envelope,
+                                         rekeyBackupHistoryFrom: rekeyBackupHistoryFrom)
         } catch {
             lock()
             syncState = .failed(error.localizedDescription)
@@ -835,6 +975,12 @@ final class Vault: ObservableObject {
                 Log.error("db", "ios save db=\(databaseName) aborted: no vault key in session")
                 return
             }
+            try nativeStore?.replace(
+                database,
+                name: databaseName,
+                vaultKey: vaultKey,
+                revisions: rowSync.revisions
+            )
             try store.save(database, name: databaseName, vaultKey: vaultKey)
         } catch {
             Log.error("db", "ios save db=\(databaseName) failed: \(error)")
@@ -1084,7 +1230,7 @@ final class Vault: ObservableObject {
     // MARK: 标签
 
     /// 更新标签(重命名/改色);同名去重由调用方保证。
-    /// 刷新时间戳驱动 merge LWW:否则改名永远无法同步到对端(与 macOS 一致)。
+    /// 更新时间戳供兼容旧数据与显示使用；云同步按共同基线比较实际内容。
     func updateLabel(_ label: CardLabel) {
         guard let idx = database.labels.firstIndex(where: { $0.id == label.id }) else { return }
         var updated = label

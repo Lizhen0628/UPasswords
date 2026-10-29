@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { webcrypto } from "node:crypto";
+import { JSDOM } from "jsdom";
+import { decryptBody, decryptItemBody } from "../dist/core/vault-crypto.js";
+import { openBackupManifest } from "../dist/core/portable-backup-package.js";
 import { createUnlockSession, UNLOCK_SESSION_TTL_MS } from "../dist/storage/unlock-session.js";
 
 const item = { id: "a", title: "Empty fields", symbol: null, fields: [], host: "" };
+globalThis.DOMParser ??= new JSDOM("").window.DOMParser;
 
 function harness({ persistent = true, ttl = UNLOCK_SESSION_TTL_MS, lockMinutes } = {}) {
     let time = 10_000;
@@ -53,6 +58,7 @@ function harness({ persistent = true, ttl = UNLOCK_SESSION_TTL_MS, lockMinutes }
 }
 
 const context = { token: "token-one", vaultId: "vault-one" };
+const restoredID = "11111111-2222-4333-8444-555555555555";
 
 async function beginAndCommit(unlock, items = [item]) {
     const begun = await unlock.handle({ type: "vault-session", action: "begin", context });
@@ -239,6 +245,119 @@ test("saved item replacement is generation-bound, edit-only, and session-only", 
     await h.unlock.handle({ type: "vault-session", action: "lock" });
     assert.equal((await replace()).unlocked, false);
     assert.equal((await h.unlock.inspect()).unlocked, false);
+});
+
+test("conflict candidate encryption stays in the trusted session and is generation-bound", async () => {
+    globalThis.crypto ??= webcrypto;
+    const h = harness();
+    const begun = await h.unlock.handle({ type: "vault-session", action: "begin", context });
+    const key = new Uint8Array(32).fill(17);
+    const committed = await h.unlock.handle({ type: "vault-session", action: "commit", context,
+        generation: begun.generation, items: [item], vaultKey: [...key], passwordVersion: 1, snapshotVersion: 1 });
+    const request = { type: "vault-session", action: "encrypt", context,
+        generation: committed.generation, uuid: restoredID, xml: `<card id="${restoredID}"/>` };
+    assert.equal((await h.unlock.handle({ ...request, generation: "stale" })).unlocked, false);
+    assert.equal((await h.unlock.handle({ ...request, uuid: "bad" })).unlocked, false);
+    assert.equal((await h.unlock.handle({ ...request, xml: "" })).unlocked, false);
+    const encrypted = await h.unlock.handle(request);
+    assert.equal(encrypted.unlocked, true);
+    assert.equal(typeof encrypted.bodyB64, "string");
+    const ciphertext = Uint8Array.from(Buffer.from(encrypted.bodyB64, "base64"));
+    const decrypted = await decryptItemBody(ciphertext, key, restoredID);
+    assert.equal(decrypted, request.xml);
+    assert.equal("vaultKey" in encrypted, false);
+    assert.equal(JSON.stringify(h.localData).includes(request.xml), false);
+    await h.unlock.handle({ type: "vault-session", action: "lock" });
+    assert.equal((await h.unlock.handle(request)).unlocked, false);
+});
+
+test("backup sealing stays in the trusted session and returns only native encrypted package parts", async () => {
+    globalThis.crypto ??= webcrypto;
+    const h = harness();
+    const begun = await h.unlock.handle({ type: "vault-session", action: "begin", context });
+    const key = new Uint8Array(32).fill(37);
+    const envelopeBytes = new Uint8Array(100);
+    envelopeBytes.set(new TextEncoder().encode("UPWKEY1\0"));
+    const envelopeView = new DataView(envelopeBytes.buffer);
+    envelopeView.setUint32(8, 1, true);
+    envelopeView.setUint32(12, 600_000, true);
+    envelopeView.setFloat64(92, 1_000, true);
+    const committed = await h.unlock.handle({ type: "vault-session", action: "commit", context,
+        generation: begun.generation, items: [item], vaultKey: [...key], passwordVersion: 1, snapshotVersion: 1,
+        envelopeB64: Buffer.from(envelopeBytes).toString("base64") });
+    const xml = "<database><card id=\"11111111-2222-4333-8444-555555555555\"/></database>";
+    const request = {
+        type: "vault-session", action: "seal-backup", context, generation: committed.generation,
+        backupXml: xml,
+        backupMetadata: { createdAtMs: 1_000, attachments: [], conflicts: [],
+            issues: [{ cloudInventoryUnavailable: {} }, { retainedConflictHistoryUnavailable: {} }] },
+    };
+
+    assert.equal((await h.unlock.handle({ ...request, generation: "stale" })).unlocked, false);
+    const sealed = await h.unlock.handle(request);
+    assert.equal(sealed.unlocked, true);
+    assert.equal(sealed.backupInfo.isComplete, false);
+    assert.equal(sealed.backupInfo.issueCount, 2);
+    assert.equal("vaultKey" in sealed, false);
+    assert.equal("backupXml" in sealed, false);
+    const body = Uint8Array.from(Buffer.from(sealed.bodyB64, "base64"));
+    assert.equal(await decryptBody(body, key), xml);
+    const manifest = await openBackupManifest(
+        Uint8Array.from(Buffer.from(sealed.backupManifestB64, "base64")), key,
+    );
+    assert.deepEqual(manifest.issues, request.backupMetadata.issues);
+    assert.equal(JSON.stringify(h.localData).includes(xml), false);
+
+    const invalid = await h.unlock.handle({ ...request, backupXml: "<broken>" });
+    assert.equal(invalid.unlocked, false);
+    assert.equal(invalid.code, "backup_snapshot_invalid");
+});
+
+test("attachment decryption stays inside the generation-bound session and returns no key material", async () => {
+    globalThis.crypto ??= webcrypto;
+    const h = harness();
+    const begun = await h.unlock.handle({ type: "vault-session", action: "begin", context });
+    const key = new Uint8Array(32).fill(21);
+    const committed = await h.unlock.handle({ type: "vault-session", action: "commit", context,
+        generation: begun.generation, items: [item], vaultKey: [...key], passwordVersion: 1, snapshotVersion: 1 });
+    const attachmentID = "11111111-2222-4333-8444-555555555555";
+    const contentVersion = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const aad = new TextEncoder().encode(`UPW-ATTACHMENT-VERSION-V1:${attachmentID}:${contentVersion}`);
+    const wrapAAD = new Uint8Array(aad.length + 4);
+    wrapAAD.set(aad);
+    wrapAAD.set(new TextEncoder().encode(":DEK"), aad.length);
+    const dek = new Uint8Array(32).fill(42);
+    const vaultKey = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["encrypt"]);
+    const dataKey = await crypto.subtle.importKey("raw", dek, "AES-GCM", false, ["encrypt"]);
+    const wrapNonce = crypto.getRandomValues(new Uint8Array(12));
+    const wrapped = new Uint8Array(await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: wrapNonce, additionalData: wrapAAD }, vaultKey, dek,
+    ));
+    const dekWrapped = new Uint8Array(wrapNonce.length + wrapped.length);
+    dekWrapped.set(wrapNonce);
+    dekWrapped.set(wrapped, wrapNonce.length);
+    const bytes = new Uint8Array(0);
+    const cipherNonce = crypto.getRandomValues(new Uint8Array(12));
+    const encrypted = new Uint8Array(await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: cipherNonce, additionalData: aad }, dataKey, bytes,
+    ));
+    const cipher = new Uint8Array(cipherNonce.length + encrypted.length);
+    cipher.set(cipherNonce);
+    cipher.set(encrypted, cipherNonce.length);
+    const encode = value => Buffer.from(value).toString("base64");
+    const request = {
+        type: "vault-session", action: "decrypt-attachment", context,
+        generation: committed.generation, attachmentID, contentVersion,
+        cipherB64: encode(cipher), dekWrappedB64: encode(dekWrapped),
+    };
+    assert.equal((await h.unlock.handle({ ...request, generation: "stale" })).unlocked, false);
+    const result = await h.unlock.handle(request);
+    assert.equal(result.unlocked, true);
+    assert.equal(result.attachmentB64, "");
+    assert.equal("vaultKey" in result, false);
+    assert.equal("dek" in result, false);
+    await h.unlock.handle({ type: "vault-session", action: "lock" });
+    assert.equal((await h.unlock.handle(request)).unlocked, false);
 });
 
 test("replacement cannot commit pending unlocks or revive expired sessions", async () => {

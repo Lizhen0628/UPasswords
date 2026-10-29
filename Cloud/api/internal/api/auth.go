@@ -19,6 +19,7 @@ type authKey struct{}
 // auth holds validated account and session metadata; it must not carry plaintext credentials.
 type auth struct {
 	UserID, EmailHMC, SessionID string
+	DeviceName, Platform        string
 	Created                     int64
 }
 
@@ -40,7 +41,7 @@ func (s *Server) authenticated(next http.Handler) http.Handler {
 		var expires, last int64
 		var revoked sql.NullInt64
 		var state string
-		e := s.DB.QueryRowContext(r.Context(), "SELECT s.id,s.expires_ms,s.revoked_ms,s.last_seen_ms,u.id,u.email_hmc,u.state,u.created_ms FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?", digest([]byte(token))).Scan(&a.SessionID, &expires, &revoked, &last, &a.UserID, &a.EmailHMC, &state, &a.Created)
+		e := s.DB.QueryRowContext(r.Context(), "SELECT s.id,s.device_name,s.platform,s.expires_ms,s.revoked_ms,s.last_seen_ms,u.id,u.email_hmc,u.state,u.created_ms FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?", digest([]byte(token))).Scan(&a.SessionID, &a.DeviceName, &a.Platform, &expires, &revoked, &last, &a.UserID, &a.EmailHMC, &state, &a.Created)
 		if errors.Is(e, sql.ErrNoRows) {
 			return fail(401, "unauthorized")
 		}

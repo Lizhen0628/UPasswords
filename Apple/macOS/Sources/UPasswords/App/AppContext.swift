@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Combine
 import CryptoKit
+import Network
 import UPasswordsCore
 import UPasswordsPersistence
 import UPasswordsNetworking
@@ -26,17 +27,23 @@ final class AppContext: ObservableObject {
     @Published var phase: Phase = .setup {
         didSet {
             syncSessionID = UUID()
+            if phase != .unlocked { cancelAttachmentDownloads() }
+            if phase != .unlocked { cancelBackupCapture() }
             Log.info("lifecycle", "phase \(oldValue) → \(phase)")
             savePendingPersonalInfoIfNeeded()
         }
     }
     @Published var database = PasswordDatabase()
+    @Published var syncCursorRecoveryRequired = false
     /// Memory-only onboarding draft, consumed after creation or restoration unlocks the vault.
     var pendingPersonalInfo: PersonalInfoDraft?
     @Published var databaseName: String = "" {
         didSet {
             guard oldValue != databaseName else { return }
+            syncCursorRecoveryRequired = false
             syncSessionID = UUID()
+            cancelAttachmentDownloads()
+            cancelBackupCapture()
             Log.info("lifecycle", "databaseName \"\(oldValue.isEmpty ? "∅" : oldValue)\" → \"\(databaseName.isEmpty ? "∅" : databaseName)\"")
         }
     }
@@ -78,10 +85,28 @@ final class AppContext: ObservableObject {
     /// 登录成功后设置页表单不会翻页(用户会误判"登录失败"而反复重试,
     /// 每次重试都在服务端多签发一条会话)。
     @Published private(set) var relayStateVersion = 0
+    @Published private(set) var attachmentDownloadStates: [UUID: RowSync.AttachmentDownloadState] = [:]
+    @Published private(set) var backupListVersion = 0
+
+    func backupListDidChange() {
+        backupListVersion += 1
+    }
 
     /// relay 状态版本号自增(跨文件扩展经此触发设置页重渲染,setter 保持私有)。
     func relayStateChanged() {
         relayStateVersion += 1
+    }
+
+    func setAttachmentDownloadState(
+        _ state: RowSync.AttachmentDownloadState?, cardID: UUID
+    ) {
+        var states = attachmentDownloadStates
+        states[cardID] = state
+        attachmentDownloadStates = states
+    }
+
+    func clearAttachmentDownloadStates() {
+        attachmentDownloadStates.removeAll()
     }
     @Published var lastSyncFailed: Date? = nil
     @Published var failedUnlockAttempts = 0
@@ -93,8 +118,10 @@ final class AppContext: ObservableObject {
     /// 行级同步状态(游标/revision/脏集合/快照基线);解锁时按库装载。
     /// 故意不用 @Published:同步状态呈现走 syncState,这里高频读写不驱动逐条 UI。
     var rowSync = RowSyncState()
+    var backupCaptureTask: Task<Void, Never>?
     /// 跨文件同步扩展捕获此标识,锁定/解锁/切库后旧异步任务不得提交。
     var syncSessionID = UUID()
+    var conflictCandidateCopyOperationID: UUID?
     // 空闲追踪用,不进 UI。故意不用 @Published:活动监视器把每次键盘/鼠标
     // 事件都算作活动,若发布会在打字时逐键触发整棵视图树重渲染(输入卡顿)。
     var lastActivity: Date = Date()
@@ -102,6 +129,14 @@ final class AppContext: ObservableObject {
     // 本会话已尝试抓取的卡片,防止反复请求失败站点;补抓串行任务句柄。
     var iconFetchAttempted = Set<UUID>()
     var iconBackfillTask: Task<Void, Never>? = nil
+    var attachmentNetworkMonitor: NWPathMonitor?
+    var attachmentNetworkState = AttachmentNetworkState.unknown
+    var attachmentDownloadQueue = AttachmentDownloadQueue()
+    var attachmentDownloadLedger: AttachmentDownloadLedger?
+    var attachmentNetworkObserved = false
+    var attachmentLedgerUnavailable = false
+    var attachmentRetryTask: Task<Void, Never>?
+    var attachmentDownloadTask: Task<Void, Never>?
 
     /// In-memory password, present only while unlocked.
     /// 仅生命周期代码(unlock/lock/erase/changePassword)可写入。
@@ -112,6 +147,16 @@ final class AppContext: ObservableObject {
 
     let settings = AppSettings.shared
     let store = DatabaseStore.shared
+    /// SwiftData is the migrated local business store; the legacy encrypted
+    /// files remain available as a rollback copy during this transition.
+    lazy var nativeStore: SwiftDataVaultStore? = {
+        do {
+            return try SwiftDataVaultStore(root: store.root)
+        } catch {
+            Log.error("db", "SwiftData store unavailable: \(error)")
+            return nil
+        }
+    }()
     private var cancellables = Set<AnyCancellable>()
     private var autoLockTimer: Timer? = nil
     /// 云同步到期 ticker(5s 一跳,由守卫条件过滤;逻辑见 AppContext+Sync)。
@@ -129,6 +174,7 @@ final class AppContext: ObservableObject {
         LegacyPreferencesMigration.run()
         bootstrapPhase()
         installActivityMonitor()
+        startAttachmentNetworkMonitor()
     }
 
     // MARK: - Bootstrap
@@ -331,7 +377,17 @@ final class AppContext: ObservableObject {
         Log.info("lifecycle", "unlock \"\(name)\"")
         let loaded: (PasswordDatabase, SymmetricKey, RowSyncState)
         do {
-            let (db, vek) = try store.loadUnlocked(name: name, password: password)
+            let dbAndKey: (PasswordDatabase, SymmetricKey)
+            if let nativeStore, try nativeStore.containsVault(name: name) {
+                dbAndKey = try nativeStore.loadUnlocked(name: name, password: password)
+            } else {
+                dbAndKey = try store.loadUnlocked(name: name, password: password)
+                if let nativeStore {
+                    _ = try nativeStore.importLegacyIfNeeded(
+                        name: name, password: password, legacyStore: store)
+                }
+            }
+            let (db, vek) = dbAndKey
             let state = try store.loadSyncState(for: name)
             loaded = (db, vek, state)
         } catch {
@@ -355,6 +411,7 @@ final class AppContext: ObservableObject {
         scheduleIconBackfill()
         scheduleAutoBackupIfNeeded()
         startAutoSyncTickerIfNeeded()
+        scheduleMissingAttachmentDownloads()
         startBreachCheckTickerIfNeeded()
         // 云同步步骤按 relay 绑定判定(API 为默认通道;网盘入口已隐藏)
         markSetupTaskDoneIf(.cloudSync, when: relayBound)
@@ -373,6 +430,7 @@ final class AppContext: ObservableObject {
         // 密码被他机修改能立刻提示
         Task {
             await relayBindCurrentVaultIfNeeded()
+            scheduleMissingAttachmentDownloads()
             await relayRenameCurrentSession()
             await checkRelayPasswordVersion()
         }
@@ -382,12 +440,13 @@ final class AppContext: ObservableObject {
     /// 解锁结果:只有「密码被拒」计入自毁;本地数据损坏/信封缺失/断网是
     /// 环境故障,输对密码也不该累计销毁计数。
     enum UnlockOutcome {
-        case success, wrongPassword, unavailable
+        case success, wrongPassword, previousPasswordRequired, unavailable
     }
 
     /// 密码被拒的判定:unwrapVaultKey 唯一以 wrong_password_error 文案抛出,
     /// 信封缺失/格式错误是其他 CipherError/IO 错误——绝不计入自毁。
-    private static func isPasswordRejection(_ error: Error) -> Bool {
+    /// 供同步扩展区分主密码拒绝与文件、格式或信封故障。
+    static func isPasswordRejection(_ error: Error) -> Bool {
         (error as? DatabaseCipher.CipherError)?.message == L10n.t("wrong_password_error")
     }
 
@@ -415,10 +474,17 @@ final class AppContext: ObservableObject {
                     Log.warn("sync", "remote unlock result discarded after session changed")
                     return .unavailable
                 }
-                guard let envelopeBytes = detail.envelope,
-                      let vek = try? DatabaseCipher.unwrapVaultKey(envelopeBytes, password: password) else {
-                    Log.warn("lifecycle", "remote unlock fallback: password rejected by remote envelope")
-                    return .wrongPassword
+                guard let envelopeBytes = detail.envelope else { return .unavailable }
+                let vek: SymmetricKey
+                do {
+                    vek = try DatabaseCipher.unwrapVaultKey(envelopeBytes, password: password)
+                } catch {
+                    Log.warn("lifecycle", "remote unlock fallback: remote envelope rejected password")
+                    return Self.isPasswordRejection(error) ? .wrongPassword : .unavailable
+                }
+                guard !store.exists(name) else {
+                    Log.info("sync", "remote password accepted; local copy requires password verification")
+                    return .previousPasswordRequired
                 }
                 // 远端是行级密文,走全量重建收敛本地(他机改密后本体随新 VEK 重加密)
                 var state: RowSyncState
@@ -554,6 +620,13 @@ final class AppContext: ObservableObject {
     /// 残留的密文+信封可被离线爆破,残留令牌可枚举账户。
     func eraseAllData() {
         Log.warn("lifecycle", "ERASE ALL DATA (self-destruct or manual)")
+        do {
+            try nativeStore?.deleteAllVaults()
+        } catch {
+            Log.error("db", "erase all SwiftData vaults failed; legacy data preserved: \(error)")
+            AppToast.shared.show(error.localizedDescription)
+            return
+        }
         for db in store.list() {
             try? store.delete(name: db.name)
         }
@@ -573,10 +646,32 @@ final class AppContext: ObservableObject {
     /// 提交配套本体/状态/信封;失败可能已落 journal,必须废弃旧会话防止覆盖前滚结果。
     /// - Throws: 事务持久化错误。
     func commitSyncSnapshot(_ snapshot: PasswordDatabase, name: String, vaultKey: SymmetricKey,
-                            state: RowSyncState, envelope: Data? = nil) throws {
+                            state: RowSyncState, envelope: Data? = nil,
+                            rekeyBackupHistoryFrom: SymmetricKey? = nil) throws {
         do {
+            if let nativeStore {
+                if let envelope {
+                    try nativeStore.replace(
+                        snapshot,
+                        name: name,
+                        envelope: envelope,
+                        vaultKey: vaultKey,
+                        revisions: state.revisions,
+                        previousVaultKey: rekeyBackupHistoryFrom
+                    )
+                } else {
+                    try nativeStore.replace(
+                        snapshot,
+                        name: name,
+                        vaultKey: vaultKey,
+                        revisions: state.revisions,
+                        previousVaultKey: rekeyBackupHistoryFrom
+                    )
+                }
+            }
             try store.commitSyncSnapshot(snapshot, name: name, vaultKey: vaultKey,
-                                         state: state, envelope: envelope)
+                                         state: state, envelope: envelope,
+                                         rekeyBackupHistoryFrom: rekeyBackupHistoryFrom)
         } catch {
             saveDebounce?.cancel()
             syncSessionID = UUID()
@@ -601,6 +696,12 @@ final class AppContext: ObservableObject {
                 Log.error("db", "save \"\(databaseName)\" aborted: no vault key in session")
                 return
             }
+            try nativeStore?.replace(
+                database,
+                name: databaseName,
+                vaultKey: vaultKey,
+                revisions: rowSync.revisions
+            )
             try store.save(database, name: databaseName, vaultKey: vaultKey)
             SafariSnapshotBridge.push(databaseName: databaseName, store: store)
         } catch {

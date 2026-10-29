@@ -219,6 +219,10 @@ struct LockWindowView: View {
                 error = L10n.t("wrong_password_error")
                 ctx.registerFailedAttempt()
                 password = ""
+            case .previousPasswordRequired:
+                let remotePassword = password
+                password = ""
+                await ctx.promptPreviousPasswordForRekey(newPassword: remotePassword)
             case .unavailable:
                 // 数据损坏/信封缺失/断网:不是密码错,绝不计入自毁
                 error = L10n.t("unlock_environment_error")

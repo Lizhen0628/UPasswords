@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://upasswords.local/contracts/conflict-history.schema.json",
+  "title": "UPasswords retained conflict history page",
+  "description": "One page of encrypted candidates retained from resolved conflicts in a fixed server snapshot.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["snapshotMs", "totalCandidates", "candidates", "nextCursor"],
+  "properties": {
+    "snapshotMs": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "totalCandidates": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1600000
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    },
+    "nextCursor": {
+      "type": ["string", "null"],
+      "minLength": 1
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "conflictId",
+        "itemUuid",
+        "baseRevision",
+        "currentRevision",
+        "currentDeletedSeq",
+        "generation",
+        "createdMs",
+        "updatedMs",
+        "resolvedMs",
+        "expiresMs",
+        "candidate"
+      ],
+      "properties": {
+        "conflictId": {
+          "$ref": "#/$defs/id"
+        },
+        "itemUuid": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "baseRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "currentRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "currentDeletedSeq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "createdMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "updatedMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resolvedMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expiresMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "selectedCandidateId": {
+          "$ref": "#/$defs/id"
+        },
+        "candidate": {
+          "$ref": "#/$defs/candidate"
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateId",
+        "kind",
+        "op",
+        "revision",
+        "modifiedMs",
+        "committedMs",
+        "deviceName",
+        "platform"
+      ],
+      "properties": {
+        "candidateId": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "type": "integer",
+          "enum": [1, 2, 3]
+        },
+        "op": {
+          "enum": ["upsert", "delete"]
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "modifiedMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "committedMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deviceName": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "sourceSessionId": {
+          "type": "string"
+        },
+        "bodyB64": {
+          "type": "string",
+          "contentEncoding": "base64"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "upsert"
+              }
+            }
+          },
+          "then": {
+            "required": ["bodyB64", "sha256"]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["bodyB64"]
+                },
+                {
+                  "required": ["sha256"]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    }
+  }
+}

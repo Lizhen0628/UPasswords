@@ -1,8 +1,10 @@
 # Worker retirement — 2026-10-24
 
 The production entry remains Cloudflare → Nginx → Go API. The removed Worker is
-no longer a recovery target. Application recovery uses a saved Go image; database
-recovery uses a verified MariaDB backup as described in [api/README.md](api/README.md).
+no longer a recovery target. The current development release policy permits clearing incompatible test data
+and rebuilding the current schema without a backup or restore rehearsal, as
+described in [api/README.md](api/README.md). Review recovery requirements before
+accepting real user data.
 
 ## Verified resources and actions
 
@@ -37,5 +39,8 @@ implementation boundary.
 The follow-up profile integration brings the profile-capable Go handlers into
 version control with the canonical `0002_user_profiles.sql` migration. Tests apply
 the numbered migration sequence directly. The duplicate embedded SQL and temporary
-runtime migration command have been removed. A production rollout still requires
-an explicit database migration and matching Go image deployment.
+runtime migration command have been removed. A rollout requires an explicit database migration and matching Go image deployment.
+The production database is not disposable. Any reset requires separate explicit
+authorization, a verified backup, and a recovery rehearsal appropriate to the change.
+Current backup jobs and the small-data restore smoke test do not by themselves prove
+the production-scale RTO target.

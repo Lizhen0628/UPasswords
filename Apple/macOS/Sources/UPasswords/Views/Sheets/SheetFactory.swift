@@ -30,6 +30,8 @@ enum SheetFactory {
         case .configureCloud: ConfigureCloudSheet()
         case .eraseData: EraseDataSheet()
         case .manageDatabases: ManageDatabasesSheet()
+        case .importCards(let sourceName, let destinationName):
+            ImportCardsSheet(sourceName: sourceName, destinationName: destinationName)
         case .selectDatabase: SelectDatabaseSheet()
         case .about: AboutSheet()
         case .whatsNew: WhatsNewSheet()

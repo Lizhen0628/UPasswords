@@ -2,6 +2,15 @@ import XCTest
 @testable import UPasswordsCore
 
 final class DatabaseXMLTests: XCTestCase {
+    func testParserAcceptsExtensionSnapshotDatabaseRoot() throws {
+        let xml = Data("<database><card id=\"B71309E6-C0E1-4BF4-91B2-E5995DDA1E15\" title=\"Browser copy\" /></database>".utf8)
+
+        let database = try PasswordDatabase.parse(xml)
+
+        XCTAssertEqual(database.cards.count, 1)
+        XCTAssertEqual(database.cards.first?.title, "Browser copy")
+    }
+
     private func sampleDB() -> PasswordDatabase {
         var db = PasswordDatabase()
         let l1 = CardLabel(name: "商务", timeStamp: 1000)
@@ -45,13 +54,222 @@ final class DatabaseXMLTests: XCTestCase {
         XCTAssertEqual(c.autofillEnabled, true)
         XCTAssertEqual(c.expiration, 4102444800000)
         XCTAssertEqual(c.fields.count, 3)
+        XCTAssertEqual(c.fields.map(\.id), db.cards[0].fields.map(\.id))
+        XCTAssertTrue(c.fields.allSatisfy(\.hasPersistentID))
         XCTAssertEqual(c.fields[1].value, "hunter2")
         XCTAssertEqual(c.fields[1].history.first?.value, "old1")
         XCTAssertEqual(c.fields[2].type, .oneTimePassword)
         XCTAssertEqual(c.notes, "多行\n笔记")
         XCTAssertEqual(c.labelIds, db.cards[0].labelIds)
         XCTAssertEqual(c.images.first?.data, Data([0x89, 0x50, 0x4E, 0x47]))
+        XCTAssertEqual(c.images.first?.id, db.cards[0].images.first?.id)
+        XCTAssertEqual(c.images.first?.contentVersion, db.cards[0].images.first?.contentVersion)
+        XCTAssertTrue(c.images.first?.hasPersistentContentVersion == true)
         XCTAssertEqual(c.files.first?.name, "key.txt")
+        XCTAssertEqual(c.files.first?.id, db.cards[0].files.first?.id)
+        XCTAssertEqual(c.files.first?.contentVersion, db.cards[0].files.first?.contentVersion)
+    }
+
+    func testLegacyChildIDsRemainUntrustedAndAreNotInventedOnSerialization() throws {
+        let cardID = UUID()
+        let profileID = UUID()
+        let xml = """
+        <database>
+            <card id="\(cardID.uuidString)">
+                <field name="legacy">value</field>
+                <image name="old.png">AQID</image>
+                <file name="old.txt">BAUG</file>
+            </card>
+            <user_profile id="\(profileID.uuidString)">
+                <field name="legacy profile">profile value</field>
+            </user_profile>
+        </database>
+        """
+
+        let database = try PasswordDatabase.parse(Data(xml.utf8))
+        let card = try XCTUnwrap(database.cards.first)
+        let profile = try XCTUnwrap(database.userProfiles.first)
+        XCTAssertFalse(card.fields[0].hasPersistentID)
+        XCTAssertFalse(card.images[0].hasPersistentID)
+        XCTAssertFalse(card.files[0].hasPersistentID)
+        XCTAssertFalse(card.images[0].hasPersistentContentVersion)
+        XCTAssertFalse(card.files[0].hasPersistentContentVersion)
+        XCTAssertFalse(profile.fields[0].hasPersistentID)
+
+        let serialized = String(decoding: database.xmlData(), as: UTF8.self)
+        XCTAssertFalse(serialized.contains("id=\"\(card.fields[0].id.uuidString)\""))
+        XCTAssertFalse(serialized.contains("id=\"\(card.images[0].id.uuidString)\""))
+        XCTAssertFalse(serialized.contains("id=\"\(card.files[0].id.uuidString)\""))
+        XCTAssertFalse(serialized.contains("version=\"\(card.images[0].contentVersion.uuidString)\""))
+        XCTAssertFalse(serialized.contains("version=\"\(card.files[0].contentVersion.uuidString)\""))
+        XCTAssertFalse(serialized.contains("id=\"\(profile.fields[0].id.uuidString)\""))
+
+        let decodedAgain = try PasswordDatabase.parse(Data(serialized.utf8))
+        XCTAssertFalse(decodedAgain.cards[0].fields[0].hasPersistentID)
+        XCTAssertFalse(decodedAgain.userProfiles[0].fields[0].hasPersistentID)
+        XCTAssertNotEqual(decodedAgain.cards[0].fields[0].id, card.fields[0].id)
+    }
+
+    func testAttachmentContentChangesVersionButMetadataChangesDoNot() throws {
+        var attachment = Attachment(name: "old.txt", data: Data("old".utf8))
+        let originalVersion = attachment.contentVersion
+        attachment.name = "renamed.txt"
+        XCTAssertEqual(attachment.contentVersion, originalVersion)
+
+        attachment.data = Data("new".utf8)
+        XCTAssertNotEqual(attachment.contentVersion, originalVersion)
+        XCTAssertTrue(attachment.hasPersistentContentVersion)
+    }
+
+    func testUnavailableAndEmptyAttachmentContentsRoundTripSeparately() throws {
+        let missingID = UUID()
+        let missingVersion = UUID()
+        var card = Card(title: "Account")
+        card.images = [Attachment(
+            id: missingID, contentVersion: missingVersion, name: "remote.png", data: nil)]
+        card.files = [Attachment(name: "empty.txt", data: Data())]
+        var database = PasswordDatabase()
+        database.cards = [card]
+
+        let xml = String(decoding: database.xmlData(), as: UTF8.self)
+        XCTAssertTrue(xml.contains("missing=\"true\""))
+        XCTAssertTrue(xml.contains("empty=\"true\""))
+        let decoded = try PasswordDatabase.parse(Data(xml.utf8))
+
+        let missing = try XCTUnwrap(decoded.cards.first?.images.first)
+        XCTAssertNil(missing.data)
+        XCTAssertEqual(missing.id, missingID)
+        XCTAssertEqual(missing.contentVersion, missingVersion)
+        XCTAssertTrue(missing.hasPersistentID)
+        XCTAssertTrue(missing.hasPersistentContentVersion)
+        let empty = try XCTUnwrap(decoded.cards.first?.files.first)
+        XCTAssertEqual(empty.data, Data())
+        XCTAssertTrue(empty.hasContent)
+    }
+
+    func testAttachmentCodableOmitsUnavailableBytesAndReadsLegacyData() throws {
+        let reference = Attachment(name: "remote.bin", data: nil)
+        let encodedReference = try JSONEncoder().encode(reference)
+        let referenceObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encodedReference) as? [String: Any])
+        XCTAssertNil(referenceObject["data"])
+        let decodedReference = try JSONDecoder().decode(Attachment.self, from: encodedReference)
+        XCTAssertNil(decodedReference.data)
+        XCTAssertEqual(decodedReference.contentVersion, reference.contentVersion)
+
+        let legacy = Data(#"{"name":"legacy.txt","data":"AQID"}"#.utf8)
+        let decodedLegacy = try JSONDecoder().decode(Attachment.self, from: legacy)
+        XCTAssertEqual(decodedLegacy.data, Data([1, 2, 3]))
+        XCTAssertFalse(decodedLegacy.hasPersistentID)
+        XCTAssertFalse(decodedLegacy.hasPersistentContentVersion)
+
+        let invalidReference = Data(#"{"name":"remote.bin","data":null}"#.utf8)
+        XCTAssertThrowsError(try JSONDecoder().decode(Attachment.self, from: invalidReference))
+    }
+
+    func testDownloadedContentAndCacheEvictionPreserveVersion() throws {
+        let version = UUID()
+        var attachment = Attachment(
+            contentVersion: version, name: "remote.txt", data: nil)
+
+        XCTAssertTrue(attachment.installDownloadedContent(Data("bytes".utf8), for: version))
+        XCTAssertEqual(attachment.data, Data("bytes".utf8))
+        XCTAssertEqual(attachment.contentVersion, version)
+
+        attachment.discardLocalContent()
+        XCTAssertNil(attachment.data)
+        XCTAssertEqual(attachment.contentVersion, version)
+        XCTAssertFalse(attachment.installDownloadedContent(Data(), for: UUID()))
+
+        attachment.data = Data("replacement".utf8)
+        XCTAssertNotEqual(attachment.contentVersion, version)
+    }
+
+    func testInvalidNonemptyAttachmentBase64IsRejected() {
+        let xml = """
+        <database><card id="\(UUID().uuidString)">
+            <file name="broken.txt">not-base64!</file>
+        </card></database>
+        """
+        XCTAssertThrowsError(try PasswordDatabase.parse(Data(xml.utf8)))
+    }
+
+    func testMetadataOnlyAttachmentRequiresStableIdentityAndVersion() {
+        let xml = """
+        <database><card id="\(UUID().uuidString)">
+            <file name="remote.txt" missing="true" />
+        </card></database>
+        """
+        XCTAssertThrowsError(try PasswordDatabase.parse(Data(xml.utf8)))
+    }
+
+    func testMalformedAttachmentContentVersionIsRejected() {
+        let xml = """
+        <database><card id="\(UUID().uuidString)">
+            <file id="\(UUID().uuidString)" version="not-a-uuid" name="x">AQID</file>
+        </card></database>
+        """
+        XCTAssertThrowsError(try PasswordDatabase.parse(Data(xml.utf8)))
+    }
+
+    func testChildIDsMustBeValidAndUniqueWithinTheirParent() {
+        let itemID = UUID()
+        let childID = UUID()
+        let malformed = """
+        <database><card id="\(itemID.uuidString)">
+            <field id="not-a-uuid" name="x">value</field>
+        </card></database>
+        """
+        XCTAssertThrowsError(try PasswordDatabase.parse(Data(malformed.utf8)))
+
+        let duplicate = """
+        <database><card id="\(itemID.uuidString)">
+            <field id="\(childID.uuidString)" name="x">one</field>
+            <field id="\(childID.uuidString)" name="y">two</field>
+        </card></database>
+        """
+        XCTAssertThrowsError(try PasswordDatabase.parse(Data(duplicate.utf8)))
+
+        let duplicateAttachment = """
+        <database><card id="\(itemID.uuidString)">
+            <image id="\(childID.uuidString)" name="image.png">AQID</image>
+            <file id="\(childID.uuidString)" name="file.bin">BAUG</file>
+        </card></database>
+        """
+        XCTAssertThrowsError(try PasswordDatabase.parse(Data(duplicateAttachment.utf8)))
+
+        let nonCanonical = """
+        <database><card id="\(itemID.uuidString)">
+            <field id="{\(childID.uuidString)}" name="x">value</field>
+        </card></database>
+        """
+        XCTAssertThrowsError(try PasswordDatabase.parse(Data(nonCanonical.utf8)))
+    }
+
+    func testUserProfileFieldIDsRoundTrip() throws {
+        let field = Field(name: "Email", type: .email, value: "person@example.com")
+        var profile = UserProfile()
+        profile.fields = [field]
+        var database = PasswordDatabase()
+        database.userProfiles = [profile]
+
+        let decoded = try PasswordDatabase.parse(database.xmlData())
+        XCTAssertEqual(decoded.userProfiles.first?.fields.first?.id, field.id)
+        XCTAssertEqual(decoded.userProfiles.first?.fields.first?.hasPersistentID, true)
+    }
+
+    func testCodablePreservesLegacyIdentityAbsence() throws {
+        let xml = """
+        <database><card id="\(UUID().uuidString)"><field name="legacy">value</field></card></database>
+        """
+        let field = try XCTUnwrap(PasswordDatabase.parse(Data(xml.utf8)).cards.first?.fields.first)
+        let encoded = try JSONEncoder().encode(field)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertNil(json["id"])
+
+        let decoded = try JSONDecoder().decode(Field.self, from: encoded)
+        XCTAssertFalse(decoded.hasPersistentID)
+        XCTAssertNotEqual(decoded.id, field.id)
     }
 
     func testParseTemplateFormat() throws {

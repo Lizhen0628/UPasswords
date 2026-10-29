@@ -49,7 +49,13 @@ enum SortOrder: Int, CaseIterable, Identifiable {
 
 /// 导航值语义:按 id 哈希(SwiftUI navigationDestination 需 Hashable;
 /// 相等性沿用 Core 的全字段 ==,不影响)。
-extension Card: Hashable {
+#if compiler(>=6.0)
+extension Card: @retroactive Hashable {}
+#else
+extension Card: Hashable {}
+#endif
+
+extension Card {
     public func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 

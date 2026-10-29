@@ -89,12 +89,12 @@ func TestVerificationMailLanguageAndPurpose(t *testing.T) {
 	}
 }
 
-func TestVersionedRouteCompatibility(t *testing.T) {
+func TestCanonicalVersionedRoutes(t *testing.T) {
 	s := &Server{Log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 	h := s.Handler()
-	for _, path := range []string{"/v1/", "/v2/"} {
+	for _, path := range []string{"/v1/"} {
 		status, body := call(t, h, "GET", path, "", nil)
-		if status != 200 || body["version"] != float64(2) {
+		if status != 200 || body["version"] != float64(syncProtocolVersion) {
 			t.Errorf("capability route %s returned %d", path, status)
 		}
 		capabilities := body["capabilities"].([]any)
@@ -102,11 +102,19 @@ func TestVersionedRouteCompatibility(t *testing.T) {
 		for _, capability := range capabilities {
 			found[capability.(string)] = true
 		}
-		if !found["vaults.row_sync"] || !found["breach.range"] {
+		if !found["vaults.row_sync"] || !found["vaults.conflicts"] || !found["breach.range"] {
 			t.Errorf("capability route %s omitted row-sync capabilities: %v", path, capabilities)
 		}
 	}
-	for _, path := range []string{"/v1/vaults", "/v2/vaults"} {
+	status, body := call(t, h, "GET", "/v2/", "", nil)
+	if status != 404 || body["error"] != "not_found" {
+		t.Errorf("legacy route returned %d: %v", status, body)
+	}
+	status, body = call(t, h, "GET", "/v2/vaults", "", nil)
+	if status != 404 || body["error"] != "not_found" {
+		t.Errorf("legacy protected route returned %d: %v", status, body)
+	}
+	for _, path := range []string{"/v1/vaults"} {
 		status, _ := call(t, h, "GET", path, "", nil)
 		if status != 401 {
 			t.Errorf("protected route %s returned %d without a token", path, status)

@@ -42,7 +42,7 @@ function routes(custom = () => undefined) {
 
 const options = (cache, extra = {}) => ({ token: "test", scope, cache, validate, verifyRows, ...extra });
 
-test("cold init keeps initial epoch: logout while network awaits cannot resurrect account", async () => {
+test("cold init rejects a sync result after account data is explicitly removed", async () => {
     const cache = await setup();
     let removed = false;
     routes(async (url) => {
@@ -53,6 +53,34 @@ test("cold init keeps initial epoch: logout while network awaits cannot resurrec
     });
     await assert.rejects(() => synchronizeVault(options(cache)), /account_epoch_mismatch/);
     assert.equal(await cache.read(scope), null);
+    cache.close();
+});
+
+test("sign-out during a delta retains the prior snapshot and rejects the late response", async () => {
+    const cache = await setup([row()]);
+    const original = await cache.read(scope);
+    let releaseResponse;
+    let markRequestStarted;
+    const responseGate = new Promise(resolve => { releaseResponse = resolve; });
+    const requestStarted = new Promise(resolve => { markRequestStarted = resolve; });
+    routes(async (url) => {
+        if (url.pathname.endsWith("/changes")) {
+            markRequestStarted();
+            await responseGate;
+            return { headSeq: 2, changes: [{ ...row(2), seq: 2, op: "upsert" }] };
+        }
+    });
+    const pending = synchronizeVault(options(cache));
+    await requestStarted;
+    await cache.preserveAccount(scope.userId);
+    releaseResponse();
+    await assert.rejects(pending, /account_epoch_mismatch/);
+
+    const retained = await cache.read(scope);
+    assert.equal(retained.version, original.version);
+    assert.equal(retained.cursor, original.cursor);
+    assert.equal(retained.rows[0].revision, original.rows[0].revision);
+    assert.equal(retained.accountEpoch, 1);
     cache.close();
 });
 

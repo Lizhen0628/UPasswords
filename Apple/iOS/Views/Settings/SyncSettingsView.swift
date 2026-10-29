@@ -21,6 +21,7 @@ struct SyncSettingsView: View {
     @State private var relayCodePrompt: RelayCodePrompt? = nil
     @State private var relayCodeInput = ""
     @State private var showRelayTransfer = false
+    @State private var showCursorRecoveryConfirm = false
     @StateObject private var resend = ResendCountdown()
 
     /// 需要敏感验证码确认的操作(解绑库 / 注销账户)。
@@ -61,6 +62,25 @@ struct SyncSettingsView: View {
                         }
                     }
                 }
+                Toggle(L10n.t("attachment_download_cellular_setting"),
+                       isOn: $vault.downloadAttachmentsOnCellular)
+                    .tint(Brand.accent)
+                    .onChange(of: vault.downloadAttachmentsOnCellular) { _, _ in
+                        vault.resumeAttachmentDownloads()
+                    }
+                Toggle(L10n.t("attachment_download_unknown_setting"),
+                       isOn: $vault.downloadAttachmentsOnUnknownNetwork)
+                    .tint(Brand.accent)
+                    .onChange(of: vault.downloadAttachmentsOnUnknownNetwork) { _, _ in
+                        vault.resumeAttachmentDownloads()
+                    }
+                Button(L10n.t("attachment_download_all")) { vault.downloadAllAttachments() }
+                    .disabled(vault.locked || !vault.relayBound)
+                if vault.isDownloadingAllAttachments {
+                    Button(L10n.t("attachment_download_all_cancel")) { vault.cancelDownloadAllAttachments() }
+                }
+            } footer: {
+                Text(L10n.t("attachment_download_network_footer"))
             }
             Section {
                 relayAccountSection
@@ -72,6 +92,8 @@ struct SyncSettingsView: View {
             } footer: {
                 Text(L10n.t("cloud_sync_text"))
             }
+            IOSSyncConflictSection()
+            IOSSyncQuarantineSection()
         }
         .navigationTitle(L10n.t("cloud_sync_title"))
         .alert(L10n.t("relay_sensitive_code_title"), isPresented: Binding(
@@ -315,7 +337,7 @@ struct SyncSettingsView: View {
                 Log.info("sync", "ios adopt remote password attempt")
                 Task {
                     let result = await vault.adoptRemotePassword(pw)
-                    if result != .success {
+                    if result == .wrongPassword {
                         // 原地重试:重开弹窗并带错误文案(空库残骸时文案引导覆盖)
                         adoptFailed = true
                         try? await Task.sleep(for: .milliseconds(300))
@@ -332,14 +354,48 @@ struct SyncSettingsView: View {
 
     @ViewBuilder
     private var statusLine: some View {
-        if case .failed(let message) = vault.syncState {
-            Text("\(L10n.t("last_sync_failed_prompt")) — \(message)")
-                .font(.caption)
-                .foregroundStyle(Brand.red)
-        } else if let last = vault.lastSync {
-            Text(L10n.t("last_sync_completed_prompt") + " " + last.formatted(date: .abbreviated, time: .shortened))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            if vault.syncCursorRecoveryRequired {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(L10n.t("sync_cursor_recovery_guidance"), systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(Brand.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        showCursorRecoveryConfirm = true
+                    } label: {
+                        Label(L10n.t("sync_cursor_recovery_button"), systemImage: "shield.checkered")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(Brand.accent)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 38)
+                            .background(Brand.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(vault.syncState == .syncing)
+                    .confirmationDialog(
+                        L10n.t("sync_cursor_recovery_confirm_title"),
+                        isPresented: $showCursorRecoveryConfirm,
+                        titleVisibility: .visible
+                    ) {
+                        Button(L10n.t("sync_cursor_recovery_confirm_button")) {
+                            Task { await vault.recoverExpiredSyncCursor() }
+                        }
+                        Button(L10n.t("cancel_button"), role: .cancel) {}
+                    } message: {
+                        Text(L10n.t("sync_cursor_recovery_confirm_message"))
+                    }
+                }
+            }
+            if case .failed(let message) = vault.syncState {
+                Text("\(L10n.t("last_sync_failed_prompt")) — \(message)")
+                    .font(.caption)
+                    .foregroundStyle(Brand.red)
+            } else if let last = vault.lastSync {
+                Text(L10n.t("last_sync_completed_prompt") + " " + last.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }

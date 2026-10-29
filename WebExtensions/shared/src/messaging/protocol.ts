@@ -4,6 +4,18 @@
  */
 
 import type { ExtensionItem, FillCandidate } from "../core/types.js";
+import type { RelayItemRow } from "../api/relay.js";
+import type {
+    EncryptedSyncQuarantineItem,
+    SyncQuarantineIdentity,
+    SyncQuarantineReason,
+} from "../core/sync-quarantine.js";
+import type {
+    BackupAttachmentDescriptor,
+    BackupConflictDescriptor,
+    BackupInfo,
+    BackupIssue,
+} from "../core/portable-backup-package.js";
 
 /** Encrypted row metadata is preserved unchanged by background decryption. */
 export interface VaultSessionRow {
@@ -22,20 +34,43 @@ export interface VaultSessionFragment {
     modifiedMs: number;
 }
 
+export interface VaultSessionBackupMetadata {
+    createdAtMs: number;
+    headSequence?: number;
+    attachments: BackupAttachmentDescriptor[];
+    conflicts: BackupConflictDescriptor[];
+    issues: BackupIssue[];
+}
+
 /** Popup-only commands; background validates the sender and account binding. */
 export interface VaultSessionRequest {
     type: "vault-session";
-    action: "read" | "begin" | "commit" | "touch" | "replace" | "lock" | "decrypt" | "refresh";
+    action: "read" | "begin" | "commit" | "touch" | "replace" | "lock" | "decrypt" | "decrypt-attachment" | "encrypt" | "encrypt-attachment" | "refresh" | "seal-quarantine" | "open-quarantine" | "seal-backup";
     context?: { vaultId: string; token: string; userId?: string };
     generation?: string;
     items?: ExtensionItem[];
     item?: ExtensionItem;
     /** Commit only: never included in any response. */
     vaultKey?: number[];
+    /** Public password-protected key envelope paired with the committed key. */
+    envelopeB64?: string;
     passwordVersion?: number;
     snapshotVersion?: number;
     expectedSnapshotVersion?: number;
     rows?: VaultSessionRow[];
+    /** Encrypt one reviewed conflict candidate without exposing the vault key. */
+    uuid?: string;
+    xml?: string;
+    attachmentID?: string;
+    contentVersion?: string;
+    cipherB64?: string;
+    dekWrappedB64?: string;
+    plaintextB64?: string;
+    quarantineIdentity?: SyncQuarantineIdentity;
+    quarantineRow?: RelayItemRow;
+    quarantine?: EncryptedSyncQuarantineItem;
+    backupXml?: string;
+    backupMetadata?: VaultSessionBackupMetadata;
 }
 
 export interface VaultSessionResponse {
@@ -48,6 +83,15 @@ export interface VaultSessionResponse {
     snapshotVersion?: number;
     passwordVersion?: number;
     fragments?: VaultSessionFragment[];
+    bodyB64?: string;
+    attachmentB64?: string;
+    cipherB64?: string;
+    dekWrappedB64?: string;
+    failures?: { uuid: string; reason: SyncQuarantineReason }[];
+    quarantineCipherB64?: string;
+    quarantineRow?: RelayItemRow;
+    backupManifestB64?: string;
+    backupInfo?: BackupInfo;
     code?: string;
 }
 
@@ -87,7 +131,7 @@ export function isRequestMessage(value: unknown): value is RequestMessage {
     const type = (value as { type?: unknown }).type;
     if (type === "vault-session") {
         const action = (value as { action?: unknown }).action;
-        return typeof action === "string" && ["read", "begin", "commit", "touch", "replace", "lock", "decrypt", "refresh"].includes(action);
+        return typeof action === "string" && ["read", "begin", "commit", "touch", "replace", "lock", "decrypt", "decrypt-attachment", "encrypt", "encrypt-attachment", "refresh", "seal-quarantine", "open-quarantine", "seal-backup"].includes(action);
     }
     return type === "ping" || type === "query" || type === "fill" || type === "unlock"
         || type === "location" || type === "active-location"

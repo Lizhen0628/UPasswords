@@ -31,6 +31,7 @@ enum AppSheet: Identifiable, Hashable {
     case configureCloud
     case eraseData          // 擦除数据 confirm
     case manageDatabases
+    case importCards(sourceName: String, destinationName: String)
     case selectDatabase
     case preferences        // 设置 window
     case about
@@ -69,6 +70,8 @@ enum AppSheet: Identifiable, Hashable {
         case .configureCloud: return "configureCloud"
         case .eraseData: return "eraseData"
         case .manageDatabases: return "manageDatabases"
+        case .importCards(let sourceName, let destinationName):
+            return "importCards:\(sourceName):\(destinationName)"
         case .selectDatabase: return "selectDatabase"
         case .preferences: return "preferences"
         case .about: return "about"

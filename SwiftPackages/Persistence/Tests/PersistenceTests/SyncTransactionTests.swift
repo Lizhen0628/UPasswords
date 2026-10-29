@@ -9,6 +9,7 @@ final class SyncTransactionTests: XCTestCase {
     }
 
     private var root: URL!
+    private let rowKey = RowSyncKey(raw: Data(repeating: 9, count: 32))
 
     override func setUpWithError() throws {
         root = FileManager.default.temporaryDirectory
@@ -19,12 +20,13 @@ final class SyncTransactionTests: XCTestCase {
         try FileManager.default.removeItem(at: root)
     }
 
-    private func state(for database: PasswordDatabase, cursor: Int) -> RowSyncState {
+    private func state(for database: PasswordDatabase, cursor: Int) throws -> RowSyncState {
         var state = RowSyncState()
         state.cursor = cursor
         for item in RowSync.allItems(database: database) {
             state.revisions[item.uuid] = UInt64(cursor)
             state.syncedMtimes[item.uuid] = item.modifiedMs
+            state.encryptedItemBaselines[item.uuid] = try RowSyncCipher.encryptBaseline(item, key: rowKey)
         }
         return state
     }
@@ -44,7 +46,7 @@ final class SyncTransactionTests: XCTestCase {
         let key = DatabaseCipher.generateVaultKey()
         let envelope = try DatabaseCipher.wrapVaultKey(key, password: "old")
         try store.commitSyncSnapshot(database, name: "Alpha", vaultKey: key,
-                                     state: state(for: database, cursor: 1), envelope: envelope)
+                                     state: try state(for: database, cursor: 1), envelope: envelope)
         return (database, key)
     }
 
@@ -53,7 +55,7 @@ final class SyncTransactionTests: XCTestCase {
         var (database, key) = try initialSnapshot(in: store)
         let card = Card(title: "Committed")
         database.cards.append(card)
-        let expected = state(for: database, cursor: 9)
+        let expected = try state(for: database, cursor: 9)
         let envelope = try Data(contentsOf: store.keyURL(for: "Alpha"))
 
         try store.commitSyncSnapshot(database, name: "Alpha", vaultKey: key, state: expected)
@@ -62,11 +64,78 @@ final class SyncTransactionTests: XCTestCase {
                        card.title)
         var restoredState = try store.loadSyncState(for: "Alpha")
         XCTAssertEqual(restoredState, expected)
-        restoredState.recomputeDirty(database: database)
+        try restoredState.recomputeDirty(database: database, key: rowKey)
         XCTAssertFalse(restoredState.hasPendingWork)
+        for item in RowSync.allItems(database: database) {
+            let encrypted = try XCTUnwrap(restoredState.encryptedItemBaselines[item.uuid])
+            let baseline = try XCTUnwrap(
+                RowSyncCipher.decryptBaseline(encrypted, key: rowKey, uuid: item.uuid))
+            XCTAssertTrue(baseline.matches(item))
+        }
         XCTAssertEqual(try Data(contentsOf: store.keyURL(for: "Alpha")), envelope)
         XCTAssertFalse(FileManager.default.fileExists(atPath: journal(in: store).path))
         XCTAssertTrue(try stageFiles(in: store).isEmpty)
+    }
+
+    func testQuarantinePayloadAndCursorRecoverTogetherAfterInterruptedCommit() throws {
+        let store = DatabaseStore(root: root)
+        var (database, key) = try initialSnapshot(in: store)
+        let keptCard = Card(title: "Kept local record")
+        database.cards.append(keptCard)
+        var nextState = try state(for: database, cursor: 5)
+        let vaultRowKey = RowSyncKey(raw: key.withUnsafeBytes { Data($0) })
+        let remoteID = UUID()
+        let remoteChange = RelayClient.ChangeEntry(
+            seq: 5, uuid: remoteID, op: "upsert", revision: 1, deleted: false,
+            bodyB64: "damaged-cloud-payload", kind: 1, modifiedMs: 100)
+        let quarantined = try RowSyncCipher.quarantine(
+            remoteChange, reason: .authenticationFailed, key: vaultRowKey)
+        nextState.quarantinedItems[quarantined.id] = quarantined
+        nextState.needsSyncContinuation = true
+        store.transactionFaultInjector = { if $0 == "body" { throw InjectedFailure.interrupted } }
+
+        XCTAssertThrowsError(try store.commitSyncSnapshot(
+            database, name: "Alpha", vaultKey: key, state: nextState))
+
+        let restarted = DatabaseStore(root: root)
+        let restoredDatabase = try restarted.load(name: "Alpha", password: "old")
+        let restoredState = try restarted.loadSyncState(for: "Alpha")
+        XCTAssertNotNil(restoredDatabase.card(id: keptCard.id))
+        XCTAssertEqual(restoredState.cursor, 5)
+        XCTAssertTrue(restoredState.needsSyncContinuation)
+        let restoredQuarantine = try XCTUnwrap(restoredState.quarantinedItems[quarantined.id])
+        guard case .change(let restoredChange) = try RowSyncCipher.openQuarantine(
+            restoredQuarantine, key: vaultRowKey) else {
+            return XCTFail("Expected the original remote change")
+        }
+        XCTAssertEqual(restoredChange.bodyB64, "damaged-cloud-payload")
+    }
+
+    func testRestoredHistoryIsCommittedAndRecoveredWithSnapshot() throws {
+        for point in ["journal", "body", "state", "envelope", "backupHistory"] {
+            let directory = root.appendingPathComponent("history-\(point)")
+            let store = DatabaseStore(root: directory)
+            let database = PasswordDatabase.createDefault()
+            let key = DatabaseCipher.generateVaultKey()
+            let envelope = try DatabaseCipher.wrapVaultKey(key, password: "new")
+            let plaintext = Data("encrypted historical content".utf8)
+            let sealed = try AES.GCM.seal(plaintext, using: key)
+            let history = try XCTUnwrap(sealed.combined)
+            store.transactionFaultInjector = { if $0 == point { throw InjectedFailure.interrupted } }
+
+            XCTAssertThrowsError(try store.commitSyncSnapshot(
+                database,
+                name: "Alpha",
+                vaultKey: key,
+                state: RowSyncState(),
+                envelope: envelope,
+                backupHistory: history))
+
+            let restarted = DatabaseStore(root: directory)
+            _ = try restarted.load(name: "Alpha", password: "new")
+            XCTAssertEqual(try Data(contentsOf: restarted.backupHistoryURL(for: "Alpha")), history)
+            XCTAssertTrue(try stageFiles(in: restarted).isEmpty)
+        }
     }
 
     func testEveryPostJournalInterruptionRecoversAllThreeFilesAfterRestart() throws {
@@ -78,7 +147,7 @@ final class SyncTransactionTests: XCTestCase {
             database.cards.append(card)
             let newKey = DatabaseCipher.generateVaultKey()
             let envelope = try DatabaseCipher.wrapVaultKey(newKey, password: "new")
-            let expected = state(for: database, cursor: 7)
+            let expected = try state(for: database, cursor: 7)
             store.transactionFaultInjector = { stage in
                 if stage == point { throw InjectedFailure.interrupted }
             }
@@ -104,7 +173,7 @@ final class SyncTransactionTests: XCTestCase {
         var (database, key) = try initialSnapshot(in: store)
         let card = Card(title: "Recovered")
         database.cards.append(card)
-        let expected = state(for: database, cursor: 8)
+        let expected = try state(for: database, cursor: 8)
         store.transactionFaultInjector = { if $0 == "body" { throw InjectedFailure.interrupted } }
         XCTAssertThrowsError(try store.commitSyncSnapshot(database, name: "Alpha",
                                                            vaultKey: key, state: expected))
@@ -126,7 +195,7 @@ final class SyncTransactionTests: XCTestCase {
             let envelope = try DatabaseCipher.wrapVaultKey(key, password: "new")
             store.transactionFaultInjector = { if $0 == point { throw InjectedFailure.interrupted } }
             XCTAssertThrowsError(try store.commitSyncSnapshot(database, name: "Alpha",
-                vaultKey: key, state: state(for: database, cursor: 2), envelope: envelope))
+                vaultKey: key, state: try state(for: database, cursor: 2), envelope: envelope))
             XCTAssertEqual(try Data(contentsOf: store.url(for: "Alpha")), oldBody)
             XCTAssertEqual(try Data(contentsOf: store.syncStateURL(for: "Alpha")), oldState)
             XCTAssertEqual(try Data(contentsOf: store.keyURL(for: "Alpha")), oldEnvelope)
@@ -144,7 +213,7 @@ final class SyncTransactionTests: XCTestCase {
                 let envelope = try Data(contentsOf: store.keyURL(for: "Alpha"))
                 store.transactionFaultInjector = { if $0 == "journal" { throw InjectedFailure.interrupted } }
                 XCTAssertThrowsError(try store.commitSyncSnapshot(database, name: "Alpha",
-                    vaultKey: key, state: state(for: database, cursor: 2), envelope: envelope))
+                    vaultKey: key, state: try state(for: database, cursor: 2), envelope: envelope))
                 let target = try XCTUnwrap(stageFiles(in: store).first {
                     $0.lastPathComponent.hasSuffix(".\(suffix).stage")
                 })
@@ -182,7 +251,7 @@ final class SyncTransactionTests: XCTestCase {
             let directory = root.appendingPathComponent(operation)
             let store = DatabaseStore(root: directory)
             let (database, key) = try initialSnapshot(in: store)
-            let expected = state(for: database, cursor: 5)
+            let expected = try state(for: database, cursor: 5)
             store.transactionFaultInjector = { if $0 == "body" { throw InjectedFailure.interrupted } }
             XCTAssertThrowsError(try store.commitSyncSnapshot(database, name: "Alpha",
                                                                vaultKey: key, state: expected))
@@ -206,7 +275,7 @@ final class SyncTransactionTests: XCTestCase {
         var (database, key) = try initialSnapshot(in: store)
         let card = Card(title: "RestartedTwice")
         database.cards.append(card)
-        let expected = state(for: database, cursor: 11)
+        let expected = try state(for: database, cursor: 11)
         store.transactionFaultInjector = { if $0 == "journal" { throw InjectedFailure.interrupted } }
         XCTAssertThrowsError(try store.commitSyncSnapshot(database, name: "Alpha",
                                                            vaultKey: key, state: expected))
@@ -223,13 +292,13 @@ final class SyncTransactionTests: XCTestCase {
         let store = DatabaseStore(root: root)
         let (database, key) = try initialSnapshot(in: store)
         let envelope = try Data(contentsOf: store.keyURL(for: "Alpha"))
-        let otherState = state(for: database, cursor: 3)
+        let otherState = try state(for: database, cursor: 3)
         try store.commitSyncSnapshot(database, name: "Other", vaultKey: key,
                                      state: otherState, envelope: envelope)
         let otherBody = try Data(contentsOf: store.url(for: "Other"))
         store.transactionFaultInjector = { if $0 == "body" { throw InjectedFailure.interrupted } }
         XCTAssertThrowsError(try store.commitSyncSnapshot(database, name: "Alpha",
-            vaultKey: key, state: state(for: database, cursor: 12)))
+            vaultKey: key, state: try state(for: database, cursor: 12)))
         let restarted = DatabaseStore(root: root)
         XCTAssertEqual(try restarted.loadSyncState(for: "Other"), otherState)
         XCTAssertEqual(try Data(contentsOf: restarted.url(for: "Other")), otherBody)
@@ -242,7 +311,7 @@ final class SyncTransactionTests: XCTestCase {
         let store = DatabaseStore(root: root)
         var (database, key) = try initialSnapshot(in: store)
         database.cards.append(Card(title: "Remote"))
-        let expected = state(for: database, cursor: 6)
+        let expected = try state(for: database, cursor: 6)
         store.transactionFaultInjector = { if $0 == "body" { throw InjectedFailure.interrupted } }
         XCTAssertThrowsError(try store.commitSyncSnapshot(database, name: "Alpha",
                                                            vaultKey: key, state: expected))

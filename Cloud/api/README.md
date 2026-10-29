@@ -3,19 +3,25 @@
 UPasswords project documentation uses development version v1. API path versions and
 the row-sync capability version are separate protocol identifiers.
 
-The canonical API prefix is `/v1/`; `/v2/` remains available as a compatibility alias
-for already-installed clients. Both prefixes expose the same row-sync protocol
-(capability version 2), handlers, and data. Nginx runs in the existing `nginxui`
-container and forwards requests to the API over the existing Docker network. MariaDB
-remains on the private network and encrypted attachments remain in the Cloudflare R2
-bucket.
+The canonical and only public API prefix is `/v1/`; `/v2/` returns 404. Production and
+current clients use row-sync capability version 5. Authenticated item, change,
+attachment, conflict and rekey routes require `X-UPW-Sync-Protocol: 5`; old protocol
+requests are rejected before reading or modifying sync data. Nginx runs in the existing
+`nginxui` container and forwards requests to the API over the existing Docker network.
+MariaDB remains on the private network and encrypted attachments remain in Cloudflare R2.
 
 ## Production Configuration
 
 Create `.env` from `.env.example` and set mode `0600`. Reuse the existing `APP_KEK`
 exactly; changing it would make existing encrypted email and vault envelopes unreadable.
-The database certificate is pinned by its public key in `secrets/mariadb.pem`. Keep
-the environment file and all files under `secrets/` out of version control.
+Production uses `DB_TLS=pinned` and `DB_CA_FILE=/run/secrets/mariadb.pem`; the PEM file
+may contain up to four trusted database certificates. For planned rotation, verify the
+new public-key fingerprint through a trusted database administration channel, add its
+certificate alongside the current one before rotating the server certificate, and run
+`docker compose run --rm --no-deps api check` after rotation. Remove the old pin only
+after the new certificate has been verified. Do not adopt a certificate solely from an
+unauthenticated failed connection. Keep the environment file and all files under
+`secrets/` out of version control.
 
 The configured 163 SMTP account sends registration and verification mail. Its
 `SMTP_FROM` address must be authorized by 163. `SMTP_REGISTER_REPLY_TO` and
@@ -24,21 +30,54 @@ The configured 163 SMTP account sends registration and verification mail. Its
 ## Schema prerequisite
 
 This API requires `Cloud/database/0001_init.sql` followed by
-`0002_user_profiles.sql`. The second migration adds the encrypted-profile table
-and shared sync view. For an existing initialized database, apply only the missing
-migration with a privileged deployment account after taking a backup:
+`0002_user_profiles.sql`, `0003_conflict_candidates.sql`,
+`0004_conflict_candidate_fingerprint.sql`, `0005_conflict_resolution.sql`,
+`0006_conflict_resolution_change_events.sql`, `0007_composed_conflict_resolutions.sql`,
+`0008_attachment_versions.sql`, `0009_attachment_purge_state.sql`, and
+`0010_rekey_conflict_candidates.sql`. The migrations add encrypted profile rows,
+retained conflict candidates, keyed retry fingerprints, durable item tombstones,
+conflict resolution metadata, versioned attachment retention, and rekey candidate staging.
+Migration 0005 can backfill only deletion events still present in `item_changes`; expired history
+cannot be reconstructed. For an initialized database, apply only missing migrations
+in order with a privileged deployment account:
 
 ```sh
 mariadb --defaults-extra-file=/secure/path/mariadb-client.cnf upasswords < ../database/0002_user_profiles.sql
+mariadb --defaults-extra-file=/secure/path/mariadb-client.cnf upasswords < ../database/0003_conflict_candidates.sql
+mariadb --defaults-extra-file=/secure/path/mariadb-client.cnf upasswords < ../database/0004_conflict_candidate_fingerprint.sql
+mariadb --defaults-extra-file=/secure/path/mariadb-client.cnf upasswords < ../database/0005_conflict_resolution.sql
+mariadb --defaults-extra-file=/secure/path/mariadb-client.cnf upasswords < ../database/0006_conflict_resolution_change_events.sql
+mariadb --defaults-extra-file=/secure/path/mariadb-client.cnf upasswords < ../database/0007_composed_conflict_resolutions.sql
+mariadb --defaults-extra-file=/secure/path/mariadb-client.cnf upasswords < ../database/0008_attachment_versions.sql
+mariadb --defaults-extra-file=/secure/path/mariadb-client.cnf upasswords < ../database/0009_attachment_purge_state.sql
+mariadb --defaults-extra-file=/secure/path/mariadb-client.cnf upasswords < ../database/0010_rekey_conflict_candidates.sql
 ```
+
+The resolver appends one `op=resolve` event in the same transaction as the row or
+tombstone update, head sequence update, and 30-day retention of all candidate ciphertexts.
+Restoring a winner after source deletion requires a new UUID and ciphertext re-encrypted
+for that identity. Whole-candidate resolution can atomically activate the winner's complete
+attachment-version reference set; composed resolution is limited to reliable no-attachment
+candidates. macOS, iOS and the four browser extensions register, review and resolve
+candidates. Rekey snapshots include open
+and 30-day retained candidate ciphertexts; candidate IDs, selected-candidate references
+and retained resolution-event references migrate atomically with the vault rows. Rekey
+abort removes the candidate staging manifest without changing live data.
+
+Change events are retained for `CHANGE_RETENTION_DAYS` (90 days by default). If a native
+client's cursor expires while it has pending local data or a conflict marker, it blocks
+automatic full rebuild to preserve that data. macOS and iOS expose a protected recovery
+flow that first publishes a self-contained backup and adopts the cloud snapshot only after
+that backup succeeds. The production database is not disposable; any reset requires separate
+explicit authorization and a verified backup. Backup and restore jobs are configured, but
+the completed smoke drill does not prove the four-hour RTO at production scale.
 
 Run this from `Cloud/api`. The running API and its `check` command never create or
 alter tables; the application account keeps data permissions only. Apply the
-additive migration before starting the matching image. An old image can still read
-cards and labels after this additive migration, but it cannot sync profiles and
-its maintenance/rekey logic is unaware of that table. Once profiles exist, recovery
-must use a profile-capable image or a rehearsed matching database backup; do not
-restart an older maintenance scheduler against profile data.
+additive migration before starting the matching image. Once profiles, conflict candidates
+or versioned attachments exist, recovery must use a protocol-5 image and scheduler that
+understand the complete schema. Do not restart an older maintenance scheduler or pre-
+protocol-5 API against the current production database.
 
 ## Run and Verify
 

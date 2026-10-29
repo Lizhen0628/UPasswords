@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -23,9 +24,10 @@ type memoryObject struct {
 	Meta Object
 }
 type memoryStore struct {
-	mu      sync.Mutex
-	Objects map[string]memoryObject
-	FailPut bool
+	mu         sync.Mutex
+	Objects    map[string]memoryObject
+	FailPut    bool
+	FailDelete bool
 }
 
 func (m *memoryStore) Put(_ context.Context, k string, b []byte, mime string) error {
@@ -49,6 +51,9 @@ func (m *memoryStore) Get(_ context.Context, k string) (io.ReadCloser, Object, e
 func (m *memoryStore) Delete(_ context.Context, k string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.FailDelete {
+		return errors.New("test delete failure")
+	}
 	delete(m.Objects, k)
 	return nil
 }
@@ -133,6 +138,7 @@ func call(t *testing.T, h http.Handler, method, path, token string, v any) (int,
 	r := httptest.NewRequest(method, path, b)
 	r.RemoteAddr = "192.0.2.1:1234"
 	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set(syncProtocolHeader, strconv.Itoa(syncProtocolVersion))
 	if token != "" {
 		r.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -143,6 +149,85 @@ func call(t *testing.T, h http.Handler, method, path, token string, v any) (int,
 		_ = json.Unmarshal(w.Body.Bytes(), &out)
 	}
 	return w.Code, out
+}
+
+func TestRequireSyncProtocol(t *testing.T) {
+	s := &Server{Log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	handler := s.requireSyncProtocol(next)
+	for _, protocol := range []string{"", "invalid", "2", "3"} {
+		request := httptest.NewRequest(http.MethodGet, "/v1/vaults/v/items", nil)
+		if protocol != "" {
+			request.Header.Set(syncProtocolHeader, protocol)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusUpgradeRequired {
+			t.Errorf("protocol %q returned status %d", protocol, response.Code)
+		}
+		var body map[string]string
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body["error"] != "client_upgrade_required" {
+			t.Errorf("protocol %q returned body %q", protocol, response.Body.String())
+		}
+	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/vaults/v/items", nil)
+	request.Header.Set(syncProtocolHeader, strconv.Itoa(syncProtocolVersion))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("current protocol returned status %d", response.Code)
+	}
+}
+
+func TestSyncDataRoutesRequireProtocol(t *testing.T) {
+	s, mail := testServer(t)
+	handler := s.Handler()
+	token, _ := login(t, s, mail, "protocol-"+randomHex(5)+"@example.com")
+	vaultID := newVault(t, handler, token)
+	itemID := "123e4567-e89b-12d3-a456-426614174000"
+	attachmentID := "32345678-1234-4234-8234-123456789abc"
+	rekeyID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	conflictID := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	routes := []struct {
+		method string
+		path   string
+	}{
+		{"GET", "/seq"},
+		{"GET", "/items"},
+		{"POST", "/items"},
+		{"GET", "/changes"},
+		{"GET", "/conflicts"},
+		{"GET", "/attachments"},
+		{"GET", "/attachment-versions"},
+		{"POST", "/items/" + itemID + "/conflicts"},
+		{"POST", "/conflicts/" + conflictID + "/resolve"},
+		{"PUT", "/attachments/" + attachmentID},
+		{"GET", "/attachments/" + attachmentID},
+		{"DELETE", "/attachments/" + attachmentID},
+		{"POST", "/attachments/" + attachmentID + "/commit"},
+		{"POST", "/rekey/begin"},
+		{"POST", "/rekey/" + rekeyID + "/chunk"},
+		{"POST", "/rekey/" + rekeyID + "/commit"},
+		{"DELETE", "/rekey/" + rekeyID},
+	}
+	for _, route := range routes {
+		request := httptest.NewRequest(route.method, "/v1/vaults/"+vaultID+route.path, nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusUpgradeRequired {
+			t.Errorf("%s %s returned %d, want 426", route.method, route.path, response.Code)
+		}
+	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/vaults", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("vault registry without sync protocol returned %d", response.Code)
+	}
 }
 func login(t *testing.T, s *Server, m *testMailer, em string) (string, string) {
 	t.Helper()
@@ -167,9 +252,30 @@ func newVault(t *testing.T, h http.Handler, token string) string {
 	return v["vaultId"].(string)
 }
 func incoming(id string, kind int, rev int64, data string) map[string]any {
-	return map[string]any{"uuid": id, "kind": kind, "op": "upsert", "baseRevision": rev, "bodyB64": b64([]byte(data)), "modifiedMs": 1234}
+	return map[string]any{"uuid": id, "kind": kind, "op": "upsert", "baseRevision": rev, "bodyB64": b64([]byte(data)), "modifiedMs": 1234, "attachmentRefs": []any{}}
 }
 func result(out map[string]any) map[string]any { return out["results"].([]any)[0].(map[string]any) }
+
+func TestCardUpsertRequiresAttachmentReferences(t *testing.T) {
+	s, mailer := testServer(t)
+	token, _ := login(t, s, mailer, "missing-attachment-refs-"+randomHex(5)+"@example.com")
+	vaultID := newVault(t, s.Handler(), token)
+
+	for _, omitField := range []bool{true, false} {
+		row := incoming("12345678-1234-4234-8234-123456789abc", 1, 0, "cipher")
+		if omitField {
+			delete(row, "attachmentRefs")
+		} else {
+			row["attachmentRefs"] = nil
+		}
+		status, response := call(t, s.Handler(), "POST", "/v1/vaults/"+vaultID+"/items", token,
+			map[string]any{"items": []any{row}})
+		if status != 400 || response["error"] != "attachment_references_required" {
+			t.Fatalf("missing attachment references accepted: status=%d response=%v", status, response)
+		}
+	}
+}
+
 func TestCryptoCompatibilityAndTamper(t *testing.T) {
 	s := &Server{Config: Config{KEK: bytes.Repeat([]byte{0x11}, 32)}}
 	sealed, e := s.seal([]byte("fixture"))

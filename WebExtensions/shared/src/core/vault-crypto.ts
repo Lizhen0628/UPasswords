@@ -104,6 +104,31 @@ export async function decryptBody(body: Uint8Array, vaultKey: Uint8Array): Promi
     }
 }
 
+/** Encrypt a full XML snapshot using the native UPWDB2 container layout. */
+export async function encryptBody(xml: string, vaultKey: Uint8Array): Promise<Uint8Array> {
+    if (vaultKey.length !== 32) throw new VaultCryptoError("invalid_vault_key");
+    const key = await crypto.subtle.importKey("raw", vaultKey as BufferSource, "AES-GCM", false, ["encrypt"]);
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const plaintext = new TextEncoder().encode(xml);
+    try {
+        const sealed = new Uint8Array(await crypto.subtle.encrypt(
+            { name: "AES-GCM", iv: nonce },
+            key,
+            plaintext,
+        ));
+        const body = new Uint8Array(16 + nonce.length + sealed.length);
+        body.set(BODY_MAGIC, 0);
+        const view = new DataView(body.buffer);
+        view.setUint32(8, 2, true);
+        view.setUint32(12, 0, true);
+        body.set(nonce, 16);
+        body.set(sealed, 28);
+        return body;
+    } finally {
+        plaintext.fill(0);
+    }
+}
+
 /**
  * Wrap a fresh vault key with the master password (vault creation from the
  * extension). Mirrors Swift `DatabaseCipher.wrapVaultKey` byte layout:
@@ -155,7 +180,8 @@ export function envelopeChangedAt(envelope: Uint8Array): number | null {
 export async function decryptItemBody(body: Uint8Array, vaultKey: Uint8Array, uuid: string): Promise<string> {
     try {
         return await decryptItemBodyWithKey(body, await importVaultDecryptKey(vaultKey), uuid);
-    } catch {
+    } catch (error) {
+        if (error instanceof VaultCryptoError && error.message === "invalid_item_encoding") throw error;
         throw new VaultCryptoError("item_decrypt_failed");
     }
 }
@@ -180,9 +206,13 @@ export async function decryptItemBodyWithKey(body: Uint8Array, key: CryptoKey, u
             key,
             body.slice(12) as BufferSource,
         ));
-        return new TextDecoder("utf-8", { fatal: true }).decode(plain);
     } catch {
         throw new VaultCryptoError("item_decrypt_failed");
+    }
+    try {
+        return new TextDecoder("utf-8", { fatal: true }).decode(plain);
+    } catch {
+        throw new VaultCryptoError("invalid_item_encoding");
     } finally {
         plain?.fill(0);
     }
@@ -219,13 +249,165 @@ export async function encryptItemBody(xml: string, vaultKey: Uint8Array, uuid: s
     }
 }
 
+/** Decrypt one attachment ciphertext and VEK-wrapped DEK with Swift-compatible AAD. */
+export async function decryptAttachmentVersion(
+    cipher: Uint8Array,
+    dekWrapped: Uint8Array,
+    vaultKey: Uint8Array,
+    attachmentID: string,
+    contentVersion: string,
+): Promise<Uint8Array> {
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (vaultKey.length !== 32 || cipher.length < 28 || dekWrapped.length < 28
+        || !uuidPattern.test(attachmentID) || !uuidPattern.test(contentVersion)) {
+        throw new VaultCryptoError("bad_attachment_identity");
+    }
+    const aad = new TextEncoder().encode(
+        `UPW-ATTACHMENT-VERSION-V1:${attachmentID.toLowerCase()}:${contentVersion.toLowerCase()}`,
+    );
+    const wrapAAD = new Uint8Array(aad.length + 4);
+    wrapAAD.set(aad);
+    wrapAAD.set(new TextEncoder().encode(":DEK"), aad.length);
+    const vaultKeyObject = await crypto.subtle.importKey(
+        "raw", vaultKey as BufferSource, "AES-GCM", false, ["decrypt"],
+    );
+    let dek: Uint8Array | undefined;
+    try {
+        dek = new Uint8Array(await crypto.subtle.decrypt(
+            { name: "AES-GCM", iv: dekWrapped.slice(0, 12), additionalData: wrapAAD },
+            vaultKeyObject,
+            dekWrapped.slice(12),
+        ));
+        if (dek.length !== 32) throw new VaultCryptoError("attachment_decrypt_failed");
+        const dataKey = await crypto.subtle.importKey("raw", dek as BufferSource, "AES-GCM", false, ["decrypt"]);
+        const plaintext = await crypto.subtle.decrypt(
+            { name: "AES-GCM", iv: cipher.slice(0, 12), additionalData: aad },
+            dataKey,
+            cipher.slice(12),
+        );
+        return new Uint8Array(plaintext);
+    } catch {
+        throw new VaultCryptoError("attachment_decrypt_failed");
+    } finally {
+        dek?.fill(0);
+        wrapAAD.fill(0);
+        aad.fill(0);
+    }
+}
+
+/** Encrypts attachment bytes with a fresh DEK and Swift-compatible version AAD. */
+export async function encryptAttachmentVersion(
+    plaintext: Uint8Array,
+    vaultKey: Uint8Array,
+    attachmentID: string,
+    contentVersion: string,
+): Promise<{ cipher: Uint8Array; dekWrapped: Uint8Array }> {
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (vaultKey.length !== 32 || plaintext.length === 0
+        || !uuidPattern.test(attachmentID) || !uuidPattern.test(contentVersion)) {
+        throw new VaultCryptoError("bad_attachment_identity");
+    }
+    const aad = new TextEncoder().encode(
+        `UPW-ATTACHMENT-VERSION-V1:${attachmentID.toLowerCase()}:${contentVersion.toLowerCase()}`,
+    );
+    const wrapAAD = new Uint8Array(aad.length + 4);
+    wrapAAD.set(aad);
+    wrapAAD.set(new TextEncoder().encode(":DEK"), aad.length);
+    const dek = crypto.getRandomValues(new Uint8Array(32));
+    try {
+        const dataKey = await crypto.subtle.importKey("raw", dek, "AES-GCM", false, ["encrypt"]);
+        const dataNonce = crypto.getRandomValues(new Uint8Array(12));
+        const sealedData = new Uint8Array(await crypto.subtle.encrypt(
+            { name: "AES-GCM", iv: dataNonce, additionalData: aad },
+            dataKey,
+            plaintext as BufferSource,
+        ));
+        const cipher = new Uint8Array(dataNonce.length + sealedData.length);
+        cipher.set(dataNonce);
+        cipher.set(sealedData, dataNonce.length);
+
+        const vaultKeyObject = await crypto.subtle.importKey(
+            "raw", vaultKey as BufferSource, "AES-GCM", false, ["encrypt"],
+        );
+        const wrapNonce = crypto.getRandomValues(new Uint8Array(12));
+        const sealedDEK = new Uint8Array(await crypto.subtle.encrypt(
+            { name: "AES-GCM", iv: wrapNonce, additionalData: wrapAAD },
+            vaultKeyObject,
+            dek as BufferSource,
+        ));
+        const dekWrapped = new Uint8Array(wrapNonce.length + sealedDEK.length);
+        dekWrapped.set(wrapNonce);
+        dekWrapped.set(sealedDEK, wrapNonce.length);
+        return { cipher, dekWrapped };
+    } catch {
+        throw new VaultCryptoError("attachment_encrypt_failed");
+    } finally {
+        dek.fill(0);
+        wrapAAD.fill(0);
+        aad.fill(0);
+    }
+}
+
+/** Rewrap one authenticated attachment DEK from an old VEK to a new VEK. */
+export async function rewrapAttachmentDEK(
+    dekWrapped: Uint8Array,
+    sourceVaultKey: Uint8Array,
+    destinationVaultKey: Uint8Array,
+    attachmentID: string,
+    contentVersion: string,
+): Promise<Uint8Array> {
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (sourceVaultKey.length !== 32 || destinationVaultKey.length !== 32 || dekWrapped.length < 28
+        || !uuidPattern.test(attachmentID) || !uuidPattern.test(contentVersion)) {
+        throw new VaultCryptoError("bad_attachment_identity");
+    }
+    const aad = new TextEncoder().encode(
+        `UPW-ATTACHMENT-VERSION-V1:${attachmentID.toLowerCase()}:${contentVersion.toLowerCase()}`,
+    );
+    const wrapAAD = new Uint8Array(aad.length + 4);
+    wrapAAD.set(aad);
+    wrapAAD.set(new TextEncoder().encode(":DEK"), aad.length);
+    let dek: Uint8Array | undefined;
+    try {
+        const sourceKey = await crypto.subtle.importKey(
+            "raw", sourceVaultKey as BufferSource, "AES-GCM", false, ["decrypt"],
+        );
+        dek = new Uint8Array(await crypto.subtle.decrypt(
+            { name: "AES-GCM", iv: dekWrapped.slice(0, 12), additionalData: wrapAAD },
+            sourceKey,
+            dekWrapped.slice(12),
+        ));
+        if (dek.length !== 32) throw new VaultCryptoError("attachment_decrypt_failed");
+        const destinationKey = await crypto.subtle.importKey(
+            "raw", destinationVaultKey as BufferSource, "AES-GCM", false, ["encrypt"],
+        );
+        const nonce = crypto.getRandomValues(new Uint8Array(12));
+        const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+            { name: "AES-GCM", iv: nonce, additionalData: wrapAAD },
+            destinationKey,
+            dek as BufferSource,
+        ));
+        const result = new Uint8Array(nonce.length + ciphertext.length);
+        result.set(nonce);
+        result.set(ciphertext, nonce.length);
+        return result;
+    } catch (error) {
+        if (error instanceof VaultCryptoError) throw error;
+        throw new VaultCryptoError("attachment_decrypt_failed");
+    } finally {
+        dek?.fill(0);
+        wrapAAD.fill(0);
+        aad.fill(0);
+    }
+}
+
 /**
  * Concatenate decrypted item fragments (each a standalone `<card>`/`<label>`
  * element, exactly what Swift `DatabaseItemCodec.xmlData` produces) into a
  * document `parseVaultXml` can read; label elements are ignored by the parser.
  */
 export function fragmentsToXml(fragments: string[]): string {
-    return `<passworddatabase>${fragments.join("")}</passworddatabase>`;
+    return `<database>${fragments.join("")}</database>`;
 }
 
 /** XML 属性来自不可信输入:白名单外的值回退默认,禁止 as 断言直接放行。 */
@@ -240,6 +422,7 @@ const AUTOFILL_TOKENS: ReadonlySet<string> = new Set([
     "postal-code", "country-name",
     "cc-number", "cc-name", "cc-exp", "cc-csc",
 ]);
+const FIELD_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Parse the vault XML into fill items. Mirrors the native handler filter
@@ -261,10 +444,20 @@ export function parseVaultXml(xml: string): ExtensionItem[] {
         }
         // Keep opaque future subtrees out of the editable field projection, matching item-editor.
         const directFields = Array.from(card.children).filter((element) => element.tagName === "field" && !element.namespaceURI);
+        const fieldIDs = new Set<string>();
         const fields = directFields.map((field) => {
+            const id = field.getAttribute("id");
+            if (id !== null) {
+                const normalizedID = id.toLowerCase();
+                if (!FIELD_UUID_PATTERN.test(id) || fieldIDs.has(normalizedID)) {
+                    throw new VaultCryptoError("bad_field_identity");
+                }
+                fieldIDs.add(normalizedID);
+            }
             const type = field.getAttribute("type") ?? "text";
             const autofill = field.getAttribute("autofill") ?? "off";
             return {
+                ...(id === null ? {} : { id }),
                 name: field.getAttribute("name") ?? "",
                 type: (FIELD_TYPES.has(type) ? type : "text") as ExtensionItem["fields"][number]["type"],
                 value: field.textContent ?? "",

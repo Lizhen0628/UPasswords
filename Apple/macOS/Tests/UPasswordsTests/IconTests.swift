@@ -110,6 +110,17 @@ final class IconTests: XCTestCase {
         XCTAssertNil(normalized)
     }
 
+    func testAttachmentImageDecoderBoundsPreviewDimensions() throws {
+        let png = solidPNG(width: 512, height: 256)
+        let thumbnail = try XCTUnwrap(
+            AttachmentImageDecoder.thumbnail(data: png, maxPixelSize: 128))
+
+        XCTAssertTrue(AttachmentImageDecoder.isImage(png))
+        XCTAssertLessThanOrEqual(max(thumbnail.width, thumbnail.height), 128)
+        XCTAssertFalse(AttachmentImageDecoder.isImage(Data("not an image".utf8)))
+        XCTAssertNil(AttachmentImageDecoder.thumbnail(data: png, maxPixelSize: 0))
+    }
+
     // MARK: - ICO 解码
 
     /// 把 PNG 帧包进 ICO 容器(经典 favicon.ico 就是这种结构)。

@@ -6,10 +6,13 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decryptBody, decryptItemBody, envelopeChangedAt, fragmentsToXml, unwrapEnvelope, VaultCryptoError, wrapEnvelope } from "../dist/index.js";
+import { decryptBody, decryptItemBody, encryptBody, envelopeChangedAt, fragmentsToXml, unwrapEnvelope, VaultCryptoError, wrapEnvelope } from "../dist/index.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const fixture = JSON.parse(readFileSync(`${here}fixtures/vault-vector.json`, "utf8"));
+const backupFixture = JSON.parse(readFileSync(
+    new URL("../../../Contracts/test-vectors/browser-encrypted-snapshot.json", import.meta.url), "utf8",
+));
 // 行级条目向量由 Persistence 的 ItemVectorTests 生成(RowSyncCipher 真实密文)
 const itemFixture = JSON.parse(readFileSync(`${here}fixtures/item-vector.json`, "utf8"));
 
@@ -54,6 +57,21 @@ test("decryptBody: 错误库密钥 → vault_key_mismatch", async () => {
         () => decryptBody(body, wrongKey),
         (error) => error instanceof VaultCryptoError && error.message === "vault_key_mismatch",
     );
+});
+
+test("encryptBody: exported snapshot uses the native UPWDB2 header and round-trips", async () => {
+    const xml = "<?xml version=\"1.0\"?><database><card id=\"x\"/></database>";
+    const body = await encryptBody(xml, expectedVek);
+    assert.equal(new TextDecoder().decode(body.slice(0, 8)), "UPWDB2\0\0");
+    assert.equal(new DataView(body.buffer, body.byteOffset, body.byteLength).getUint32(8, true), 2);
+    assert.equal(await decryptBody(body, expectedVek), xml);
+});
+
+test("browser snapshot vector is readable by the shared native container contract", async () => {
+    const vek = Uint8Array.from(atob(backupFixture.vaultKey), character => character.charCodeAt(0));
+    const body = Uint8Array.from(atob(backupFixture.body), character => character.charCodeAt(0));
+    assert.equal(backupFixture.format, "UPWDB2");
+    assert.equal(await decryptBody(body, vek), backupFixture.xml);
 });
 
 test("envelopeChangedAt: Swift 写入的时间戳按 f64 LE 读回", () => {
@@ -103,6 +121,6 @@ test("wrapEnvelope: 布局 100B + 与 unwrapEnvelope 往返一致(建库用)", a
 
 test("fragmentsToXml: 片段拼成可解析文档(标签包裹,card 可查询)", () => {
     const doc = fragmentsToXml([itemFixture.fragment, itemFixture.fragment]);
-    assert.ok(doc.startsWith("<passworddatabase>") && doc.endsWith("</passworddatabase>"));
+    assert.ok(doc.startsWith("<database>") && doc.endsWith("</database>"));
     assert.equal(doc.split("<card ").length - 1, 2);
 });

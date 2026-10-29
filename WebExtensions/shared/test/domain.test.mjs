@@ -13,6 +13,7 @@ import {
     credentialsOf,
     isRequestMessage,
     sha256Hex,
+    sha256BytesHex,
     itemFingerprint,
 } from '../dist/index.js'
 
@@ -93,6 +94,11 @@ test('sha256Hex matches FIPS 180-2 vector', async () => {
     )
 })
 
+test('sha256BytesHex hashes exact binary bytes', async () => {
+    assert.equal(await sha256BytesHex(new Uint8Array([0, 1, 2, 255])),
+        '3d1f57c984978ef98a18378c8166c1cb8ede02c03eeb6aee7e2f121dfeee3e56')
+})
+
 test('itemFingerprint is stable and input-sensitive', async () => {
     const base = { id: 1, title: 'GitHub', host: 'github.com' }
     assert.equal(await itemFingerprint(base), await itemFingerprint({ ...base }))
@@ -155,6 +161,12 @@ test('Contracts: all four browser manifests agree on shared entry points', () =>
     const firefox = read('firefox')
     for (const m of [safari, chrome, edge, firefox]) {
         assert.equal(m.manifest_version, 3)
+        const directives = new Map(m.content_security_policy.extension_pages.split(';').map(value => {
+            const [name, ...sources] = value.trim().split(/\s+/)
+            return [name, sources]
+        }))
+        assert.deepEqual(directives.get('img-src'), ["'self'", 'data:'], 'verified local image previews must be permitted')
+        assert.deepEqual(directives.get('script-src'), ["'self'"], 'image preview must not enable remote scripts')
         // 弹窗必须始终能读当前页地址做站点匹配:无 tabs 权限时
         // tabs.query 不含 url,插件在所有网页都报"此页面不可填充"
         assert.ok(m.permissions.includes('tabs'), 'permissions must include tabs')

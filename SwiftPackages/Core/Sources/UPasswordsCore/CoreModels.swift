@@ -168,10 +168,10 @@ public struct HistoryEntry: Codable, Equatable, Identifiable {
 
 /// A single named field on a card.
 public struct Field: Codable, Equatable, Identifiable {
-    /// 创建具有独立内存身份的字段值。
+    /// 创建具有持久 UUID 身份的字段值。
     ///
     /// - Parameters:
-    ///   - id: 内存中的字段 UUID；XML 不保留该身份。
+    ///   - id: 持久字段 UUID。
     ///   - name: 展示名。
     ///   - type: 字段语义类型。
     ///   - value: 当前明文值。
@@ -180,6 +180,7 @@ public struct Field: Codable, Equatable, Identifiable {
     public init(id: UUID = UUID(), name: String, type: FieldType = .text, value: String = "",
                 autofill: Autofill = .off, history: [HistoryEntry] = []) {
         self.id = id
+        hasPersistentID = true
         self.name = name
         self.type = type
         self.value = value
@@ -187,8 +188,10 @@ public struct Field: Codable, Equatable, Identifiable {
         self.history = history
     }
 
-    /// 当前内存模型中的字段标识；XML 字段元素不持久化该标识。
+    /// 当前内存模型中的字段标识；旧 XML 缺少持久 ID 时会使用临时值。
     public var id: UUID = UUID()
+    /// ID 是否来自持久化数据；临时 ID 不写入 XML 或编码数据。
+    public internal(set) var hasPersistentID: Bool = true
     /// 字段展示名称，与字段类型和自动填充词条相互独立。
     public var name: String
     /// 字段的展示、输入和安全分析类型。
@@ -199,6 +202,34 @@ public struct Field: Codable, Equatable, Identifiable {
     public var autofill: Autofill = .off
     /// 旧字段值及其修改时间，最多由 putHistoryValue 保留 20 项。
     public var history: [HistoryEntry] = []
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, type, value, autofill, history
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedID = try container.decodeIfPresent(UUID.self, forKey: .id)
+        id = decodedID ?? UUID()
+        hasPersistentID = decodedID != nil
+        name = try container.decode(String.self, forKey: .name)
+        type = try container.decode(FieldType.self, forKey: .type)
+        value = try container.decode(String.self, forKey: .value)
+        autofill = try container.decode(Autofill.self, forKey: .autofill)
+        history = try container.decode([HistoryEntry].self, forKey: .history)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if hasPersistentID {
+            try container.encode(id, forKey: .id)
+        }
+        try container.encode(name, forKey: .name)
+        try container.encode(type, forKey: .type)
+        try container.encode(value, forKey: .value)
+        try container.encode(autofill, forKey: .autofill)
+        try container.encode(history, forKey: .history)
+    }
 
     /// 当前值是否为非空字符串；不自动裁剪空白。
     public var hasValue: Bool { !value.isEmpty }
@@ -219,29 +250,109 @@ public struct Field: Codable, Equatable, Identifiable {
     }
 }
 
-/// Attached binary payload (base64 in XML).
+/// Attached binary payload with a stable identity and per-content version token.
 public struct Attachment: Codable, Equatable, Identifiable {
     /// 创建一个尚未单独加密的附件值。
     ///
     /// - Parameters:
-    ///   - id: 内存中的附件身份；XML 不保留该身份。
+    ///   - id: 持久附件 UUID。
+    ///   - contentVersion: 此附件内容版本的稳定 UUID。
     ///   - name: 附件展示名。
-    ///   - data: 附件原始字节。
-    public init(id: UUID = UUID(), name: String, data: Data) {
+    ///   - data: 附件原始字节；nil 表示仅有远端元数据，本机尚无内容副本。
+    public init(id: UUID = UUID(), contentVersion: UUID = UUID(), name: String, data: Data?) {
         self.id = id
+        hasPersistentID = true
+        self.contentVersion = contentVersion
+        hasPersistentContentVersion = true
         self.name = name
         self.data = data
     }
 
-    /// 当前内存模型中的附件标识；XML 附件元素不持久化该标识。
+    /// 当前内存模型中的附件标识；旧 XML 缺少持久 ID 时会使用临时值。
     public var id: UUID = UUID()
+    /// ID 是否来自持久化数据；临时 ID 不写入 XML 或编码数据。
+    public internal(set) var hasPersistentID: Bool = true
+    /// 当前附件字节版本的随机稳定令牌；重加密和改密不改变该值。
+    public internal(set) var contentVersion: UUID = UUID()
+    /// 版本令牌是否来自持久化数据；旧数据缺少版本令牌时为 false。
+    public internal(set) var hasPersistentContentVersion: Bool = true
     /// 附件的展示文件名。
     public var name: String
-    /// 已解码的附件明文字节；XML 序列化时转为 Base64。
-    public var data: Data // decoded bytes; serialized base64 into XML
+    private var preservesVersionForContentMutation = false
+    /// 已解码的附件明文字节；nil 表示内容未下载或本机副本不可用。
+    public var data: Data? {
+        didSet {
+            guard !preservesVersionForContentMutation, data != oldValue else { return }
+            contentVersion = UUID()
+            hasPersistentContentVersion = true
+        }
+    }
 
-    /// 附件明文字节数。
-    public var length: Int { data.count }
+    private enum CodingKeys: String, CodingKey {
+        case id, contentVersion, name, data
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedID = try container.decodeIfPresent(UUID.self, forKey: .id)
+        let decodedContentVersion = try container.decodeIfPresent(UUID.self, forKey: .contentVersion)
+        let decodedData = try container.decodeIfPresent(Data.self, forKey: .data)
+        guard decodedData != nil || (decodedID != nil && decodedContentVersion != nil) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .data,
+                in: container,
+                debugDescription: "An unavailable attachment requires a persistent ID and content version.")
+        }
+        id = decodedID ?? UUID()
+        hasPersistentID = decodedID != nil
+        contentVersion = decodedContentVersion ?? UUID()
+        hasPersistentContentVersion = decodedContentVersion != nil
+        name = try container.decode(String.self, forKey: .name)
+        data = decodedData
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if hasPersistentID {
+            try container.encode(id, forKey: .id)
+        }
+        if hasPersistentContentVersion {
+            try container.encode(contentVersion, forKey: .contentVersion)
+        }
+        try container.encode(name, forKey: .name)
+        try container.encodeIfPresent(data, forKey: .data)
+    }
+
+    /// Installs bytes downloaded for the currently referenced version.
+    /// - Parameters:
+    ///   - data: Authenticated plaintext bytes for the attachment.
+    ///   - version: Version observed when the download was requested.
+    /// - Returns: Whether the bytes matched the still-current content version.
+    @discardableResult
+    public mutating func installDownloadedContent(_ data: Data, for version: UUID) -> Bool {
+        guard hasPersistentContentVersion, contentVersion == version else { return false }
+        preservesVersionForContentMutation = true
+        self.data = data
+        preservesVersionForContentMutation = false
+        contentVersion = version
+        return true
+    }
+
+    /// Drops the local byte cache without changing the referenced content version.
+    public mutating func discardLocalContent() {
+        preservesVersionForContentMutation = true
+        data = nil
+        preservesVersionForContentMutation = false
+    }
+
+    /// 当前内存是否持有附件原始字节。
+    public var hasContent: Bool { data != nil }
+
+    /// 附件原始字节数；内容缺失时为 0。调用方需要区分缺失与合法空文件时应先检查 `hasContent`。
+    public var length: Int { data?.count ?? 0 }
+
+    /// 附件原始字节数；内容缺失时返回 nil。
+    public var contentLength: Int? { data?.count }
 }
 
 /// A user label (`<label name id/>`).
@@ -332,7 +443,7 @@ public struct Card: Codable, Equatable, Identifiable {
     public var reminder: TimeInterval? = nil          // reminder millis
     /// 创建时间，使用 Unix 毫秒时间戳。
     public var created: TimeInterval = 0              // created millis
-    /// 最后修改时间，使用 Unix 毫秒时间戳；同步以此进行 LWW 裁决。
+    /// 最后修改时间，使用 Unix 毫秒时间戳；云端同步不以此作为冲突胜负依据。
     public var modified: TimeInterval = 0             // modified millis
     /// 兼容旧数据的网站图标偏好；当前图标来源另见 iconSource。
     public var useWebsiteIcon: Bool = false
@@ -417,7 +528,7 @@ public struct Card: Codable, Equatable, Identifiable {
         return Card.days(fromMillis: e) < 0
     }
 
-    /// 字段值、备注、附件及图标数据的累计字节数，不含标题与 XML 结构开销。
+    /// 字段值、备注、本机可用附件及图标数据的累计字节数，不含标题与 XML 结构开销。
     ///
     /// - Complexity: O(n + b)，n 为字段和附件数，b 为统计的文本字节数。
     public var size: Int {

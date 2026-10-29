@@ -11,14 +11,15 @@ import (
 
 // incomingItem carries one validated CAS write; Body contains ciphertext, never vault plaintext.
 type incomingItem struct {
-	UUID         string  `json:"uuid"`
-	Kind         int     `json:"kind"`
-	Op           string  `json:"op"`
-	BaseRevision *int64  `json:"baseRevision"`
-	BodyB64      string  `json:"bodyB64"`
-	SHA256       *string `json:"sha256"`
-	ModifiedMS   *int64  `json:"modifiedMs"`
-	Body         []byte  `json:"-"`
+	UUID           string                 `json:"uuid"`
+	Kind           int                    `json:"kind"`
+	Op             string                 `json:"op"`
+	BaseRevision   *int64                 `json:"baseRevision"`
+	BodyB64        string                 `json:"bodyB64"`
+	SHA256         *string                `json:"sha256"`
+	ModifiedMS     *int64                 `json:"modifiedMs"`
+	AttachmentRefs *[]attachmentReference `json:"attachmentRefs"`
+	Body           []byte                 `json:"-"`
 }
 
 // itemRow is an encrypted sync row; Modified is client time and Updated is server time, both in milliseconds.
@@ -65,6 +66,12 @@ func (s *Server) itemsPost(w http.ResponseWriter, r *http.Request) error {
 			return fail(400, "bad_request")
 		}
 		if v.Op == "upsert" {
+			if v.Kind == 1 && v.AttachmentRefs == nil {
+				return fail(400, "attachment_references_required")
+			}
+			if v.Kind != 1 && v.AttachmentRefs != nil && len(*v.AttachmentRefs) != 0 {
+				return fail(400, "bad_attachment_reference")
+			}
 			raw, e := decode64(v.BodyB64)
 			if e != nil || len(raw) == 0 {
 				return fail(400, "bad_request")
@@ -85,7 +92,6 @@ func (s *Server) itemsPost(w http.ResponseWriter, r *http.Request) error {
 	a := identity(r)
 	vid := param(r, "vaultID")
 	out := []map[string]any{}
-	purged := []string{}
 	ts := now()
 	e := s.transaction(r.Context(), func(t *sql.Tx) error {
 		v, e := loadVault(r.Context(), t, a.UserID, vid, true)
@@ -105,6 +111,30 @@ func (s *Server) itemsPost(w http.ResponseWriter, r *http.Request) error {
 			if e != nil && !errors.Is(e, sql.ErrNoRows) {
 				return e
 			}
+			if exists {
+				var tombstoneCount int
+				if e = t.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM item_tombstones WHERE vault_id=? AND item_uuid=?", vid, i.UUID).Scan(&tombstoneCount); e != nil {
+					return e
+				}
+				if tombstoneCount > 0 {
+					return fail(409, "item_deleted")
+				}
+			}
+			if !exists && i.Op == "upsert" {
+				var deletedRevision, deletedMs, deletedSeq int64
+				deletedErr := t.QueryRowContext(r.Context(), "SELECT revision,deleted_ms,seq FROM item_tombstones WHERE vault_id=? AND item_uuid=?", vid, i.UUID).Scan(&deletedRevision, &deletedMs, &deletedSeq)
+				if deletedErr == nil {
+					result["status"] = "not_found"
+					result["deletedAt"] = deletedMs
+					result["seq"] = deletedSeq
+					result["deletedRevision"] = deletedRevision
+					out = append(out, result)
+					continue
+				}
+				if !errors.Is(deletedErr, sql.ErrNoRows) {
+					return deletedErr
+				}
+			}
 			if exists && rev != *i.BaseRevision {
 				result["status"] = "conflict"
 				result["current"] = map[string]any{"revision": rev, "bodyB64": b64(current)}
@@ -113,14 +143,6 @@ func (s *Server) itemsPost(w http.ResponseWriter, r *http.Request) error {
 			}
 			if !exists && i.Op == "upsert" && *i.BaseRevision > 0 {
 				result["status"] = "not_found"
-				var deleted, seq int64
-				e = t.QueryRowContext(r.Context(), "SELECT created_ms,seq FROM item_changes WHERE vault_id=? AND item_uuid=? AND op=2 ORDER BY seq DESC LIMIT 1", vid, i.UUID).Scan(&deleted, &seq)
-				if e == nil {
-					result["deletedAt"] = deleted
-					result["seq"] = seq
-				} else if !errors.Is(e, sql.ErrNoRows) {
-					return e
-				}
 				out = append(out, result)
 				continue
 			}
@@ -157,34 +179,55 @@ func (s *Server) itemsPost(w http.ResponseWriter, r *http.Request) error {
 					if v.Count > s.Config.limit("ITEMS_PER_VAULT_LIMIT") {
 						return fail(413, "quota_exceeded")
 					}
-					_, e = t.ExecContext(r.Context(), "INSERT INTO "+table+"(vault_id,item_uuid,kind,revision,body,body_sha256,body_bytes,modified_ms,created_ms,updated_ms) VALUES(?,?,?,?,?,?,?,?,?,?)", vid, i.UUID, i.Kind, newRev, i.Body, *i.SHA256, len(i.Body), *i.ModifiedMS, created, ts)
+					_, e = t.ExecContext(r.Context(), "INSERT INTO "+table+"(vault_id,item_uuid,kind,revision,body,body_sha256,body_bytes,modified_ms,created_ms,updated_ms,origin_session_id,origin_device_name,origin_platform) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", vid, i.UUID, i.Kind, newRev, i.Body, *i.SHA256, len(i.Body), *i.ModifiedMS, created, ts, a.SessionID, a.DeviceName, a.Platform)
 				} else {
-					_, e = t.ExecContext(r.Context(), "UPDATE "+table+" SET kind=?,revision=?,body=?,body_sha256=?,body_bytes=?,modified_ms=?,updated_ms=? WHERE vault_id=? AND item_uuid=?", i.Kind, newRev, i.Body, *i.SHA256, len(i.Body), *i.ModifiedMS, ts, vid, i.UUID)
+					_, e = t.ExecContext(r.Context(), "UPDATE "+table+" SET kind=?,revision=?,body=?,body_sha256=?,body_bytes=?,modified_ms=?,updated_ms=?,origin_session_id=?,origin_device_name=?,origin_platform=? WHERE vault_id=? AND item_uuid=?", i.Kind, newRev, i.Body, *i.SHA256, len(i.Body), *i.ModifiedMS, ts, a.SessionID, a.DeviceName, a.Platform, vid, i.UUID)
 				}
 				if e != nil {
 					return e
+				}
+				if i.Kind == 1 && i.AttachmentRefs != nil {
+					if e = activateAttachmentReferences(r.Context(), t, vid, i.UUID, *i.AttachmentRefs); e != nil {
+						return e
+					}
+				} else if exists && currentKind == 1 && i.Kind != 1 {
+					if e = activateAttachmentReferences(r.Context(), t, vid, i.UUID, []attachmentReference{}); e != nil {
+						return e
+					}
 				}
 				result["revision"] = newRev
 			} else {
 				op = 2
-				rows, e := t.QueryContext(r.Context(), "SELECT object_key,bytes FROM attachments WHERE vault_id=? AND card_uuid=?", vid, i.UUID)
+				rows, e := t.QueryContext(r.Context(), "SELECT attach_uuid,content_version FROM attachments WHERE vault_id=? AND card_uuid=? FOR UPDATE", vid, i.UUID)
 				if e != nil {
 					return e
 				}
+				attachments := []struct {
+					id, version  string
+					versionValid bool
+				}{}
 				for rows.Next() {
-					var key string
-					var size int64
-					if e = rows.Scan(&key, &size); e != nil {
+					var attachmentID string
+					var contentVersion sql.NullString
+					if e = rows.Scan(&attachmentID, &contentVersion); e != nil {
 						rows.Close()
 						return e
 					}
-					purged = append(purged, key)
-					v.AttachBytes -= size
+					attachments = append(attachments, struct {
+						id, version  string
+						versionValid bool
+					}{attachmentID, contentVersion.String, contentVersion.Valid})
 				}
 				e = rows.Err()
 				rows.Close()
 				if e != nil {
 					return e
+				}
+				for _, attachment := range attachments {
+					version := sql.NullString{String: attachment.version, Valid: attachment.versionValid}
+					if e = retireAttachmentVersion(r.Context(), t, vid, attachment.id, i.UUID, version, ts); e != nil {
+						return e
+					}
 				}
 				if _, e = t.ExecContext(r.Context(), "DELETE FROM attachments WHERE vault_id=? AND card_uuid=?", vid, i.UUID); e != nil {
 					return e
@@ -202,6 +245,11 @@ func (s *Server) itemsPost(w http.ResponseWriter, r *http.Request) error {
 			if e != nil {
 				return e
 			}
+			if op == 2 {
+				if _, e = t.ExecContext(r.Context(), "INSERT INTO item_tombstones(vault_id,item_uuid,revision,seq,deleted_ms,session_id,device_name,platform) VALUES(?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE revision=VALUES(revision),seq=VALUES(seq),deleted_ms=VALUES(deleted_ms),session_id=VALUES(session_id),device_name=VALUES(device_name),platform=VALUES(platform)", vid, i.UUID, newRev, seq, ts, a.SessionID, a.DeviceName, a.Platform); e != nil {
+					return e
+				}
+			}
 			if seq > v.Head {
 				v.Head = seq
 			}
@@ -213,11 +261,6 @@ func (s *Server) itemsPost(w http.ResponseWriter, r *http.Request) error {
 	})
 	if e != nil {
 		return e
-	}
-	for _, key := range purged {
-		if e = s.Objects.Delete(r.Context(), key); e != nil {
-			s.Log.Warn("attachment cleanup deferred")
-		}
 	}
 	s.audit(r.Context(), "items_post", a.UserID, vid, map[string]int{"n": len(b.Items)})
 	writeJSON(w, 200, map[string]any{"results": out})
@@ -331,7 +374,7 @@ func (s *Server) changes(w http.ResponseWriter, r *http.Request) error {
 		return fail(410, "cursor_expired")
 	}
 	// The event and live row are read in one statement to avoid mixed snapshots.
-	rows, e := s.DB.QueryContext(r.Context(), "SELECT c.seq,c.item_uuid,c.op,c.revision,i.kind,i.revision,i.body,i.body_sha256,i.modified_ms FROM item_changes c LEFT JOIN vault_sync_items i ON i.vault_id=c.vault_id AND i.item_uuid=c.item_uuid WHERE c.vault_id=? AND c.seq>? ORDER BY c.seq LIMIT ?", v.ID, since, limit)
+	rows, e := s.DB.QueryContext(r.Context(), "SELECT c.seq,c.item_uuid,c.op,c.revision,c.resolved_item_uuid,c.conflict_id,c.base_revision,c.winner_candidate_id,c.winner_kind,c.winner_op,c.resolution_type,i.kind,i.revision,i.body,i.body_sha256,i.modified_ms FROM item_changes c LEFT JOIN vault_sync_items i ON i.vault_id=c.vault_id AND i.item_uuid=COALESCE(c.resolved_item_uuid,c.item_uuid) WHERE c.vault_id=? AND c.seq>? ORDER BY c.seq LIMIT ?", v.ID, since, limit)
 	if e != nil {
 		return e
 	}
@@ -341,10 +384,14 @@ func (s *Server) changes(w http.ResponseWriter, r *http.Request) error {
 		var seq, rev int64
 		var id string
 		var op int
+		var resolvedItemID sql.NullString
+		var conflictID sql.NullString
+		var baseRevision, winnerKind, winnerOp, resolutionType sql.NullInt64
+		var winnerCandidateID sql.NullString
 		var kind, liveRev, modified sql.NullInt64
 		var data []byte
 		var sha sql.NullString
-		if e = rows.Scan(&seq, &id, &op, &rev, &kind, &liveRev, &data, &sha, &modified); e != nil {
+		if e = rows.Scan(&seq, &id, &op, &rev, &resolvedItemID, &conflictID, &baseRevision, &winnerCandidateID, &winnerKind, &winnerOp, &resolutionType, &kind, &liveRev, &data, &sha, &modified); e != nil {
 			return e
 		}
 		opName := "upsert"
@@ -352,10 +399,45 @@ func (s *Server) changes(w http.ResponseWriter, r *http.Request) error {
 			opName = "purge"
 		} else if op == 3 {
 			opName = "rekey"
+		} else if op == 4 {
+			opName = "resolve"
 		}
 		c := map[string]any{"seq": seq, "uuid": id, "op": opName, "revision": rev}
-		if op == 1 && liveRev.Valid {
-			c["revision"] = liveRev.Int64
+		if op == 4 {
+			if resolvedItemID.Valid {
+				c["resolvedItemUuid"] = resolvedItemID.String
+			}
+			if !conflictID.Valid || !baseRevision.Valid || !winnerCandidateID.Valid || !winnerKind.Valid || !winnerOp.Valid {
+				return fail(500, "server_error")
+			}
+			c["conflictId"] = conflictID.String
+			if !resolutionType.Valid {
+				return fail(500, "server_error")
+			}
+			if resolutionType.Int64 == 1 {
+				c["resolutionType"] = "candidate"
+			} else if resolutionType.Int64 == 2 {
+				c["resolutionType"] = "composed"
+			} else {
+				return fail(500, "server_error")
+			}
+			c["baseRevision"] = baseRevision.Int64
+			c["winnerCandidateId"] = winnerCandidateID.String
+			c["winnerKind"] = winnerKind.Int64
+			if winnerOp.Int64 == 2 {
+				c["winnerOp"] = "delete"
+			} else if winnerOp.Int64 == 1 {
+				c["winnerOp"] = "upsert"
+			} else {
+				return fail(500, "server_error")
+			}
+		}
+		if (op == 1 || op == 4 && resolvedItemID.Valid) && liveRev.Valid {
+			if op == 1 {
+				c["revision"] = liveRev.Int64
+			} else {
+				c["resolvedRevision"] = liveRev.Int64
+			}
 			c["bodyB64"] = b64(data)
 			c["sha256"] = sha.String
 			c["kind"] = kind.Int64

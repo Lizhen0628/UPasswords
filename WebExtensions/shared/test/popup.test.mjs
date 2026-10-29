@@ -4,16 +4,44 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { webcrypto } from 'node:crypto'
+import { JSDOM } from 'jsdom'
 import { runInNewContext } from 'node:vm'
+import { IDBFactory } from 'fake-indexeddb'
 import {
     safeWebsiteUrl,
     credentialsOf,
     generatePassword,
     hostMatches,
     VaultCryptoError,
+    autofillConflictBlocks,
+    AttachmentDownloadLedger,
+    ATTACHMENT_CACHE_BUDGET_BYTES,
+    attachmentVersionKey,
+    attachmentReferencesIn,
+    attachmentByteCount,
+    buildAutofillConflictGateEntry,
+    classifyAttachmentFailure,
+    planAttachmentCache,
+    readAttachmentReferences,
+    readInlineAttachments,
+    parseAutofillConflictGate,
+    installAttachmentBytes,
+    isValidRelayItemRow,
+    RelayApiError,
+    createBackupArchive,
+    createLocalBackupStore,
+    MAX_BACKUP_ARCHIVE_BYTES,
+    inspectBackupArchive,
+    prepareBackupRestore,
+    readPortableBackupArchive,
+    analyzeCardConflict,
+    composeCardConflict,
 } from '../dist/index.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
+const { window: xmlWindow } = new JSDOM('')
+globalThis.DOMParser = xmlWindow.DOMParser
+globalThis.XMLSerializer = xmlWindow.XMLSerializer
 const browsers = process.env.TEST_BROWSERS ? process.env.TEST_BROWSERS.split(',') : ['chrome', 'edge', 'firefox', 'safari']
 const read = (browser, file) => readFileSync(join(here, `../../${browser}/src/${file}`), 'utf8')
 
@@ -21,7 +49,7 @@ function element(tag = 'div') {
     let value = ''
     return {
         tagName: String(tag).toUpperCase(), textContent: '', hidden: false, disabled: false,
-        readOnly: false, type: 'text', children: [], listeners: {}, attributes: {}, dataset: {},
+        readOnly: false, type: 'text', children: [], listeners: {}, attributes: {}, dataset: {}, style: {},
         get value() { return value },
         set value(input) {
             value = String(input)
@@ -47,6 +75,9 @@ function element(tag = 'div') {
         },
         setAttribute(name, value) { this.attributes[name] = value },
         addEventListener(type, listener) { this.listeners[type] = listener },
+        click() { return this.listeners.click?.({ target: this, currentTarget: this }) },
+        showModal() { this.open = true },
+        close() { this.open = false },
         focus() {},
         scrollIntoView() {},
         classList: {
@@ -94,7 +125,7 @@ const item = (title, username, host = 'example.com') => ({
 })
 
 async function popup(browserName, {
-    items = [], unlocked = true, hooks = {}, url = 'https://example.com/login',
+    items = [], unlocked = true, hooks = {}, url = 'https://example.com/login', connection, online = true, settings = {},
     cached = unlocked, expired = false, userId = 'synthetic-user',
 } = {}) {
     const source = read(browserName, 'popup.js')
@@ -113,9 +144,14 @@ async function popup(browserName, {
     const storage = {
         'relay.session': { token: 'synthetic-token', userId, expiresAt: expired ? 0 : Date.now() + 60_000 },
         'relay.vault': { id: 'synthetic-vault', name: 'Main' },
+        'relay.vaultOwner': userId,
+        'extension.autofillConflictGate': hooks.initialConflictGate === undefined
+            ? { version: 1, userId, vaultId: 'synthetic-vault', checkedAt: Date.now(), entries: [] }
+            : structuredClone(hooks.initialConflictGate),
     }
+    Object.assign(storage, settings)
     const commands = [], fills = [], saves = [], keys = [], edits = [], intervals = []
-    const cacheCalls = [], syncCalls = [], envelopeCalls = [], events = [], creations = [], confirmations = [], clipboard = []
+    const cacheCalls = [], syncCalls = [], envelopeCalls = [], events = [], creations = [], confirmations = [], clipboard = [], conflictCalls = [], warnings = [], generatedArchives = [], backupCaptures = [], backupStores = []
     const confirm = (...args) => {
         confirmations.push(args)
         return hooks.confirm ? hooks.confirm(...args) : true
@@ -124,8 +160,12 @@ async function popup(browserName, {
     const rowOf = item => ({ uuid: item.id, revision: item.source?.revision ?? 1,
         kind: 1, bodyB64: 'synthetic-ciphertext', modifiedMs: 1 })
     let snapshot = cached ? { scope, envelope: 'synthetic', passwordVersion: 1, version: 1,
-        cursor: 1, accountEpoch: 0, rows: items.map(rowOf) } : null
+        cursor: 1, accountEpoch: 0, rows: items.map(rowOf),
+        quarantinedItems: structuredClone(hooks.quarantinedItems ?? []) } : null
     let accountEpoch = 0
+    let attachmentPolicy = hooks.initialPolicy ? structuredClone(hooks.initialPolicy) : null
+    const timeouts = []
+    const networkListeners = {}
     const cache = {
         async read(requestedScope) {
             cacheCalls.push({ action: 'read', scope: structuredClone(requestedScope) })
@@ -134,26 +174,49 @@ async function popup(browserName, {
                 && requestedScope.vaultId === snapshot.scope.vaultId ? structuredClone(snapshot) : null
         },
         async getEpoch() { return accountEpoch },
-        async commit(input, expectedVersion) {
+        async readAttachmentLedger() {
+            if (hooks.policyRead) await hooks.policyRead()
+            return structuredClone(attachmentPolicy)
+        },
+        async writeAttachmentLedger(input, expectedVersion) {
+            if (hooks.policyWrite) await hooks.policyWrite(input, expectedVersion)
+            if (input.accountEpoch !== accountEpoch) throw new Error('account_epoch_mismatch')
+            if ((attachmentPolicy?.version ?? null) !== expectedVersion) throw new Error('attachment_policy_version_conflict')
+            attachmentPolicy = structuredClone({ ...input, version: (expectedVersion ?? 0) + 1 })
+            return structuredClone(attachmentPolicy)
+        },
+        async commit(input, expectedVersion, policy) {
             cacheCalls.push({ action: 'commit', input: structuredClone(input), expectedVersion })
             if (hooks.cacheCommit) await hooks.cacheCommit(input, expectedVersion)
             if (input.accountEpoch !== accountEpoch) throw new Error('account_epoch_mismatch')
             if ((snapshot?.version ?? null) !== expectedVersion) throw new Error('cache_version_conflict')
+            if (policy && (attachmentPolicy?.version ?? null) !== policy.expectedVersion) throw new Error('attachment_policy_version_conflict')
+            if (policy) attachmentPolicy = structuredClone({ scope: input.scope, accountEpoch,
+                version: (policy.expectedVersion ?? 0) + 1, state: policy.state })
             snapshot = structuredClone({ ...input, version: (expectedVersion ?? 0) + 1 })
             return structuredClone(snapshot)
+        },
+        async preserveAccount(id) {
+            cacheCalls.push({ action: 'preserveAccount', userId: id })
+            events.push('preserveAccount')
+            if (hooks.preserveAccount) await hooks.preserveAccount(id)
+            accountEpoch += 1
+            if (snapshot?.scope.userId === id) snapshot.accountEpoch = accountEpoch
+            if (attachmentPolicy?.scope.userId === id) attachmentPolicy.accountEpoch = accountEpoch
         },
         async removeAccount(id) {
             cacheCalls.push({ action: 'removeAccount', userId: id })
             events.push('removeAccount')
             if (hooks.removeAccount) await hooks.removeAccount(id)
             if (snapshot?.scope.userId === id) snapshot = null
+            attachmentPolicy = null
             accountEpoch += 1
         },
         close() {},
     }
     const sourceItems = new Map(items.map(item => [item.source?.xml, item]))
     const syntheticParse = xml => {
-        const body = xml.replace(/^<passworddatabase>/, '').replace(/<\/passworddatabase>$/, '')
+    const body = xml.replace(/^<(?:passworddatabase|database)>/, '').replace(/<\/(?:passworddatabase|database)>$/, '')
         if (sourceItems.has(body)) return [structuredClone(sourceItems.get(body))]
         if (body.startsWith('{')) return [JSON.parse(body)]
         return []
@@ -230,13 +293,21 @@ async function popup(browserName, {
                     snapshotVersion: message.snapshotVersion, passwordVersion: message.passwordVersion,
                     expiresAt: Date.now() + 60_000 }
             }
-            if (['decrypt', 'refresh', 'replace'].includes(message.action)) {
+            if (message.action === 'seal-backup') {
+                if (hooks.sealBackup) return await hooks.sealBackup(message)
+                return { ...response(), bodyB64: 'AQ==', backupManifestB64: 'Ag==',
+                    backupInfo: { version: 1, createdAt: 0, isComplete: false, attachmentVersionCount: 0,
+                        conflictCount: 0, conflictCandidateCount: 0, issueCount: 2 } }
+            }
+            if (['decrypt', 'encrypt', 'refresh', 'replace'].includes(message.action)) {
                 if (message.action === 'replace' && hooks.beforeReplace) await hooks.beforeReplace(message)
-                const hook = message.action === 'decrypt' ? hooks.sessionDecrypt : hooks[message.action]
+                const hook = message.action === 'decrypt' ? hooks.sessionDecrypt
+                    : message.action === 'encrypt' ? hooks.sessionEncrypt : hooks[message.action]
                 if (hook) return await hook(message)
                 if (!state.unlocked || message.generation !== state.generation) {
                     return locked('session_generation_mismatch')
                 }
+                if (message.action === 'encrypt') return { ...response(), bodyB64: 'AQ==' }
                 if (message.action === 'decrypt') {
                     const fragments = []
                     for (const row of message.rows) fragments.push({ ...row,
@@ -264,6 +335,7 @@ async function popup(browserName, {
         const current = await cache.read(options.scope)
         if (current) return { snapshot: current, changedRows: [], deletedIds: [], rebuilt: false, changedCount: 0 }
         const rows = await (hooks.rows?.() ?? [])
+        if (rows.some(row => !isValidRelayItemRow(row))) throw new Error('bad_snapshot_response')
         await options.verifyRows(rows)
         await options.validate()
         const initialized = await cache.commit({ scope: options.scope, envelope: 'synthetic',
@@ -271,19 +343,55 @@ async function popup(browserName, {
         return { snapshot: initialized, changedRows: rows, deletedIds: [], rebuilt: true, changedCount: rows.length }
     }
     const main = { scrollTop: 0 }
+    const createElement = tag => {
+        const node = element(tag)
+        return node
+    }
     const document = {
-        body: { dataset: {} }, documentElement: {},
-        getElementById: id => elements[id], createElement: element,
+        body: Object.assign(element('body'), { dataset: {} }), documentElement: {},
+        getElementById: id => elements[id], createElement,
         querySelector: selector => selector === 'main' ? main : null,
         querySelectorAll: () => [], addEventListener() {},
     }
-    const window = { confirm }
+    const window = { confirm, addEventListener(type, callback) { networkListeners[type] = callback } }
+    const readReferences = (xml, cardID) => {
+        if (hooks.readReferences) return hooks.readReferences(xml, cardID)
+        if (/<card\b/.test(xml)) return readAttachmentReferences(xml, cardID)
+        const original = items.find(item => item.id.toLowerCase() === cardID.toLowerCase())
+        return (hooks.readAttachments?.(original) ?? []).map(attachment => ({ ...attachment,
+            missing: attachment.state === 'missing' }))
+    }
+    const referencesIn = fragments => fragments.flatMap(fragment => readReferences(fragment.xml, fragment.row.uuid)
+        .map(reference => ({ cardID: fragment.row.uuid.toLowerCase(), ...reference })))
     const start = source.indexOf('const zh = ')
-    const api = await runInNewContext(`(async () => { ${source.slice(start)}; return { render, fill, quickFillCurrentSite, unlock, syncVault, openItemDetail, saveItemDetail, clearUnlockedView, copyText, createNewLogin, regeneratePassword }; })()`, {
-        browser, chrome: browser, document, navigator: { language: 'en', clipboard: {
+    const api = await runInNewContext(`(async () => { ${source.slice(start)}; return { render, fill, quickFillCurrentSite, unlock, syncVault, canDownloadAttachmentsInBackground, openItemDetail, saveItemDetail, clearUnlockedView, copyText, createNewLogin, regeneratePassword, refreshConflicts, copyBrowserConflictCandidate, exportPortableBackup,
+        downloadAllAttachments, endDownloadAllAttachments, requestPriorityAttachmentDownload, updateAttachmentPolicy, attachmentNetworkChanged,
+        waitAttachments: async () => { while (attachmentSyncTask) await attachmentSyncTask; },
+        openLocalBackupManager, renderLocalBackupCopies, reviewBackupFile, createLocalCopyFromBackup,
+        openLocalCopy, unlockLocalCopy, clearLocalCopyViewer, deleteLocalCopy }; })()`, {
+        browser, chrome: browser, document, navigator: { language: 'en', onLine: online, connection, clipboard: {
             writeText: async text => { clipboard.push(text) },
         } },
-        window, confirm, crypto: webcrypto,
+        window, confirm, crypto: webcrypto, AbortController, TextEncoder,
+        AttachmentDownloadLedger, ATTACHMENT_CACHE_BUDGET_BYTES: hooks.cacheBudget ?? ATTACHMENT_CACHE_BUDGET_BYTES,
+        autofillConflictBlocks, buildAutofillConflictGateEntry, parseAutofillConflictGate,
+        analyzeCardConflict, composeCardConflict,
+        attachmentVersionKey, attachmentByteCount, classifyAttachmentFailure,
+        readAttachmentReferences: readReferences, attachmentReferencesIn: referencesIn,
+        createLocalBackupStore: () => {
+            const store = createLocalBackupStore(new IDBFactory())
+            backupStores.push(store)
+            return store
+        },
+        MAX_BACKUP_ARCHIVE_BYTES,
+        inspectBackupArchive: (...args) => hooks.inspectBackupArchive
+            ? hooks.inspectBackupArchive(...args) : inspectBackupArchive(...args),
+        prepareBackupRestore: (...args) => hooks.prepareBackupRestore
+            ? hooks.prepareBackupRestore(...args) : prepareBackupRestore(...args),
+        planAttachmentCache: options => options.fragments.every(fragment => /<card\b/.test(fragment.xml))
+            ? planAttachmentCache(options) : { ...options, evictedVersions: [], cachedBytes: 0, hasCapacity: true },
+        setTimeout(callback, delay) { const timer = { callback, delay, cancelled: false }; timeouts.push(timer); return timer },
+        clearTimeout(timer) { if (timer) timer.cancelled = true },
         canonicalizeHost: host => host, hostnameOf: url => new URL(url).hostname,
         hostMatches, credentialsOf, generatePassword, safeWebsiteUrl,
         createLoginItemXml: (input, nowMs) => {
@@ -306,19 +414,59 @@ async function popup(browserName, {
         revokeOwnSession: async () => {
             events.push('revoke')
             assert.equal(storage['relay.session'], undefined)
-            assert.equal(storage['relay.vault'], undefined)
             if (hooks.revoke) await hooks.revoke()
         },
         createEncryptedCache: () => cache, synchronizeVault: synchronize, projectVaultFragment: project,
-        setInterval(callback) { intervals.push(callback) }, clearInterval() {}, console: { info() {}, warn() {} },
-        URL, Uint8Array, VaultCryptoError,
+        hydrateMissingAttachments: hooks.hydrateAttachments ?? (async (_token, _vaultId, rows) => rows),
+        captureBackupCloudHistory: async captureOptions => {
+            backupCaptures.push(captureOptions)
+            if (hooks.backupCloudCapture) return await hooks.backupCloudCapture(captureOptions)
+            await captureOptions.validate()
+            return { attachments: [], conflicts: [], issues: [
+                { cloudInventoryUnavailable: {} }, { retainedConflictHistoryUnavailable: {} },
+            ], payloadFiles: new Map() }
+        },
+        listVaultAttachmentVersions: async (...args) => hooks.listAttachmentVersions
+            ? await hooks.listAttachmentVersions(...args) : [],
+        copyConflictCandidateAttachments: async options => {
+            if (hooks.copyCandidate) return await hooks.copyCandidate(options)
+            return {
+                xml: `<card id="${options.destinationItemUUID}" title="Copied"><field id="00000000-0000-4000-8000-000000000008" name="Username">Alice</field></card>`,
+                attachmentRefs: [],
+                uploadedAttachmentIDs: [],
+            }
+        },
+        getVaultAttachment: async (...args) => hooks.getAttachment ? await hooks.getAttachment(...args) : new Uint8Array(),
+        putVaultAttachment: async (...args) => hooks.putAttachment ? await hooks.putAttachment(...args) : undefined,
+        deleteVaultAttachment: async (...args) => {
+            if (hooks.deleteAttachment) return await hooks.deleteAttachment(...args)
+        },
+        setInterval(callback) { intervals.push(callback) }, clearInterval() {}, console: { info() {}, warn(...args) { warnings.push(args) } },
+        URL, Blob, Uint8Array, VaultCryptoError, DOMParser: xmlWindow.DOMParser,
+        createBackupArchive: (...args) => {
+            const archive = createBackupArchive(...args)
+            generatedArchives.push(archive)
+            return archive
+        },
+        readPortableBackupArchive,
         listVaults: async (...args) => hooks.listVaults ? await hooks.listVaults(...args) : [],
+        listVaultConflicts: async (...args) => {
+            const index = conflictCalls.filter(call => call.action === 'list').length + 1
+            conflictCalls.push({ action: 'list' })
+            return hooks.conflicts ? await hooks.conflicts(index, ...args) : []
+        },
+        resolveVaultConflict: async (...args) => {
+            conflictCalls.push({ action: 'resolve', input: structuredClone(args[2]) })
+            if (hooks.resolveConflict) return await hooks.resolveConflict(...args)
+            return { status: 'resolved', itemUuid: args[2].restoreItemUuid ?? 'resolved', itemCount: 1, headSeq: 2 }
+        },
         getVaultEnvelope: async (...args) => {
             envelopeCalls.push(args)
             return hooks.envelope ? await hooks.envelope(...args)
                 : { envelope: 'synthetic', meta: { passwordVersion: 1 } }
         },
-        base64ToBytes: () => new Uint8Array(), bytesToBase64: () => 'encrypted-body',
+        base64ToBytes: value => Uint8Array.from(Buffer.from(value, 'base64')), bytesToBase64: () => 'encrypted-body',
+        sha256BytesHex: async bytes => bytes[0] === 1 ? 'c'.repeat(64) : 'e'.repeat(64),
         unwrapEnvelope: async (...args) => {
             if (hooks.unwrap) await hooks.unwrap(...args)
             const key = new Uint8Array(32).fill(7)
@@ -327,9 +475,10 @@ async function popup(browserName, {
         },
         listAllVaultItems: hooks.rows ?? (async () => []),
         decryptItemBody: decrypt,
-        fragmentsToXml: fragments => `<passworddatabase>${fragments.join('')}</passworddatabase>`,
+        fragmentsToXml: fragments => `<database>${fragments.join('')}</database>`,
         parseVaultXml: parse,
         readItemDetail: hooks.detail ?? (item => ({ notes: item.notes ?? '' })),
+        readInlineAttachments: hooks.readAttachments ?? (() => []),
         updateItemXml: (xml, edit, modifiedMs) => {
             edits.push(structuredClone(edit))
             const original = sourceItems.get(xml)
@@ -337,6 +486,7 @@ async function popup(browserName, {
                 fields: original.fields.map((field, i) => ({ ...field, value: edit.fieldValues[i] })) })
         },
         encryptItemBody: hooks.encrypt ?? (async () => new Uint8Array(48)),
+        reidentifyItemXml: hooks.reidentify ?? ((xml, id, modifiedMs) => `${xml}:${id}:${modifiedMs}`),
         saveVaultItem: async (token, vaultId, item) => {
             saves.push({ token, vaultId, item })
             if (hooks.save) return await hooks.save(token, vaultId, item)
@@ -347,8 +497,11 @@ async function popup(browserName, {
     await new Promise(setImmediate)
     return {
         api, elements, document, window, commands, fills, storage, saves, keys, edits, intervals,
-        cache, cacheCalls, syncCalls, envelopeCalls, events, creations, confirmations, clipboard,
-        get snapshot() { return structuredClone(snapshot) },
+        cache, cacheCalls, syncCalls, envelopeCalls, events, creations, confirmations, clipboard, conflictCalls, warnings,
+        backupCaptures, backupStores, get snapshot() { return structuredClone(snapshot) },
+        generatedArchives,
+        get attachmentPolicy() { return structuredClone(attachmentPolicy) },
+        timeouts, networkListeners,
         get state() { return response() },
         setState: value => {
             state = { ...state, type: 'vault-session', ...value }
@@ -397,6 +550,21 @@ test('Popup: fixed root width and independent scroll prevent popup collapse', ()
 })
 
 for (const browser of browsers) {
+    test(`Popup ${browser}: background attachment policy separates cellular and unknown networks`, async () => {
+        const offline = await popup(browser, { connection: { type: 'wifi' }, online: false })
+        assert.equal(await offline.api.canDownloadAttachmentsInBackground(), false)
+
+        const cellular = await popup(browser, { connection: { type: 'cellular' } })
+        assert.equal(await cellular.api.canDownloadAttachmentsInBackground(), false)
+        cellular.storage['extension.allowCellularAttachmentDownloads'] = true
+        assert.equal(await cellular.api.canDownloadAttachmentsInBackground(), true)
+
+        const unknown = await popup(browser)
+        assert.equal(await unknown.api.canDownloadAttachmentsInBackground(), false)
+        unknown.storage['extension.allowUnknownNetworkAttachmentDownloads'] = true
+        assert.equal(await unknown.api.canDownloadAttachmentsInBackground(), true)
+    })
+
     test(`Popup ${browser}: suggestions are site-scoped while vault search includes all entries`, () => {
         const view = renderer(browser, { query: 'ALICE' })
         view.render([item('Work', 'Alice'), item('Personal', 'Bob'), item('Other', 'Alice', 'other.org')])
@@ -459,6 +627,481 @@ for (const browser of browsers) {
         assert.ok(view.storage['relay.session'], 'locking must not sign out')
     })
 
+    test(`Popup ${browser}: portable backup export seals cached rows and declares uncaptured cloud history`, async () => {
+        const view = await popup(browser)
+        await view.elements.settingsTab.listeners.click()
+        await view.api.exportPortableBackup()
+        const sealing = view.commands.find(command => command.action === 'seal-backup')
+        assert.ok(sealing)
+        assert.deepEqual(sealing.backupMetadata.issues, [
+            { cloudInventoryUnavailable: {} },
+            { retainedConflictHistoryUnavailable: {} },
+        ])
+        assert.equal('vaultKey' in sealing, false)
+        assert.equal('backupEnvelopeB64' in sealing, false)
+        assert.equal(view.elements.backupExportStatus.textContent.includes('Incomplete backup exported'), true)
+        const files = await readPortableBackupArchive(view.generatedArchives[0])
+        const info = JSON.parse(await files.get('Info.json').text())
+        assert.equal(info.isComplete, false)
+        assert.equal(info.issueCount, 2)
+    })
+
+    test(`Popup ${browser}: backup export authenticates conflict candidates in the trusted session`, async () => {
+        const id = '12345678-abcd-4234-8abc-123456789abc'
+        const sourceXml = '<card id="12345678-abcd-4234-8abc-123456789abc" title="Work"></card>'
+        const sourceItem = { id, title: 'Work', host: '', fields: [], source: { xml: sourceXml, revision: 2 } }
+        const payloadPath = `Conflicts/${'a'.repeat(32)}/${'b'.repeat(32)}.cipher`
+        const view = await popup(browser, {
+            items: [sourceItem],
+            hooks: { backupCloudCapture: async options => {
+                await options.validate()
+                await options.verifyCandidate({ uuid: id, kind: 1, revision: 2, bodyB64: 'AQ==', modifiedMs: 2 })
+                return {
+                    headSequence: 1, attachments: [],
+                    conflicts: [{ conflictID: 'a'.repeat(32), itemUUID: id, candidates: [] }],
+                    issues: [{ retainedConflictHistoryUnavailable: {} }],
+                    payloadFiles: new Map([[payloadPath, new Uint8Array([1])]]),
+                }
+            } },
+        })
+        await view.elements.settingsTab.listeners.click()
+        await view.api.exportPortableBackup()
+        const candidateDecryptions = view.commands.filter(command => command.action === 'decrypt'
+            && command.rows?.length === 1 && command.rows[0].uuid === id
+            && command.rows[0].bodyB64 === 'AQ==')
+        assert.equal(candidateDecryptions.length, 1)
+        const sealing = view.commands.find(command => command.action === 'seal-backup')
+        assert.deepEqual(sealing.backupMetadata.issues, [{ retainedConflictHistoryUnavailable: {} }])
+        assert.equal(sealing.backupMetadata.headSequence, 1)
+        assert.equal(view.backupCaptures.length, 1)
+        const files = await readPortableBackupArchive(view.generatedArchives[0])
+        assert.ok(files.has(payloadPath))
+    })
+
+    test(`Popup ${browser}: restores incomplete backups only after confirmation into a local-only copy`, async () => {
+        const xml = '<database><card id="12345678-abcd-4234-8abc-123456789abc" title="Work"><field name="Username" type="login">Alice</field><field name="Password" type="password">private-value</field><note>private note</note></card></database>'
+        const inspection = {
+            info: { attachmentVersionCount: 1, conflictCount: 0 },
+            isComplete: false,
+            issues: [{ attachmentVersionUnavailable: {} }],
+            verificationToken: 'verified-source',
+            xml,
+        }
+        const backupFile = { name: 'vault.upwbackup', size: 128, arrayBuffer: async () => new ArrayBuffer(1) }
+        const prepareCalls = []
+        const view = await popup(browser, { hooks: {
+            inspectBackupArchive: async (file, password) => {
+                if (file === backupFile) assert.equal(password, 'source-password')
+                else assert.equal(password, 'copy-password')
+                return inspection
+            },
+            prepareBackupRestore: async (file, options) => {
+                prepareCalls.push({ file, options })
+                return {
+                    archive: new Blob(['encrypted archive']),
+                    historyCipher: new Uint8Array(28).fill(7),
+                    info: inspection.info,
+                    issues: inspection.issues,
+                    isComplete: false,
+                }
+            },
+        } })
+        const syncCount = view.syncCalls.length
+        await view.api.openLocalBackupManager()
+        const fileInput = view.elements.localBackupFileInput
+        fileInput.files = [backupFile]
+        fileInput.listeners.change({ currentTarget: fileInput, target: fileInput })
+        view.elements.backupSourcePassword.value = 'source-password'
+        view.elements.backupSourcePassword.listeners.input()
+        await view.api.reviewBackupFile()
+
+        assert.equal(view.elements.allowIncompleteRestoreRow.hidden, false)
+        assert.equal(view.elements.restoreBackupButton.disabled, true)
+        await view.api.createLocalCopyFromBackup()
+        assert.equal(prepareCalls.length, 0, 'unconfirmed incomplete restore must not start')
+
+        view.elements.allowIncompleteRestore.checked = true
+        view.elements.allowIncompleteRestore.listeners.change()
+        view.elements.localCopyName.value = 'Recovered vault'
+        view.elements.localCopyName.listeners.input()
+        view.elements.localCopyPassword.value = 'copy-password'
+        view.elements.localCopyPassword.listeners.input()
+        view.elements.localCopyPasswordConfirm.value = 'copy-password'
+        view.elements.localCopyPasswordConfirm.listeners.input()
+        assert.equal(view.elements.restoreBackupButton.disabled, false)
+        await view.api.createLocalCopyFromBackup()
+
+        const [copy] = await view.backupStores[0].list()
+        assert.equal(copy.name, 'Recovered vault')
+        assert.equal(copy.isComplete, false)
+        assert.equal(copy.issueCount, 1)
+        assert.equal(view.elements.backupRestoreDialog.open, false)
+
+        await view.api.openLocalCopy(copy.id)
+        view.elements.localCopyUnlockPassword.value = 'incorrect'
+        await view.api.unlockLocalCopy()
+        assert.equal(view.elements.localCopyUnlockPassword.value, '', 'failed unlock clears the entered password')
+        view.elements.localCopyUnlockPassword.value = 'copy-password'
+        await view.api.unlockLocalCopy()
+        assert.equal(view.elements.localCopyViewerHeading.textContent, 'Recovered vault')
+        assert.match(view.elements.localCopyIntegrityStatus.textContent, /1 incomplete/)
+
+        const itemList = view.elements.localCopyItemList
+        itemList.children[0].listeners.click()
+        const textContent = node => [node.textContent, ...node.children.map(textContent)].join(' ')
+        assert.doesNotMatch(textContent(view.elements.localCopyDetail), /private-value/)
+        assert.doesNotMatch(textContent(itemList), /private-value/)
+        const showPassword = view.elements.localCopyDetail.children
+            .find(row => row.className === 'local-copy-field' && row.children[0].textContent === 'Password')
+            .children.find(child => child.tagName === 'BUTTON')
+        showPassword.listeners.click()
+        assert.match(textContent(view.elements.localCopyDetail), /private-value/)
+        assert.equal(view.fills.length, 0, 'local copies must never autofill')
+        assert.equal(view.syncCalls.length, syncCount, 'local-copy operations must not trigger sync')
+
+        view.api.clearLocalCopyViewer()
+        await view.api.deleteLocalCopy(copy)
+        assert.deepEqual(await view.backupStores[0].list(), [])
+    })
+
+    test(`Popup ${browser}: closing restore during preparation prevents a late local copy`, async () => {
+        const pending = deferredOperation()
+        const historyCipher = new Uint8Array(28).fill(5)
+        const inspection = {
+            info: { attachmentVersionCount: 0, conflictCount: 0 },
+            isComplete: true,
+            issues: [],
+            verificationToken: 'verified-source',
+            xml: '<database><card id="12345678-abcd-4234-8abc-123456789abc" title="Work"></card></database>',
+        }
+        const backupFile = { name: 'vault.upwbackup', size: 128, arrayBuffer: async () => new ArrayBuffer(1) }
+        const view = await popup(browser, { hooks: {
+            inspectBackupArchive: async () => inspection,
+            prepareBackupRestore: async () => pending.wait(),
+        } })
+        const fileInput = view.elements.localBackupFileInput
+        fileInput.files = [backupFile]
+        fileInput.listeners.change({ currentTarget: fileInput, target: fileInput })
+        view.elements.backupSourcePassword.value = 'source-password'
+        view.elements.backupSourcePassword.listeners.input()
+        await view.api.reviewBackupFile()
+        view.elements.localCopyName.value = 'Recovered vault'
+        view.elements.localCopyPassword.value = 'copy-password'
+        view.elements.localCopyPasswordConfirm.value = 'copy-password'
+        view.elements.localCopyName.listeners.input()
+        view.elements.localCopyPassword.listeners.input()
+        view.elements.localCopyPasswordConfirm.listeners.input()
+
+        const creating = view.api.createLocalCopyFromBackup()
+        await pending.ready
+        view.elements.backupRestoreDialog.listeners.close()
+        pending.release({
+            archive: new Blob(['encrypted archive']),
+            historyCipher,
+            info: inspection.info,
+            issues: [],
+            isComplete: true,
+        })
+        await creating
+
+        assert.deepEqual(await view.backupStores[0].list(), [])
+        assert.deepEqual([...historyCipher], new Array(28).fill(0), 'discarded recovery material is zeroed')
+    })
+
+    test(`Popup ${browser}: reviews encrypted conflict candidates and submits the complete CAS set`, async () => {
+        const itemUuid = '12345678-abcd-4234-8abc-123456789abc'
+        const candidateXml = `<card id="${itemUuid}" title="Work"><field name="Username" type="login" autofill="username">Alice</field><field name="Password" type="password" autofill="current-password">private-value</field></card>`
+        const sourceItem = {
+            id: itemUuid, title: 'Work', host: 'example.com',
+            fields: [
+                { name: 'Username', type: 'login', value: 'Alice', autofill: 'username' },
+                { name: 'Password', type: 'password', value: 'private-value', autofill: 'current-password' },
+            ],
+            source: { xml: candidateXml, revision: 2 },
+        }
+        const conflict = {
+            conflictId: 'a'.repeat(32), itemUuid, baseRevision: 1, currentRevision: 2,
+            currentDeletedSeq: 0, generation: 3, createdMs: 1, updatedMs: 2,
+            candidates: [
+                { candidateId: 'b'.repeat(32), kind: 1, op: 'upsert', revision: 2, modifiedMs: 2,
+                    committedMs: 3, deviceName: 'Laptop', platform: 'macOS', bodyB64: 'AQ==', sha256: 'c'.repeat(64) },
+                { candidateId: 'd'.repeat(32), kind: 1, op: 'upsert', revision: 2, modifiedMs: 2,
+                    committedMs: 4, deviceName: 'Phone', platform: 'iOS', bodyB64: 'Ag==', sha256: 'e'.repeat(64) },
+                { candidateId: 'f'.repeat(32), kind: 1, op: 'upsert', revision: 2, modifiedMs: 2,
+                    committedMs: 5, deviceName: 'Tablet', platform: 'iPadOS', bodyB64: 'Aw==', sha256: 'f'.repeat(64) },
+            ],
+        }
+        const view = await popup(browser, {
+            items: [sourceItem],
+            hooks: {
+                conflicts: index => index === 1 ? [conflict] : [],
+                sessionDecrypt: async message => ({
+                    type: 'vault-session',
+                    unlocked: true,
+                    generation: 'g1',
+                    fragments: message.rows.map(row => ({ ...row, xml: candidateXml })),
+                }),
+            },
+        })
+        await view.api.refreshConflicts()
+        assert.equal(view.elements.conflictsStatus.textContent, '1 conflict group(s) need a version choice.')
+        const flatten = root => [root, ...root.children.flatMap(flatten)]
+        const buttons = flatten(view.elements.conflictsList).filter(node => node.tagName === 'BUTTON')
+        assert.equal(buttons.some(button => button.textContent === 'Keep this version'), true)
+        assert.equal(buttons.some(button => button.textContent === 'Reveal hidden values'), true)
+        const keepButtons = buttons.filter(button => button.textContent === 'Keep this version')
+        assert.equal(keepButtons.length, 3)
+        assert.equal(keepButtons[2].disabled, true, 'ciphertext digest mismatch must block selection')
+        assert.equal(flatten(view.elements.conflictsList).some(node => node.textContent === 'private-value'), false)
+        await keepButtons[0].listeners.click()
+        await new Promise(setImmediate)
+        const submitted = view.conflictCalls.find(call => call.action === 'resolve')
+        assert.deepEqual(submitted.input.candidateIds, ['b'.repeat(32), 'd'.repeat(32), 'f'.repeat(32)])
+        assert.equal(submitted.input.winnerCandidateId, 'b'.repeat(32))
+        assert.equal(submitted.input.generation, 3)
+    })
+
+    test(`Popup ${browser}: retries an unreadable conflict candidate without enabling unsafe selection`, async () => {
+        const itemUuid = '12345678-abcd-4234-8abc-123456789abc'
+        const candidateXml = `<card id="${itemUuid}" title="Work"><field name="Username" type="login">Alice</field></card>`
+        const bodyB64 = 'AQ=='
+        const conflict = {
+            conflictId: 'a'.repeat(32), itemUuid, baseRevision: 1, currentRevision: 2,
+            currentDeletedSeq: 0, generation: 3, createdMs: 1, updatedMs: 2,
+            candidates: [{ candidateId: 'b'.repeat(32), kind: 1, op: 'upsert', revision: 2,
+                modifiedMs: 2, committedMs: 3, deviceName: 'Laptop', platform: 'macOS',
+                bodyB64, sha256: 'c'.repeat(64) }],
+        }
+        let candidateDecryptAttempts = 0
+        const view = await popup(browser, {
+            items: [{ id: itemUuid, title: 'Work', host: 'example.com', fields: [] }],
+            hooks: {
+                conflicts: () => [conflict],
+                sessionDecrypt: async message => {
+                    if (message.rows.some(row => row.bodyB64 === bodyB64)) {
+                        candidateDecryptAttempts += 1
+                        if (candidateDecryptAttempts === 1) throw new Error('temporary_decrypt_failure')
+                    }
+                    return {
+                        type: 'vault-session', unlocked: true, generation: 'g1',
+                        fragments: message.rows.map(row => ({ ...row, xml: candidateXml })),
+                    }
+                },
+                parse: xml => {
+                    const document = new xmlWindow.DOMParser().parseFromString(xml, 'application/xml')
+                    return Array.from(document.querySelectorAll('card')).map(card => ({
+                        id: card.getAttribute('id'),
+                        title: card.getAttribute('title'),
+                        host: '',
+                        fields: Array.from(card.children).filter(field => field.tagName === 'field').map(field => ({
+                            name: field.getAttribute('name') ?? '',
+                            type: field.getAttribute('type') ?? 'text',
+                            value: field.textContent ?? '',
+                        })),
+                    }))
+                },
+            },
+        })
+        await view.api.refreshConflicts()
+        const flatten = root => [root, ...root.children.flatMap(flatten)]
+        let buttons = flatten(view.elements.conflictsList).filter(node => node.tagName === 'BUTTON')
+        const retry = buttons.find(button => button.textContent === 'Retry loading this version')
+        assert.ok(retry)
+        assert.equal(buttons.find(button => button.textContent === 'Keep this version').disabled, true)
+        await retry.listeners.click()
+        buttons = flatten(view.elements.conflictsList).filter(node => node.tagName === 'BUTTON')
+        assert.equal(candidateDecryptAttempts, 2)
+        assert.equal(view.conflictCalls.filter(call => call.action === 'list').length, 2)
+        assert.equal(buttons.some(button => button.textContent === 'Retry loading this version'), false)
+        assert.equal(buttons.find(button => button.textContent === 'Keep this version').disabled, false)
+    })
+
+    test(`Popup ${browser}: saves a reviewed active candidate as an independent item`, async () => {
+        const itemUuid = '12345678-abcd-4234-8abc-123456789abc'
+        let destinationUuid
+        const xml = `<card id="${itemUuid}" title="Work"><field id="11111111-2222-4333-8444-555555555555" name="Username" type="login">Alice</field></card>`
+        const conflict = {
+            conflictId: 'a'.repeat(32), itemUuid, baseRevision: 1, currentRevision: 2,
+            currentDeletedSeq: 0, generation: 3, createdMs: 1, updatedMs: 2,
+            candidates: [{ candidateId: 'b'.repeat(32), kind: 1, op: 'upsert', revision: 2,
+                modifiedMs: 2, committedMs: 3, deviceName: 'Laptop', platform: 'macOS',
+                bodyB64: 'AQ==', sha256: 'c'.repeat(64) }],
+        }
+        const view = await popup(browser, {
+            hooks: {
+                conflicts: () => [conflict],
+                sessionDecrypt: async message => ({
+                    type: 'vault-session', unlocked: true, generation: 'g1',
+                    fragments: message.rows.map(row => ({ ...row, xml })),
+                }),
+                parse: input => {
+                    const document = new xmlWindow.DOMParser().parseFromString(input, 'application/xml')
+                    return Array.from(document.querySelectorAll('card')).map(card => ({
+                        id: card.getAttribute('id'), title: card.getAttribute('title'), host: '',
+                        fields: Array.from(card.children).filter(field => field.tagName === 'field').map(field => ({
+                            id: field.getAttribute('id'), name: field.getAttribute('name') ?? '',
+                            type: field.getAttribute('type') ?? 'text', value: field.textContent ?? '',
+                            autofill: field.getAttribute('autofill') ?? 'off',
+                        })),
+                    }))
+                },
+                copyCandidate: async options => {
+                    assert.equal(options.sourceItemUUID, itemUuid)
+                    destinationUuid = options.destinationItemUUID
+                    await options.checkpoint()
+                    return {
+                        xml: `<card id="${destinationUuid}" title="Work copy"><field id="22222222-3333-4444-8555-666666666666" name="Username">Alice</field></card>`,
+                        attachmentRefs: [], uploadedAttachmentIDs: [],
+                    }
+                },
+                sessionEncrypt: async message => ({
+                    type: 'vault-session', unlocked: true, generation: 'g1', bodyB64: 'AQID',
+                }),
+            },
+        })
+        await view.api.refreshConflicts()
+        const flatten = root => [root, ...root.children.flatMap(flatten)]
+        const copy = flatten(view.elements.conflictsList).find(node =>
+            node.tagName === 'BUTTON' && node.textContent === 'Save as new item')
+        assert.ok(copy)
+        await copy.listeners.click()
+        await new Promise(setImmediate)
+        assert.equal(view.creations.length, 1)
+        assert.equal(view.creations[0].item.uuid, destinationUuid)
+        assert.deepEqual(view.creations[0].item.attachmentRefs, [])
+        assert.equal(view.snapshot.rows.some(row => row.uuid === destinationUuid), true)
+        assert.equal(view.state.items.some(entry => entry.id === destinationUuid), true)
+        assert.equal(view.storage['extension.pendingConflictCopy'], undefined)
+        assert.equal(view.conflictCalls.some(call => call.action === 'resolve'), false)
+    })
+
+    test(`Popup ${browser}: uncertain candidate creation is retained and cannot be resubmitted`, async () => {
+        const itemUuid = '12345678-abcd-4234-8abc-123456789abc'
+        let destinationUuid
+        const xml = `<card id="${itemUuid}" title="Work"><field id="11111111-2222-4333-8444-555555555555" name="Username">Alice</field></card>`
+        const conflict = {
+            conflictId: 'a'.repeat(32), itemUuid, baseRevision: 1, currentRevision: 2,
+            currentDeletedSeq: 0, generation: 3, createdMs: 1, updatedMs: 2,
+            candidates: [{ candidateId: 'b'.repeat(32), kind: 1, op: 'upsert', revision: 2,
+                modifiedMs: 2, committedMs: 3, deviceName: 'Laptop', platform: 'macOS',
+                bodyB64: 'AQ==', sha256: 'c'.repeat(64) }],
+        }
+        const view = await popup(browser, {
+            hooks: {
+                conflicts: () => [conflict],
+                sessionDecrypt: async message => ({ type: 'vault-session', unlocked: true, generation: 'g1',
+                    fragments: message.rows.map(row => ({ ...row, xml })) }),
+                parse: input => {
+                    const document = new xmlWindow.DOMParser().parseFromString(input, 'application/xml')
+                    return Array.from(document.querySelectorAll('card')).map(card => ({
+                        id: card.getAttribute('id'), title: card.getAttribute('title'), host: '',
+                        fields: Array.from(card.children).filter(field => field.tagName === 'field').map(field => ({
+                            id: field.getAttribute('id'), name: field.getAttribute('name') ?? '',
+                            type: field.getAttribute('type') ?? 'text', value: field.textContent ?? '',
+                            autofill: field.getAttribute('autofill') ?? 'off',
+                        })),
+                    }))
+                },
+                copyCandidate: async options => {
+                    destinationUuid = options.destinationItemUUID
+                    return {
+                        xml: `<card id="${destinationUuid}" title="Copy"/>`,
+                        attachmentRefs: [], uploadedAttachmentIDs: ['00000000-0000-4000-8000-000000000010'],
+                    }
+                },
+                sessionEncrypt: async () => ({ type: 'vault-session', unlocked: true, generation: 'g1', bodyB64: 'AQID' }),
+                createItem: async () => { throw new Error('network_lost') },
+                deleteAttachment: async () => assert.fail('ambiguous create must not delete staged attachments'),
+            },
+        })
+        await view.api.refreshConflicts()
+        const flatten = root => [root, ...root.children.flatMap(flatten)]
+        const copy = flatten(view.elements.conflictsList).find(node =>
+            node.tagName === 'BUTTON' && node.textContent === 'Save as new item')
+        await copy.listeners.click()
+        await new Promise(setImmediate)
+        assert.equal(view.creations.length, 1)
+        assert.equal(view.storage['extension.pendingConflictCopy'].itemUUID, destinationUuid)
+        assert.equal(flatten(view.elements.conflictsList).some(node =>
+            node.tagName === 'BUTTON' && node.textContent === 'Save as new item' && node.disabled), true,
+        JSON.stringify(flatten(view.elements.conflictsList).filter(node => node.tagName === 'BUTTON')
+            .map(node => ({ text: node.textContent, disabled: node.disabled }))))
+    })
+
+    test(`Popup ${browser}: composes selected fields and submits a merged encrypted body`, async () => {
+        const itemUuid = '12345678-abcd-4234-8abc-123456789abc'
+        const userField = '11111111-2222-4333-8444-555555555555'
+        const passwordField = '22222222-3333-4444-8555-666666666666'
+        const extraField = '33333333-4444-4555-8666-777777777777'
+        const firstXml = `<card id="${itemUuid}" title="Laptop"><field id="${userField}" name="Username" type="login">Alice</field><field id="${passwordField}" name="Password" type="password">old-password</field><note>old note</note><future>keep</future></card>`
+        const secondXml = `<card id="${itemUuid}" title="Phone"><field id="${userField}" name="Username" type="login">Alice</field><field id="${passwordField}" name="Password" type="password">new-password</field><field id="${extraField}" name="Recovery" type="text">recovery</field><note>new note</note></card>`
+        const conflict = {
+            conflictId: 'a'.repeat(32), itemUuid, baseRevision: 1, currentRevision: 2,
+            currentDeletedSeq: 0, generation: 4, createdMs: 1, updatedMs: 2,
+            candidates: [
+                { candidateId: 'b'.repeat(32), kind: 1, op: 'upsert', revision: 2, modifiedMs: 2,
+                    committedMs: 3, deviceName: 'Laptop', platform: 'macOS', bodyB64: 'AQ==', sha256: 'c'.repeat(64) },
+                { candidateId: 'd'.repeat(32), kind: 1, op: 'upsert', revision: 2, modifiedMs: 3,
+                    committedMs: 4, deviceName: 'Phone', platform: 'iOS', bodyB64: 'Ag==', sha256: 'e'.repeat(64) },
+            ],
+        }
+        const encryptedXML = []
+        const view = await popup(browser, {
+            hooks: {
+                conflicts: index => index === 1 ? [conflict] : [],
+                sessionDecrypt: async message => ({
+                    type: 'vault-session', unlocked: true, generation: 'g1',
+                    fragments: message.rows.map(row => ({ ...row, xml: row.bodyB64 === 'AQ==' ? firstXml : secondXml })),
+                }),
+                parse: xml => {
+                    const document = new xmlWindow.DOMParser().parseFromString(xml, 'application/xml')
+                    return Array.from(document.querySelectorAll('card')).map(card => ({
+                        id: card.getAttribute('id'),
+                        title: card.getAttribute('title'),
+                        host: '',
+                        fields: Array.from(card.children).filter(field => field.tagName === 'field').map(field => ({
+                            id: field.getAttribute('id'),
+                            name: field.getAttribute('name') ?? '',
+                            type: field.getAttribute('type') ?? 'text',
+                            value: field.textContent ?? '',
+                            autofill: field.getAttribute('autofill') ?? 'off',
+                        })),
+                    }))
+                },
+                sessionEncrypt: async message => {
+                    encryptedXML.push(message.xml)
+                    return { type: 'vault-session', unlocked: true, generation: 'g1', bodyB64: 'AQID' }
+                },
+            },
+        })
+        await view.api.refreshConflicts()
+        const flatten = root => [root, ...root.children.flatMap(flatten)]
+        const nodes = flatten(view.elements.conflictsList)
+        const selects = nodes.filter(node => node.tagName === 'SELECT')
+        assert.equal(selects.length, 4, 'base, conflicting password, added field and notes need choices')
+        selects[0].value = 'b'.repeat(32)
+        selects[1].value = 'd'.repeat(32)
+        selects[2].value = 'd'.repeat(32)
+        selects[3].value = 'd'.repeat(32)
+        for (const select of selects) select.listeners.change()
+        const compose = nodes.find(node => node.tagName === 'BUTTON' && node.textContent === 'Apply field combination')
+        assert.equal(compose.disabled, false)
+        await compose.listeners.click()
+        await new Promise(setImmediate)
+
+        const xml = new xmlWindow.DOMParser().parseFromString(encryptedXML[0], 'application/xml').documentElement
+        assert.equal(xml.getAttribute('title'), 'Laptop')
+        assert.equal(xml.querySelector('field[id="' + passwordField + '"]')?.textContent, 'new-password')
+        assert.equal(xml.querySelector('field[id="' + extraField + '"]')?.textContent, 'recovery')
+        assert.equal(xml.querySelector('note')?.textContent, 'new note')
+        assert.equal(xml.querySelector('future')?.textContent, 'keep')
+        const submitted = view.conflictCalls.find(call => call.action === 'resolve')
+        assert.equal(submitted.input.winnerCandidateId, 'b'.repeat(32))
+        assert.equal(submitted.input.mergedBodyB64, 'AQID')
+        assert.equal(submitted.input.mergedModifiedMs >= 50, true)
+        assert.equal(submitted.input.bodyB64, undefined)
+    })
+
     test(`Popup ${browser}: expired state and foreign-site candidates cannot fill`, async () => {
         const entry = item('Work', 'Alice')
         const view = await popup(browser, { items: [entry] })
@@ -507,18 +1150,54 @@ for (const browser of browsers) {
         assert.equal(view.storage['relay.vault'], undefined)
     })
 
-    test(`Popup ${browser}: sign out removes local authentication before remote revoke`, async () => {
+    test(`Popup ${browser}: sign out preserves encrypted data and local vault binding`, async () => {
         const view = await popup(browser)
+        const snapshot = view.snapshot
         await view.elements.lockButton.listeners.click()
         assert.equal(view.document.body.dataset.panel, 'login')
         assert.equal(view.storage['relay.session'], undefined)
+        assert.deepEqual(view.storage['relay.vault'], { id: 'synthetic-vault', name: 'Main' })
+        assert.equal(view.storage['relay.vaultOwner'], 'synthetic-user')
+        assert.deepEqual(view.snapshot, { ...snapshot, accountEpoch: 1 })
+        assert.equal(view.cacheCalls.some(call => call.action === 'removeAccount'), false)
+        assert.deepEqual(view.cacheCalls.filter(call => call.action === 'preserveAccount'),
+            [{ action: 'preserveAccount', userId: 'synthetic-user' }])
+        assert.ok(view.events.indexOf('preserveAccount') < view.events.indexOf('removeAuth'))
+        assert.ok(view.events.indexOf('removeAuth') < view.events.indexOf('revoke'))
+    })
+
+    test(`Popup ${browser}: same-account sign-in resumes the retained local vault`, async () => {
+        let listedVaults = false
+        const view = await popup(browser, { hooks: {
+            verifyCode: async () => ({ token: 'new-synthetic-token', userId: 'synthetic-user', expiresAt: Date.now() + 60_000 }),
+            listVaults: async () => { listedVaults = true; return [] },
+        } })
+        await view.elements.lockButton.listeners.click()
+        view.elements.email.value = 'synthetic@example.invalid'
+        view.elements.code.value = '123456'
+        await view.elements.loginButton.listeners.click()
+
+        assert.equal(view.storage['relay.session'].userId, 'synthetic-user')
+        assert.equal(view.storage['relay.vault'].id, 'synthetic-vault')
+        assert.equal(view.document.body.dataset.panel, 'unlock')
+        assert.equal(listedVaults, false)
+        assert.ok(view.snapshot)
+    })
+
+    test(`Popup ${browser}: switching accounts preserves the previous account cache`, async () => {
+        const view = await popup(browser)
+        const snapshot = view.snapshot
+        view.elements.email.value = 'other@example.invalid'
+        view.elements.code.value = '123456'
+        await view.elements.loginButton.listeners.click()
+
+        assert.equal(view.storage['relay.session'].userId, 'new-synthetic-user')
         assert.equal(view.storage['relay.vault'], undefined)
-        assert.equal(view.elements.vaultName.textContent, '')
-        assert.equal(view.snapshot, null)
-        assert.deepEqual(view.cacheCalls.filter(call => call.action === 'removeAccount'),
-            [{ action: 'removeAccount', userId: 'synthetic-user' }])
-        assert.ok(view.events.indexOf('removeAuth') < view.events.indexOf('removeAccount'))
-        assert.ok(view.events.indexOf('removeAccount') < view.events.indexOf('revoke'))
+        assert.equal(view.storage['relay.vaultOwner'], undefined)
+        assert.deepEqual(view.snapshot, { ...snapshot, accountEpoch: 1 })
+        assert.deepEqual(view.cacheCalls.filter(call => call.action === 'preserveAccount'),
+            [{ action: 'preserveAccount', userId: 'synthetic-user' }])
+        assert.equal(view.cacheCalls.some(call => call.action === 'removeAccount'), false)
     })
 }
 
@@ -576,9 +1255,131 @@ for (const browser of browsers) {
         assert.equal(unsupported.elements.detailEditButton.disabled, true)
     })
 
+    test(`Popup ${browser}: previews cached raster attachments with bounded zoom and missing-state feedback`, async () => {
+        const entry = editableItem()
+        let hydrationCalls = 0
+        const image = {
+            id: '11111111-2222-4333-8444-555555555555', kind: 'file', name: 'photo.bin',
+            state: 'previewable', mimeType: 'image/png', base64: 'iVBORw0KGgo=',
+        }
+        const view = await popup(browser, {
+            items: [entry],
+            hooks: {
+                readAttachments: () => [image, { ...image, id: null, kind: 'image', name: 'offline.png', state: 'missing', base64: undefined }],
+                hydrateAttachments: async (_token, _vault, rows) => { hydrationCalls += 1; return rows },
+            },
+        })
+        await view.api.openItemDetail(entry.id)
+        assert.equal(hydrationCalls, 0, 'an attachment without a stable ID/version cannot be queued')
+        const section = view.elements.detailContent.children.at(-1)
+        assert.equal(section.className, 'detail-attachments')
+        const previewRow = section.children[1]
+        const previewButton = previewRow.children[0].children[1]
+        const preview = previewRow.children[1]
+        assert.equal(previewButton.textContent, 'Preview')
+        await previewButton.listeners.click()
+        assert.equal(preview.src, 'data:image/png;base64,iVBORw0KGgo=')
+        assert.equal(preview.hidden, false)
+        const controls = previewRow.children[2]
+        controls.children[2].listeners.click()
+        assert.equal(preview.style.transform, 'scale(1.25)')
+        controls.children[1].listeners.click()
+        assert.equal(preview.style.transform, 'scale(1)')
+        preview.listeners.error()
+        assert.match(previewRow.children.at(-1).textContent, /could not be decoded/)
+        assert.equal(preview.hidden, true)
+        assert.equal(previewButton.hidden, false)
+        assert.match(section.children[2].children[1].textContent, /not downloaded/)
+        view.api.clearUnlockedView()
+        assert.equal(view.elements.detailContent.children.length, 0)
+    })
+
+    test(`Popup ${browser}: completed attachment request without a cache change clears its progress state`, async () => {
+        const entry = editableItem()
+        const attachmentID = '11111111-2222-4333-8444-555555555555'
+        const contentVersion = '11111111-2222-4333-8444-555555555556'
+        let hydrationCalls = 0
+        const view = await popup(browser, {
+            items: [entry],
+            hooks: {
+                readAttachments: () => [{ id: attachmentID, contentVersion, kind: 'image',
+                    name: 'remote.png', state: 'missing' }],
+                hydrateAttachments: async (_token, _vault, rows) => { hydrationCalls += 1; return rows },
+            },
+        })
+        await view.api.openItemDetail(entry.id)
+        await new Promise(setImmediate)
+        const section = view.elements.detailContent.children.at(-1)
+        assert.equal(hydrationCalls, 1)
+        assert.match(section.children[1].children[1].textContent, /not downloaded/)
+    })
+
+    test(`Popup ${browser}: detail and row sync proceed while bulk attachment download is pending`, async () => {
+        const entry = editableItem()
+        const hydration = deferredOperation()
+        const attachmentID = '11111111-2222-4333-8444-555555555555'
+        const contentVersion = '11111111-2222-4333-8444-555555555556'
+        let hydrationCalls = 0
+        const view = await popup(browser, {
+            items: [entry],
+            connection: { type: 'wifi' },
+            hooks: {
+                readAttachments: () => [{ id: attachmentID, contentVersion, kind: 'image',
+                    name: 'remote.png', state: 'missing' }],
+                hydrateAttachments: async (_token, _vault, rows) => {
+                    hydrationCalls += 1
+                    await hydration.wait()
+                    return rows
+                },
+            },
+        })
+        await hydration.ready
+        assert.equal(Object.hasOwn(view.syncCalls[0], 'hydrateAttachments'), false)
+        await view.api.openItemDetail(entry.id)
+        assert.equal(view.document.body.dataset.panel, 'detail')
+        const previousCalls = view.syncCalls.length
+        await view.api.syncVault()
+        assert.equal(view.syncCalls.length, previousCalls + 1)
+        assert.equal(hydrationCalls, 1)
+        hydration.release()
+        await new Promise(setImmediate)
+    })
+
+    test(`Popup ${browser}: opening a missing attachment prioritizes it on cellular`, async () => {
+        const entry = editableItem()
+        const hydration = deferredOperation()
+        const attachmentID = '11111111-2222-4333-8444-555555555555'
+        const contentVersion = '11111111-2222-4333-8444-555555555556'
+        let hydrationCalls = 0
+        const view = await popup(browser, {
+            items: [entry],
+            connection: { type: 'cellular' },
+            hooks: {
+                readAttachments: () => [{ id: attachmentID, contentVersion, kind: 'image',
+                    name: 'remote.png', state: 'missing' }],
+                hydrateAttachments: async (_token, _vault, rows) => {
+                    hydrationCalls += 1
+                    hydration.ready.then(() => {});
+                    await hydration.wait()
+                    return rows
+                },
+            },
+        })
+        await view.api.openItemDetail(entry.id)
+        await hydration.ready
+        assert.equal(view.document.body.dataset.panel, 'detail')
+        assert.equal(hydrationCalls, 1, 'cellular blocks background work but not an opened item')
+        hydration.release()
+        await new Promise(setImmediate)
+    })
+
     test(`Popup ${browser}: polling keeps draft; save requires password and preserves untouched normalized values`, async () => {
         const entry = editableItem()
-        const view = await popup(browser, { items: [entry] })
+        const attachmentID = '11111111-2222-4333-8444-555555555555'
+        const contentVersion = '11111111-2222-4333-8444-555555555556'
+        const view = await popup(browser, { items: [entry], hooks: {
+            readReferences: () => [{ id: attachmentID, contentVersion, kind: 'file', missing: true }],
+        } })
         await view.api.openItemDetail(entry.id, true)
         const title = detailControl(view, 0)
         title.value = 'Changed'
@@ -592,6 +1393,9 @@ for (const browser of browsers) {
         assert.equal(view.saves.length, 1)
         assert.equal(view.saves[0].item.revision, 3)
         assert.equal(view.saves[0].item.bodyB64, 'encrypted-body')
+        assert.equal(JSON.stringify(view.saves[0].item.attachmentRefs), JSON.stringify([{
+            attachmentId: attachmentID, contentVersion,
+        }]))
         assert.equal(view.edits[0].fieldValues[1], entry.fields[1].value)
         assert.equal(view.edits[0].notes, entry.notes)
         assert.equal(detailControl(view, 0).value, 'Changed')
@@ -676,17 +1480,42 @@ for (const browser of browsers) {
     }
 
     test(`Popup ${browser}: source-aware unlock checks row ID and keeps revision per active card`, async () => {
-        const entry = editableItem()
+        const entry = { ...editableItem(), id: '12345678-abcd-1234-abcd-123456789abc' }
         const view = await popup(browser, { unlocked: false, hooks: {
-            rows: async () => [{ uuid: entry.id.toUpperCase(), revision: 8, kind: 1, bodyB64: '' }],
+            rows: async () => [{ uuid: entry.id.toUpperCase(), revision: 8, kind: 1,
+                bodyB64: 'ZW5jcnlwdGVk', modifiedMs: 1 }],
             decrypt: async () => '<card/>', parse: () => [entry],
         } })
         view.elements.masterPassword.value = 'synthetic-password'
         await view.api.unlock()
         const commit = view.commands.find(command => command.action === 'commit')
+        assert.ok(commit, JSON.stringify({ warnings: view.warnings, status: view.elements.status.textContent,
+            snapshot: view.snapshot }))
         assert.equal(commit.items.length, 1)
         assert.equal(commit.items[0].source.revision, 8)
         assert.equal(commit.items[0].source.xml, '<card/>')
+    })
+
+    test(`Popup ${browser}: restored session reloads quarantine state and enables retry`, async () => {
+        const entry = { ...editableItem(), id: '12345678-abcd-1234-abcd-123456789abc' }
+        const quarantine = {
+            id: 'change:42',
+            uuid: entry.id,
+            revision: 2,
+            source: 'change',
+            sequence: 42,
+            reason: 'authenticationFailed',
+            capturedAt: 1_700_000_000_000,
+            encryptedPayloadB64: Buffer.from('x'.repeat(48)).toString('base64'),
+        }
+        const view = await popup(browser, { items: [entry], hooks: { quarantinedItems: [quarantine] } })
+        await view.elements.settingsTab.listeners.click()
+        for (let attempt = 0; attempt < 5 && view.elements.retrySyncQuarantineButton.disabled; attempt++) {
+            await new Promise(setImmediate)
+        }
+        assert.equal(view.elements.syncQuarantineBox.hidden, false)
+        assert.match(view.elements.syncQuarantineSummary.textContent, /1 cloud record/)
+        assert.equal(view.elements.retrySyncQuarantineButton.disabled, false)
     })
 
     test(`Popup ${browser}: failed fill preconditions always give visible feedback`, async () => {
@@ -761,6 +1590,29 @@ for (const browser of browsers) {
         const internal = await popup(browser, { items: [entry], url: 'chrome://example.com' })
         await internal.api.fill({ item: entry }, element())
         assert.equal(internal.fills.length, 0)
+    })
+
+    test(`Popup ${browser}: known password-field conflict blocks the complete credential fill`, async () => {
+        const entry = editableItem()
+        const view = await popup(browser, { items: [entry], hooks: {
+            initialConflictGate: {
+                version: 1, userId: 'synthetic-user', vaultId: 'synthetic-vault', checkedAt: Date.now(),
+                entries: [{ itemID: entry.id, fieldTokens: ['current-password'], wholeItem: false }],
+            },
+        } })
+        await view.api.fill({ item: entry }, element())
+        assert.equal(view.fills.length, 0)
+        assert.match(view.elements.status.textContent, /待处理冲突|unresolved conflicts/)
+    })
+
+    test(`Popup ${browser}: unknown conflict state fails closed while offline`, async () => {
+        const entry = editableItem()
+        const view = await popup(browser, { items: [entry], online: false, hooks: {
+            initialConflictGate: null,
+        } })
+        await view.api.fill({ item: entry }, element())
+        assert.equal(view.fills.length, 0)
+        assert.match(view.elements.status.textContent, /联网刷新|Connect and refresh/)
     })
 
     test(`Popup ${browser}: registration profile fills only with an enabled current session item`, async () => {
@@ -924,7 +1776,7 @@ for (const browser of browsers) {
         }
     })
 
-    test(`Popup ${browser}: malformed row identity rejects the entire unlock instead of silently skipping it`, async () => {
+    test(`Popup ${browser}: malformed relay row is rejected before cache commit`, async () => {
         const entry = editableItem()
         const view = await popup(browser, { unlocked: false, hooks: {
             rows: async () => [{ uuid: entry.id, revision: 8, kind: 1, bodyB64: '' },
@@ -936,7 +1788,7 @@ for (const browser of browsers) {
         assert.equal(view.commands.some(command => command.action === 'commit'), false)
         assert.equal(view.snapshot, null)
         assert.equal(view.document.body.dataset.panel, 'unlock')
-        assert.match(view.elements.status.textContent, /unreadable cache/)
+        assert.match(view.elements.status.textContent, /Could not unlock/)
         assert.ok(view.keys.every(key => key.every(byte => byte === 0)))
     })
 
@@ -1294,19 +2146,19 @@ for (const browser of browsers) {
         assert.match(view.elements.status.textContent, /Saved to the cloud/)
     })
 
-    test(`Popup ${browser}: failed account cache removal keeps sign-out fail-closed and never revokes first`, async () => {
+    test(`Popup ${browser}: cache fencing failure still signs out without deleting the local copy`, async () => {
         const view = await popup(browser, { items: [editableItem()], hooks: {
-            removeAccount() { throw new Error('storage unavailable') },
+            preserveAccount() { throw new Error('storage unavailable') },
         } })
         const snapshot = view.snapshot
         await view.elements.lockButton.listeners.click()
         assert.equal(view.state.unlocked, false)
         assert.equal(view.storage['relay.session'], undefined)
-        assert.equal(view.storage['relay.vault'], undefined)
+        assert.equal(view.storage['relay.vault'].id, 'synthetic-vault')
         assert.equal(view.document.body.dataset.panel, 'login')
         assert.deepEqual(view.snapshot, snapshot)
-        assert.equal(view.events.includes('revoke'), false)
-        assert.match(view.elements.status.textContent, /encrypted cache could not be removed/)
+        assert.equal(view.events.includes('revoke'), true)
+        assert.match(view.elements.status.textContent, /local encrypted copy is retained/)
     })
 
     test(`Popup ${browser}: polling during sync cache-to-session publication never locks the old snapshot`, async () => {
@@ -1437,6 +2289,7 @@ for (const browser of browsers) {
                 return { token: 'late-synthetic-token', userId: 'late-synthetic-user', expiresAt: Date.now() + 60_000 }
             },
         } })
+        const snapshot = view.snapshot
         view.elements.email.value = 'synthetic@example.invalid'
         view.elements.code.value = '123456'
         const pending = view.elements.loginButton.listeners.click()
@@ -1445,8 +2298,8 @@ for (const browser of browsers) {
         deferred.release()
         await pending
         assert.equal(view.storage['relay.session'], undefined)
-        assert.equal(view.storage['relay.vault'], undefined)
-        assert.equal(view.snapshot, null)
+        assert.equal(view.storage['relay.vault'].id, 'synthetic-vault')
+        assert.deepEqual(view.snapshot, { ...snapshot, accountEpoch: 1 })
         assert.equal(view.document.body.dataset.panel, 'login')
         assert.equal(view.state.unlocked, false)
         assert.equal(view.elements.loginButton.disabled, false)
@@ -1779,4 +2632,197 @@ for (const browser of browsers) {
         await settle()
         assert.deepEqual(view.clipboard, [entry.fields[3].value])
     })
+}
+
+// Exercise the popup controller with real attachment XML, policy, and cache planning.
+async function attachmentPopup(browserName, { failure, cacheBudget, initialPolicy, attachments = 2, ...options } = {}) {
+    globalThis.DOMParser = xmlWindow.DOMParser;
+    globalThis.XMLSerializer = xmlWindow.XMLSerializer;
+    const original = editableItem();
+    const identifiers = Array.from({ length: attachments }, (_, index) =>
+        `11111111-2222-4333-8444-55555555555${index}`);
+    const version = '99999999-2222-4333-8444-555555555555';
+    original.source.xml = `<card id="${original.id}" title="Account">${identifiers.map(id =>
+        `<file id="${id}" version="${version}" name="file.bin" missing="true"/>`).join('')}</card>`;
+    const sealed = new Map();
+    const calls = [];
+    const body = xml => {
+        const key = Buffer.from(`sealed-test-body-${sealed.size}`).toString('base64');
+        sealed.set(key, xml);
+        return key;
+    };
+    const fragments = rows => rows.map(row => ({ ...row, xml: sealed.get(row.bodyB64) ?? original.source.xml }));
+    const view = await popup(browserName, {
+        items: [original], connection: { type: 'cellular' }, ...options,
+        hooks: {
+            initialPolicy, cacheBudget,
+            parse: xml => [{ ...original, source: { xml: xml.replace(/^<passworddatabase>/, '').replace(/<\/passworddatabase>$/, ''), revision: 3 } }],
+            readAttachments: entry => readInlineAttachments(entry),
+            sessionDecrypt: async message => ({ type: 'vault-session', unlocked: true, generation: message.generation,
+                fragments: fragments(message.rows) }),
+            sessionEncrypt: async message => ({ type: 'vault-session', unlocked: true, generation: message.generation, bodyB64: body(message.xml) }),
+            hydrateAttachments: async (_token, _vault, rows, _previous, validate, _crypto, selectedIDs) => {
+                assert.equal(selectedIDs.length, 1, 'every publication processes one exact attachment');
+                const id = selectedIDs[0];
+                calls.push(id);
+                await validate();
+                const error = failure?.(id, calls.length, _crypto.signal);
+                if (error) throw error;
+                const xml = installAttachmentBytes(fragments(rows)[0].xml, original.id, id, version, new Uint8Array([1, 2, 3, 4]));
+                return [{ ...rows[0], bodyB64: body(xml) }];
+            },
+            listAttachmentVersions: async () => identifiers.map(id => ({ attachmentId: id, cardUuid: original.id,
+                contentVersion: version, bytes: 32, sha256: 'a'.repeat(64),
+                dekWrapped: Buffer.alloc(32).toString('base64'), isCurrent: true })),
+            ...(options.hooks ?? {}),
+        },
+    });
+    return { view, original, identifiers, version, calls, fragments };
+}
+
+for (const browserName of browsers) {
+    test(`Popup ${browserName}: a failed attachment pauses while another version is committed independently`, async () => {
+        const { view, original, identifiers, calls, fragments } = await attachmentPopup(browserName, {
+            failure: id => id.endsWith('0') ? new RelayApiError(404, 'attachment_version_missing') : null,
+        });
+        await assert.rejects(view.api.requestPriorityAttachmentDownload(original.id), /attachment_version_missing/);
+        await view.api.waitAttachments();
+        assert.deepEqual(calls, identifiers);
+        const references = readAttachmentReferences(fragments(view.snapshot.rows)[0].xml, original.id);
+        assert.deepEqual(references.map(reference => reference.missing), [true, false]);
+        assert.equal(view.snapshot.cursor, 1);
+        assert.equal(view.snapshot.rows[0].revision, 3);
+        const records = view.attachmentPolicy.state.records;
+        assert.equal(Object.values(records).find(record => record.failure)?.failure, 'unavailable');
+        const successful = Object.values(records).find(record => record.lastAccess && !record.failure);
+        assert.equal(successful.failureCount, 0);
+    });
+
+    test(`Popup ${browserName}: opening a paused item preserves its retry limit; a manual version retry resets it`, async () => {
+        const id = '11111111-2222-4333-8444-555555555550';
+        const version = '99999999-2222-4333-8444-555555555555';
+        const key = `${editableItem().id}/${id}/${version}`;
+        const ledger = new AttachmentDownloadLedger();
+        ledger.authorize('e'.repeat(64));
+        for (let i = 0; i < 6; i += 1) ledger.fail(key, 'transient');
+        const { view, original, calls } = await attachmentPopup(browserName, { attachments: 1,
+            initialPolicy: { scope: { userId: 'synthetic-user', vaultId: 'synthetic-vault' }, accountEpoch: 0, version: 1, state: ledger.toJSON() } });
+        await view.api.openItemDetail(original.id);
+        await view.api.waitAttachments();
+        assert.equal(calls.length, 0);
+        assert.equal(view.attachmentPolicy.state.records[key].failureCount, 6);
+        await view.api.requestPriorityAttachmentDownload(original.id, [id]);
+        await view.api.waitAttachments();
+        assert.equal(calls.length, 1);
+        assert.equal(view.attachmentPolicy.state.records[key].failureCount, 0);
+    });
+
+    test(`Popup ${browserName}: whole-library download keeps successful bytes when the batch exceeds its budget`, async () => {
+        const { view, original, calls, fragments } = await attachmentPopup(browserName, {
+            cacheBudget: 6, connection: { type: 'wifi', saveData: true },
+        });
+        await view.api.downloadAllAttachments();
+        // Explicitly opening the item may use the available network despite Low Data Mode.
+        await assert.rejects(view.api.requestPriorityAttachmentDownload(original.id), /attachment_cache_full/);
+        await view.api.waitAttachments();
+        assert.equal(calls.length, 2);
+        const references = readAttachmentReferences(fragments(view.snapshot.rows)[0].xml, original.id);
+        assert.deepEqual(references.map(reference => reference.missing), [false, true]);
+        assert.equal(view.attachmentPolicy.state.downloadAllVersions.length, 2);
+        assert.equal(Object.values(view.attachmentPolicy.state.records).some(record => record.evicted), false);
+        await view.api.endDownloadAllAttachments();
+        assert.equal(view.attachmentPolicy.state.downloadAllVersions.length, 0);
+        assert.equal(readAttachmentReferences(fragments(view.snapshot.rows)[0].xml, original.id)[0].missing, false);
+    });
+
+    test(`Popup ${browserName}: failed durable policy reads stop transfers and preserve the encrypted snapshot`, async () => {
+        const { view, original, calls } = await attachmentPopup(browserName, {
+            hooks: { policyRead: () => { throw new Error('attachment_policy_corrupt'); } },
+        });
+        const before = view.snapshot;
+        await view.api.openItemDetail(original.id);
+        await view.api.waitAttachments();
+        assert.equal(calls.length, 0);
+        assert.deepEqual(view.snapshot, before);
+        assert.equal(view.elements.downloadAllAttachmentsButton.disabled, true);
+        await assert.rejects(view.api.requestPriorityAttachmentDownload(original.id), /attachment_policy_unavailable/);
+    });
+
+    test(`Popup ${browserName}: ordinary files expose offline retention that survives ending a batch`, async () => {
+        const { view, original, identifiers, version } = await attachmentPopup(browserName, { attachments: 1 });
+        await view.api.openItemDetail(original.id);
+        await view.api.waitAttachments();
+        const section = view.elements.detailContent.children.find(node => node.className === 'detail-attachments');
+        const row = section.children[1];
+        const pin = row.children.find(node => node.className === 'secondary attachment-offline');
+        assert.equal(pin.textContent, 'Keep offline');
+        await pin.listeners.click();
+        const identity = `${original.id}/${identifiers[0]}`;
+        assert.deepEqual(view.attachmentPolicy.state.offlineAttachments, [identity]);
+        await view.api.downloadAllAttachments();
+        await view.api.endDownloadAllAttachments();
+        assert.deepEqual(view.attachmentPolicy.state.offlineAttachments, [identity]);
+        assert.equal(new AttachmentDownloadLedger(view.attachmentPolicy.state).isKeptOffline(`${identity}/${version}`), true);
+    });
+}
+
+test('Popup progress updates use real HTMLCollection children without Array-only methods', () => {
+    const source = read('chrome', 'popup.js');
+    const start = source.indexOf('function markAttachmentDownloadsInProgress(');
+    const end = source.indexOf('\nasync function openItemDetail(', start);
+    const dom = new JSDOM('<div id="details"><div class="detail-attachment" data-card-id="item" data-attachment-state="missing"><p class="detail-attachment-note"></p><button></button></div></div>');
+    const detailContent = dom.window.document.getElementById('details');
+    const update = runInNewContext(`${source.slice(start, end)}; markAttachmentDownloadsInProgress`, {
+        selectedItemId: 'item', currentView: 'detail', detailContent, t: (_zh, en) => en,
+    });
+    update('item', true);
+    assert.equal(detailContent.querySelector('p').textContent, 'Downloading…');
+    assert.equal(detailContent.querySelector('button').disabled, true);
+    update('item', false);
+    assert.equal(detailContent.querySelector('button').disabled, false);
+});
+
+for (const browserName of browsers) {
+    test(`Popup ${browserName}: retry timers honor server backoff without resetting on opening an item`, async () => {
+        const connection = { type: 'wifi', saveData: true };
+        const { view, original, calls } = await attachmentPopup(browserName, { attachments: 1, connection,
+            failure: () => new RelayApiError(429, 'rate_limited', '120') });
+        connection.saveData = false;
+        await assert.rejects(view.api.requestPriorityAttachmentDownload(original.id), /rate_limited/);
+        await view.api.waitAttachments();
+        const timer = view.timeouts.filter(timer => !timer.cancelled).at(-1);
+        assert.ok(timer.delay >= 119_000 && timer.delay <= 120_000);
+        assert.equal(calls.length, 1);
+        await view.api.openItemDetail(original.id);
+        await view.api.waitAttachments();
+        assert.equal(calls.length, 1);
+        assert.equal(Object.values(view.attachmentPolicy.state.records)[0].failureCount, 1);
+        view.api.clearUnlockedView();
+        assert.equal(view.timeouts.every(timer => timer.cancelled), true);
+    });
+
+    test(`Popup ${browserName}: locking aborts an in-flight download without recording failure or publishing late bytes`, async () => {
+        const pending = deferredOperation();
+        let signal;
+        const { view, original } = await attachmentPopup(browserName, { attachments: 1, hooks: {
+            hydrateAttachments: async (_token, _vault, _rows, _previous, _validate, crypto) => {
+                signal = crypto.signal;
+                return new Promise((_resolve, reject) => {
+                    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+                    void pending.wait();
+                });
+            },
+        } });
+        const before = view.snapshot;
+        const task = view.api.requestPriorityAttachmentDownload(original.id);
+        const rejected = assert.rejects(task, error => error.name === 'AbortError');
+        await pending.ready;
+        view.api.clearUnlockedView();
+        assert.equal(signal.aborted, true);
+        await rejected;
+        await view.api.waitAttachments();
+        assert.deepEqual(view.snapshot, before);
+        assert.equal(Object.values(view.attachmentPolicy.state.records).some(record => record.failure), false);
+        assert.equal(view.cacheCalls.filter(call => call.action === 'commit').length, 0);
+    });
 }

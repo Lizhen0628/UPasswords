@@ -27,6 +27,18 @@ enum SharedVaultStore {
     /// 库存取实例(值语义操作经由 Vault/AutoFillModel 进入,不直接在视图中使用)。
     static let store = DatabaseStore(root: storeRoot)
 
+    /// SwiftData container shared by the main app and AutoFill through App Group.
+    /// A failed initialization keeps the legacy encrypted store available so a
+    /// damaged SQLite file cannot prevent recovery.
+    static let nativeStore: SwiftDataVaultStore? = {
+        do {
+            return try SwiftDataVaultStore(root: storeRoot)
+        } catch {
+            Log.error("db", "iOS SwiftData store unavailable: \(error)")
+            return nil
+        }
+    }()
+
     /// 当前库指针(共享 defaults):主 App 切库时写入,AutoFill 扩展跟随同一指针。
     /// 不用 DatabaseStore.mainDatabaseName(它走 UserDefaults.standard,扩展进程读不到)。
     static var currentDatabaseName: String? {

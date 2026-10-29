@@ -23,9 +23,9 @@ final class UserProfileStorageTests: XCTestCase {
         XCTAssertEqual(restored.userProfiles.first?.fields.map(\.value), [draft.email, draft.postalCode])
         XCTAssertEqual(restored.userProfiles.first?.registrationAutofillEnabled, false)
         var state = RowSyncState()
-        state.recomputeDirty(database: restored)
-        XCTAssertNotNil(state.dirtyUpserts[profile.id])
         let rowKey = RowSyncKey(raw: key.withUnsafeBytes { Data($0) })
+        try state.recomputeDirty(database: restored, key: rowKey)
+        XCTAssertNotNil(state.dirtyUpserts[profile.id])
         let plaintext = DatabaseItemCodec.xmlData(.userProfile(profile))
         let sealed = try RowSyncCipher.encrypt(plaintext, key: rowKey, uuid: profile.id)
         XCTAssertNil(sealed.range(of: Data(draft.email.utf8)))
@@ -36,7 +36,7 @@ final class UserProfileStorageTests: XCTestCase {
         XCTAssertEqual(RowSync.allItems(database: empty).first?.syncKind, 3)
         state.syncedMtimes[profile.id] = profile.modified
         empty.userProfiles = []
-        state.recomputeDirty(database: empty)
+        try state.recomputeDirty(database: empty, key: rowKey)
         XCTAssertNotNil(state.dirtyDeletes[profile.id])
     }
 }

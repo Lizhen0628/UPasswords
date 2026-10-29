@@ -204,6 +204,23 @@ struct AutoFillRootView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18, pinnedViews: []) {
+                    if model.conflictStateUnavailable {
+                        Label(L10n.t("ios_af_conflict_state_unavailable"), systemImage: "exclamationmark.triangle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Brand.red)
+                    } else if model.pendingConflictedCardCount > 0 {
+                        Label(
+                            String(format: L10n.t("ios_af_conflicted_items_fmt"), model.pendingConflictedCardCount),
+                            systemImage: "exclamationmark.shield.fill"
+                        )
+                        .font(.system(size: 13))
+                        .foregroundStyle(Brand.muted)
+                    }
+                    if model.conflictBlocked {
+                        Text(L10n.t("ios_af_conflict_blocked"))
+                            .font(.system(size: 13))
+                            .foregroundStyle(Brand.red)
+                    }
                     if !model.suggested.isEmpty {
                         group(title: model.serviceHostLabel.map { String(format: L10n.t("ios_af_matched_host_fmt"), $0) }
                               ?? L10n.t("ios_af_suggested_title"),

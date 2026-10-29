@@ -81,6 +81,12 @@ final class AppSettings: ObservableObject {
     /// (同步通道为账户中继,见 AppContext+Sync)。
     @Published var autoSyncEnabled: Bool { didSet { d.set(autoSyncEnabled, forKey: "sync.autoEnabled") } }
     @Published var autoSyncSeconds: Int { didSet { d.set(autoSyncSeconds, forKey: "sync.autoSeconds") } }
+    @Published var downloadAttachmentsOnCellular: Bool {
+        didSet { d.set(downloadAttachmentsOnCellular, forKey: "attachments.allowCellular") }
+    }
+    @Published var downloadAttachmentsOnUnknownNetwork: Bool {
+        didSet { d.set(downloadAttachmentsOnUnknownNetwork, forKey: "attachments.allowUnknownNetwork") }
+    }
 
     // MARK: Misc
     /// 主窗口侧栏显隐(工具栏左一按钮切换,布局记忆跨启动保留)。
@@ -125,6 +131,8 @@ final class AppSettings: ObservableObject {
         backupIntervalDays = d.object(forKey: "backup.intervalDays") as? Int ?? 7
         autoSyncEnabled = d.object(forKey: "sync.autoEnabled") as? Bool ?? false
         autoSyncSeconds = d.object(forKey: "sync.autoSeconds") as? Int ?? 60
+        downloadAttachmentsOnCellular = d.object(forKey: "attachments.allowCellular") as? Bool ?? false
+        downloadAttachmentsOnUnknownNetwork = d.object(forKey: "attachments.allowUnknownNetwork") as? Bool ?? false
         sidebarVisible = d.object(forKey: "app.sidebarVisible") as? Bool ?? true
         sidebarOptionalItems = (d.string(forKey: "app.sidebarOptional") ?? "")
             .split(separator: ",").map(String.init).filter { !$0.isEmpty }

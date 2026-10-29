@@ -14,7 +14,7 @@ struct UPasswordsApp: App {
                 .environmentObject(vault)
                 .tint(Brand.accent)
                 .preferredColorScheme(.dark)
-                .onChange(of: scenePhase) { phase in
+                .onChange(of: scenePhase) { _, phase in
                     switch phase {
                     case .background: vault.didEnterBackground()
                     case .active: vault.didBecomeActive()

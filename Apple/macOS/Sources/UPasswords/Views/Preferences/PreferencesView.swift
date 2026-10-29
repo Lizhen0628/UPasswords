@@ -416,6 +416,7 @@ struct AutoBackupPane: View {
     /// 备份文件列表快照。故意不用计算属性直读文件系统:SwiftUI 不感知
     /// 文件系统变化,立即备份/删除后必须显式 reload 才会刷新列表。
     @State private var backups: [URL] = []
+    @State private var restoreCopyBackup: URL?
 
     var body: some View {
         PaneContainer {
@@ -496,6 +497,18 @@ struct AutoBackupPane: View {
             }
         }
         .onAppear { reloadBackups() }
+        .onChange(of: ctx.backupListVersion) { _, _ in reloadBackups() }
+        .sheet(isPresented: Binding(
+            get: { restoreCopyBackup != nil },
+            set: { if !$0 { restoreCopyBackup = nil } }
+        )) {
+            if let restoreCopyBackup {
+                BackupRestoreCopySheet(
+                    backup: restoreCopyBackup,
+                    suggestedName: "\(ctx.databaseName)Copy")
+                    .environmentObject(ctx)
+            }
+        }
     }
 
     private var backupList: some View {
@@ -509,9 +522,26 @@ struct AutoBackupPane: View {
                         Image(systemName: "doc.badge.clock")
                             .foregroundStyle(.secondary)
                         Text(url.lastPathComponent)
+                        if url.pathExtension == BackupPackage.fileExtension {
+                            Text(backupPackageStatus(url))
+                                .font(.caption)
+                                .foregroundStyle(backupPackageStatusColor(url))
+                        }
                         Spacer()
-                        Button(L10n.t("restore_button")) { restoreFrom(url) }
+                        if url.pathExtension == BackupPackage.fileExtension,
+                           BackupPackage.hasValidStructure(at: url) {
+                            Button {
+                                exportPortableBackup(url)
+                            } label: {
+                                Image(systemName: "square.and.arrow.up")
+                            }
                             .buttonStyle(.link)
+                            .help(L10n.t("backup_export_portable"))
+                            .accessibilityLabel(L10n.t("backup_export_portable"))
+                        }
+                        Button(L10n.t("restore_button")) { restoreCopyBackup = url }
+                            .buttonStyle(.link)
+                            .disabled(!backupIsRestorable(url))
                         Button(L10n.t("delete_button")) { deleteBackup(url) }
                             .buttonStyle(.link)
                     }
@@ -529,6 +559,76 @@ struct AutoBackupPane: View {
         backups = ctx.store.backups(name: ctx.databaseName)
     }
 
+    private func backupIsRestorable(_ url: URL) -> Bool {
+        guard url.pathExtension == BackupPackage.fileExtension else { return true }
+        let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        return isDirectory
+            ? BackupPackage.hasValidStructure(at: url)
+            : (try? BackupPackage.readInfo(at: url)) != nil
+    }
+
+    private func backupPackageStatus(_ url: URL) -> String {
+        guard backupIsRestorable(url), let info = try? BackupPackage.readInfo(at: url) else {
+            return L10n.t("backup_package_damaged")
+        }
+        return info.isComplete
+            ? L10n.t("backup_package_complete")
+            : String(format: L10n.t("backup_package_incomplete_fmt"), info.issueCount)
+    }
+
+    private func backupPackageStatusColor(_ url: URL) -> Color {
+        guard backupIsRestorable(url), let info = try? BackupPackage.readInfo(at: url) else {
+            return .red
+        }
+        return info.isComplete ? .secondary : .orange
+    }
+
+    @MainActor private func exportPortableBackup(_ package: URL) {
+        let panel = NSSavePanel()
+        panel.title = L10n.t("backup_export_portable")
+        panel.allowedContentTypes = [UTType(filenameExtension: BackupPackage.fileExtension) ?? .data]
+        panel.nameFieldStringValue = package.lastPathComponent
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url else {
+            Log.info("backup", "portable archive export cancelled for \(package.lastPathComponent)")
+            return
+        }
+
+        let hasScopedAccess = destination.startAccessingSecurityScopedResource()
+        Log.info("backup", "portable archive export started for \(package.lastPathComponent)")
+        Task.detached(priority: .userInitiated) {
+            let fileManager = FileManager.default
+            let staging = destination.deletingLastPathComponent()
+                .appendingPathComponent(".\(UUID().uuidString).partial")
+            defer {
+                if hasScopedAccess { destination.stopAccessingSecurityScopedResource() }
+                try? fileManager.removeItem(at: staging)
+            }
+
+            do {
+                try BackupPackage.exportPortableArchive(from: package, to: staging)
+                if fileManager.fileExists(atPath: destination.path) {
+                    _ = try fileManager.replaceItemAt(
+                        destination,
+                        withItemAt: staging,
+                        backupItemName: nil,
+                        options: [])
+                } else {
+                    try fileManager.moveItem(at: staging, to: destination)
+                }
+                Log.info("backup", "portable archive export completed for \(package.lastPathComponent)")
+                await MainActor.run {
+                    AppToast.shared.show(L10n.t("backup_archive_exported"))
+                }
+            } catch {
+                Log.error("backup", "portable archive export failed for \(package.lastPathComponent): \(error)")
+                await MainActor.run {
+                    AppToast.shared.show(error.localizedDescription)
+                }
+            }
+        }
+    }
+
     /// 日志级别选择(popup 存 Level rawValue,变更即时生效并持久化)。
     private var logLevelBinding: Binding<String> {
         Binding(
@@ -537,8 +637,7 @@ struct AutoBackupPane: View {
         )
     }
 
-    /// 还原…:打开文件浏览选择备份文件(默认定位到当前库的备份目录,
-    /// 也可选任意 .upw 文件,如手动挪进来的备份),选定后走统一确认还原。
+    /// 选择备份后创建独立副本,不覆盖当前库或改变默认库。
     @MainActor private func restore() {
         let backupDir = ctx.store.backupDir(for: ctx.databaseName)
         // 备份目录尚不存在(从未备份过)时先建好,面板才能定位进去
@@ -546,33 +645,18 @@ struct AutoBackupPane: View {
         let panel = NSOpenPanel()
         panel.title = L10n.t("restore_command")
         panel.directoryURL = backupDir
-        panel.allowedContentTypes = [UTType(filenameExtension: "upw")].compactMap { $0 }
+        panel.allowedContentTypes = [
+            UTType(filenameExtension: "upw"),
+            UTType(filenameExtension: BackupPackage.fileExtension),
+        ].compactMap { $0 }
         panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
+        panel.canChooseDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else {
             Log.info("ui", "restore pick cancelled")
             return
         }
         Log.info("ui", "restore backup picked from preferences: \(url.lastPathComponent)")
-        restoreFrom(url)
-    }
-
-    @MainActor private func restoreFrom(_ url: URL) {
-        let alert = NSAlert()
-        alert.messageText = L10n.t("confirm_restore_query")
-        alert.addButton(withTitle: L10n.t("restore_button"))
-        alert.addButton(withTitle: L10n.t("cancel_button"))
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do {
-            try ctx.store.restore(backup: url, to: ctx.databaseName)
-            try ctx.unlock(name: ctx.databaseName, password: ctx.password)
-            Log.info("backup", "restored from \(url.lastPathComponent)")
-            AppToast.shared.show(L10n.t("database_restored_message"))
-        } catch {
-            Log.error("backup", "restore from \(url.lastPathComponent) failed: \(error)")
-            AppToast.shared.show(error.localizedDescription)
-        }
-        reloadBackups()
+        restoreCopyBackup = url
     }
 
     /// 删除单个备份文件,确认后执行并刷新列表。
@@ -794,6 +878,7 @@ struct ConfigureCloudSheetContents: View {
     @State private var relayCodePrompt: RelayCodePrompt? = nil
     @State private var relayCodeInput = ""
     @State private var showRelayTransfer = false
+    @State private var showCursorRecoveryConfirm = false
 
     /// 需要敏感验证码确认的操作(解绑库 / 注销账户)。
     enum RelayCodePrompt {
@@ -825,6 +910,32 @@ struct ConfigureCloudSheetContents: View {
                             .disabled(!settings.autoSyncEnabled)
                     }
                     GridRow {
+                        Text(L10n.t("attachment_download_cellular_setting"))
+                        Toggle("", isOn: $settings.downloadAttachmentsOnCellular)
+                            .labelsHidden()
+                            .onChange(of: settings.downloadAttachmentsOnCellular) { _, _ in
+                                ctx.resumeAttachmentDownloads()
+                            }
+                    }
+                    GridRow {
+                        Text(L10n.t("attachment_download_unknown_setting"))
+                        Toggle("", isOn: $settings.downloadAttachmentsOnUnknownNetwork)
+                            .labelsHidden()
+                            .onChange(of: settings.downloadAttachmentsOnUnknownNetwork) { _, _ in
+                                ctx.resumeAttachmentDownloads()
+                            }
+                    }
+                    GridRow {
+                        Text(L10n.t("attachment_download_all"))
+                        HStack {
+                            Button(L10n.t("attachment_download_all")) { ctx.downloadAllAttachments() }
+                                .disabled(ctx.phase != .unlocked || !ctx.relayBound)
+                            if ctx.isDownloadingAllAttachments {
+                                Button(L10n.t("attachment_download_all_cancel")) { ctx.cancelDownloadAllAttachments() }
+                            }
+                        }
+                    }
+                    GridRow {
                         Text(L10n.t("relay_account_label"))
                         relayAccountControl
                     }
@@ -832,6 +943,36 @@ struct ConfigureCloudSheetContents: View {
                 Text(L10n.t("relay_account_footer"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if ctx.syncCursorRecoveryRequired {
+                    HStack(alignment: .top, spacing: 10) {
+                        Label(L10n.t("sync_cursor_recovery_guidance"), systemImage: "exclamationmark.triangle")
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button(L10n.t("sync_cursor_recovery_button")) {
+                            Log.info("ui", "cursor recovery confirmation shown")
+                            showCursorRecoveryConfirm = true
+                        }
+                        .disabled(ctx.syncState == .syncing)
+                    }
+                    .confirmationDialog(
+                        L10n.t("sync_cursor_recovery_confirm_title"),
+                        isPresented: $showCursorRecoveryConfirm,
+                        titleVisibility: .visible
+                    ) {
+                        Button(L10n.t("sync_cursor_recovery_confirm_button")) {
+                            Task { await ctx.recoverExpiredSyncCursor() }
+                        }
+                        Button(L10n.t("cancel_button"), role: .cancel) {}
+                    } message: {
+                        Text(L10n.t("sync_cursor_recovery_confirm_message"))
+                    }
+                }
+                Text(L10n.t("attachment_download_network_footer"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                MacSyncConflictSection()
+                MacSyncQuarantineSection()
                 // 远端密文解不开(对端改过主密码/数据损坏)时的修复入口:
                 // 统一收进一个对话框(接管/覆盖两条路都在里面),避免与弹窗重复
                 if ctx.syncRemoteUnreadable {

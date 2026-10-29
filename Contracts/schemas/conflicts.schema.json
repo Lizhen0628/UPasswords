@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://upasswords.local/contracts/conflicts.schema.json",
+  "title": "UPasswords encrypted conflict candidates response",
+  "description": "Unresolved encrypted candidates and compare-and-swap state; the server never decrypts candidate bodies.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["conflicts"],
+  "properties": {
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/conflict"
+      }
+    }
+  },
+  "$defs": {
+    "conflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "conflictId",
+        "itemUuid",
+        "baseRevision",
+        "currentRevision",
+        "currentDeletedSeq",
+        "generation",
+        "createdMs",
+        "updatedMs",
+        "candidates"
+      ],
+      "properties": {
+        "conflictId": {
+          "$ref": "#/$defs/id"
+        },
+        "itemUuid": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "baseRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "currentRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "currentDeletedSeq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "createdMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "updatedMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "candidates": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/candidate"
+          }
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateId",
+        "kind",
+        "op",
+        "revision",
+        "modifiedMs",
+        "committedMs",
+        "deviceName",
+        "platform"
+      ],
+      "properties": {
+        "candidateId": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "type": "integer",
+          "enum": [1, 2, 3]
+        },
+        "op": {
+          "enum": ["upsert", "delete"]
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "modifiedMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "committedMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deviceName": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "sourceSessionId": {
+          "type": "string"
+        },
+        "bodyB64": {
+          "type": "string",
+          "contentEncoding": "base64"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "upsert"
+              }
+            }
+          },
+          "then": {
+            "required": ["bodyB64", "sha256"]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["bodyB64"]
+                },
+                {
+                  "required": ["sha256"]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    }
+  }
+}

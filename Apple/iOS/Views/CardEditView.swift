@@ -1,8 +1,9 @@
-import SwiftUI
 import PhotosUI
+import SwiftUI
 import UniformTypeIdentifiers
 
 import UPasswordsCore
+import UPasswordsPersistence
 
 // MARK: - 模板选择(新建入口)
 
@@ -93,7 +94,7 @@ struct CardEditView: View {
     @State private var showAttachments = false
 
     /// 单附件上限(XML 里 base64 序列化,过大显著膨胀)。
-    private static let maxAttachmentBytes = 8 * 1024 * 1024
+    private static let maxAttachmentBytes = AttachmentPolicy.maximumOriginalBytes
 
     init(draft: Card, isNew: Bool) {
         self.isNew = isNew
@@ -480,7 +481,7 @@ struct CardEditView: View {
                 Text(L10n.t("ios_attachments_section_title")).foregroundStyle(.primary)
             }
         }
-        .onChange(of: photoItem) { item in loadPhoto(item) }
+        .onChange(of: photoItem) { _, item in loadPhoto(item) }
         .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
             if case .success(let urls) = result, let url = urls.first {
                 addFile(url)
@@ -543,11 +544,16 @@ struct CardEditView: View {
     private func addFile(_ url: URL) {
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-        guard let data = try? Data(contentsOf: url) else {
+        do {
+            let data = try AttachmentFileReader.readContents(of: url)
+            addAttachment(data: data, name: url.lastPathComponent, isImage: false)
+        } catch let error as AttachmentFileReader.ReadError {
+            Log.error("app", "ios file attachment size check failed: \(error)")
+            vault.showToast(error.localizedDescription)
+        } catch {
+            Log.error("app", "ios file attachment read failed: \(error)")
             vault.showToast(L10n.t("ios_import_unreadable_message"))
-            return
         }
-        addAttachment(data: data, name: url.lastPathComponent, isImage: false)
     }
 
     private func addAttachment(data: Data, name: String, isImage: Bool) {

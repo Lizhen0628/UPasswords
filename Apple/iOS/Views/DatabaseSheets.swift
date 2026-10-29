@@ -20,6 +20,18 @@ struct VaultManageSheet: View {
     @EnvironmentObject var vault: Vault
     @Environment(\.dismiss) private var dismiss
 
+    private enum PresentedSheet: Identifiable {
+        case rename
+        case importCards(DatabaseFile)
+
+        var id: String {
+            switch self {
+            case .rename: return "rename"
+            case .importCards(let database): return "import:\(database.name)"
+            }
+        }
+    }
+
     @State private var switchTarget: DatabaseFile? = nil
     @State private var switchPassword = ""
     @State private var switchFailed = false
@@ -31,7 +43,7 @@ struct VaultManageSheet: View {
         switchTarget = db
     }
     @State private var deleteTarget: DatabaseFile? = nil
-    @State private var showRename = false
+    @State private var presentedSheet: PresentedSheet?
     @State private var showImporter = false
 
     var body: some View {
@@ -67,7 +79,7 @@ struct VaultManageSheet: View {
                         }
                         .accessibilityLabel(L10n.t("ios_import_file_button"))
                         Button {
-                            showRename = true
+                            presentedSheet = .rename
                         } label: {
                             Image(systemName: "pencil")
                         }
@@ -84,7 +96,18 @@ struct VaultManageSheet: View {
                     vault.importDatabaseFile(from: url)
                 }
             }
-            .sheet(isPresented: $showRename) { DatabaseRenameSheet() }
+            .sheet(item: $presentedSheet) { sheet in
+                switch sheet {
+                case .rename:
+                    DatabaseRenameSheet()
+                        .environmentObject(vault)
+                case .importCards(let source):
+                    ImportCardsSheet(
+                        sourceName: source.name,
+                        destinationName: vault.databaseName)
+                        .environmentObject(vault)
+                }
+            }
             .alert(String(format: L10n.t("switch_database_unlock_title"), switchTarget?.name ?? ""),
                    isPresented: Binding(
                     get: { switchTarget != nil },
@@ -175,6 +198,14 @@ struct VaultManageSheet: View {
             }
             // 不依赖手势的可靠入口:个别真机(iOS 27.0.1)swipeActions 不响应
             Menu {
+                if !isCurrent {
+                    Button {
+                        presentedSheet = .importCards(db)
+                    } label: {
+                        Label(L10n.t("database_card_import_title"), systemImage: "square.and.arrow.down")
+                    }
+                    .disabled(vault.locked)
+                }
                 Button {
                     beginSwitch(db)
                 } label: {

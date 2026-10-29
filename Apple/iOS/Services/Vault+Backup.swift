@@ -17,19 +17,39 @@ extension Vault {
         store.backups(name: databaseName)
     }
 
+    /// Exports a self-contained backup package as a temporary single-file archive for sharing.
+    /// - Parameter package: Valid package directory produced by `BackupPackage.capture`.
+    /// - Returns: Temporary archive URL, or `nil` after showing a localized error.
+    func makePortableBackupArchive(from package: URL) async -> URL? {
+        let archiveDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("UPasswordsBackupExports", isDirectory: true)
+        let archive = archiveDirectory.appendingPathComponent(
+            "\(package.deletingPathExtension().lastPathComponent)-\(UUID().uuidString).upwbackup")
+        Log.info("backup", "ios portable archive export started for \(package.lastPathComponent)")
+
+        do {
+            let exportedArchive = try await Task.detached(priority: .userInitiated) {
+                try FileManager.default.createDirectory(
+                    at: archiveDirectory,
+                    withIntermediateDirectories: true)
+                try BackupPackage.exportPortableArchive(from: package, to: archive)
+                return archive
+            }.value
+            Log.info("backup", "ios portable archive export completed for \(package.lastPathComponent)")
+            return exportedArchive
+        } catch {
+            Log.error("backup", "ios portable archive export failed for \(package.lastPathComponent): \(error)")
+            showToast(error.localizedDescription)
+            return nil
+        }
+    }
+
     // MARK: 立即备份
 
     /// 手动备份:落盘当前库后复制一份带时间戳的快照(保留最近 10 份)。
     func backupNow() {
         persist()
-        do {
-            try store.backup(name: databaseName)
-            Log.info("backup", "ios manual backup of \"\(databaseName)\" ok")
-            showToast(L10n.t("database_saved_message") + " " + L10n.t("backup_command"))
-        } catch {
-            Log.error("backup", "ios manual backup of \"\(databaseName)\" failed: \(error)")
-            showToast(error.localizedDescription)
-        }
+        startBackupCapture(auto: false)
     }
 
     // MARK: 自动备份
@@ -44,28 +64,104 @@ extension Vault {
             Log.debug("backup", "ios auto-backup not due (elapsed \(Int(elapsed))s < \(days)d)")
             return
         }
-        do {
-            try store.backup(name: databaseName)
-            d.set(Date().timeIntervalSince1970, forKey: Self.backupLastKeyPrefix + databaseName)
-            Log.info("backup", "ios auto backup of \"\(databaseName)\" ok (interval \(days)d)")
-        } catch {
-            Log.error("backup", "ios auto backup of \"\(databaseName)\" failed: \(error)")
+        startBackupCapture(auto: true)
+    }
+
+    func cancelBackupCapture() {
+        backupCaptureTask?.cancel()
+        backupCaptureTask = nil
+    }
+
+    private func startBackupCapture(auto: Bool) {
+        guard !locked, let vaultKey else {
+            Log.warn("backup", "ios package capture skipped: vault is locked")
+            return
+        }
+        cancelBackupCapture()
+        let name = databaseName
+        let sessionID = syncSessionID
+        let snapshot = database
+        let state = rowSync
+        let binding = relay.binding(database: name)
+        let token = relay.token(database: name)
+        let cloud = binding.flatMap { binding in
+            token.map { BackupPackage.CloudSource(client: relayClient, token: $0, vaultID: binding.vaultId) }
+        }
+        let store = store
+        Log.info("backup", "ios \(auto ? "auto" : "manual") package capture started for \"\(name)\"")
+        backupCaptureTask = Task { [weak self] in
+            do {
+                let result = try await BackupPackage.capture(
+                    store: store,
+                    name: name,
+                    database: snapshot,
+                    vaultKey: vaultKey,
+                    syncState: state,
+                    cloud: cloud,
+                    cloudRequired: binding != nil)
+                guard let self else { return }
+                self.backupCaptureTask = nil
+                guard !self.locked,
+                      self.databaseName == name,
+                      self.syncSessionID == sessionID else { return }
+                if auto {
+                    self.d.set(
+                        Date().timeIntervalSince1970,
+                        forKey: Self.backupLastKeyPrefix + name)
+                }
+                let resultText = result.assessment.isComplete
+                    ? L10n.t("backup_package_saved_complete")
+                    : String(
+                        format: L10n.t("backup_package_saved_incomplete_fmt"),
+                        result.assessment.issues.count)
+                if !auto { self.showToast(resultText) }
+                Log.info(
+                    "backup",
+                    "ios package capture saved \"\(name)\" complete=\(result.assessment.isComplete) issues=\(result.assessment.issues.count)")
+            } catch is CancellationError {
+                Log.info("backup", "ios package capture cancelled for \"\(name)\"")
+            } catch {
+                guard let self else { return }
+                self.backupCaptureTask = nil
+                Log.error("backup", "ios package capture failed for \"\(name)\": \(error)")
+                if !auto, !self.locked, self.databaseName == name {
+                    self.showToast(error.localizedDescription)
+                }
+            }
         }
     }
 
     // MARK: 恢复 / 删除
 
-    /// 恢复备份:备份内容覆盖当前库文件,随后立即锁定(备份的主密码可能与当前不同)。
-    func restoreBackup(_ url: URL) {
+    /// Restores a local backup as a separately encrypted database without changing the active vault.
+    func restoreBackupAsCopy(
+        _ url: URL,
+        name: String,
+        sourcePassword: String,
+        newPassword: String,
+        expectedPackageVerificationToken: String? = nil,
+        allowIncompletePackage: Bool = false
+    ) -> String? {
+        guard relay.binding(database: name) == nil else {
+            return L10n.t("backup_restore_bound_name_error")
+        }
         do {
-            try store.restore(backup: url, to: databaseName)
-            lock()
-            reloadPerDatabaseState()
-            Log.info("backup", "ios restored \"\(url.lastPathComponent)\" → \"\(databaseName)\" (locked for unlock)")
-            showToast(L10n.t("ios_backup_restored_message"))
+            _ = try store.restoreBackupAsCopy(
+                backup: url,
+                name: name,
+                sourcePassword: sourcePassword,
+                newPassword: newPassword,
+                expectedPackageVerificationToken: expectedPackageVerificationToken,
+                allowIncompletePackage: allowIncompletePackage)
+            _ = try nativeStore?.importLegacyIfNeeded(
+                name: name, password: newPassword, legacyStore: store)
+            refreshDatabases()
+            Log.info("backup", "ios restored \"\(url.lastPathComponent)\" as copy \"\(name)\"")
+            showToast(String(format: L10n.t("backup_copy_created_fmt"), name))
+            return nil
         } catch {
-            Log.error("backup", "ios restore \"\(url.lastPathComponent)\" failed: \(error)")
-            showToast(error.localizedDescription)
+            Log.error("backup", "ios restore \"\(url.lastPathComponent)\" as \"\(name)\" failed: \(error)")
+            return error.localizedDescription
         }
     }
 

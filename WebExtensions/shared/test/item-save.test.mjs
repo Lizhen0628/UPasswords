@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { saveVaultItem, RelayApiError } from "../dist/index.js";
 
 const uuid = "abcdefab-1234-4abc-8def-0123456789ab";
-const item = { uuid: uuid.toUpperCase(), revision: 7, bodyB64: "encrypted-test-body", modifiedMs: 1_800_000_000_123 };
+const attachmentId = "11111111-2222-4333-8444-555555555555";
+const contentVersion = "11111111-2222-4333-8444-555555555556";
+const item = {
+    uuid: uuid.toUpperCase(), revision: 7, bodyB64: "encrypted-test-body", modifiedMs: 1_800_000_000_123,
+    attachmentRefs: [{ attachmentId: attachmentId.toUpperCase(), contentVersion: contentVersion.toUpperCase() }],
+};
 
 function mock(t, body, status = 200) {
     const calls = [];
@@ -23,9 +28,11 @@ test("saveVaultItem: exact single-card CAS POST and returned revision", async (t
     assert.equal(calls[0].url, "https://api.upasswords.com/v1/vaults/vault1/items");
     assert.equal(calls[0].init.method, "POST");
     assert.equal(calls[0].init.headers.authorization, "Bearer token");
+    assert.equal(calls[0].init.headers["X-UPW-Sync-Protocol"], "5");
     assert.equal(calls[0].init.headers["content-type"], "application/json");
     assert.deepEqual(JSON.parse(calls[0].init.body), { items: [{
         uuid: item.uuid, kind: 1, op: "upsert", baseRevision: 7, bodyB64: item.bodyB64, modifiedMs: item.modifiedMs,
+        attachmentRefs: [{ attachmentId, contentVersion }],
     }] });
 });
 
@@ -65,6 +72,17 @@ test("saveVaultItem: refuses absent/zero CAS revision before sending a create", 
     const calls = mock(t, { results: [{ uuid, status: "ok", revision: 1 }] });
     for (const revision of [undefined, 0, -1, 1.5, NaN, Number.MAX_SAFE_INTEGER + 1]) {
         await assert.rejects(() => saveVaultItem("token", "vault1", { ...item, revision }), isError(0, "bad_item_revision"));
+    }
+    assert.equal(calls.length, 0);
+});
+
+test("saveVaultItem: requires unique, versioned attachment references before sending", async (t) => {
+    const calls = mock(t, { results: [{ uuid, status: "ok", revision: 8 }] });
+    for (const attachmentRefs of [undefined, [
+        { attachmentId, contentVersion }, { attachmentId: attachmentId.toUpperCase(), contentVersion },
+    ], [{ attachmentId, contentVersion: "00000000-0000-0000-0000-000000000000" }]]) {
+        await assert.rejects(() => saveVaultItem("token", "vault1", { ...item, attachmentRefs }),
+            isError(0, "bad_attachment_reference"));
     }
     assert.equal(calls.length, 0);
 });

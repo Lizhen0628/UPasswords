@@ -78,7 +78,7 @@ struct GeneratorView: View {
             }
             .pickerStyle(.segmented)
             .padding(12)
-            .onChange(of: settings.passwordType) { _ in regenerate() }
+            .onChange(of: settings.passwordType) { regenerate() }
         }
     }
 
@@ -98,7 +98,7 @@ struct GeneratorView: View {
                     .foregroundStyle(Brand.muted)
                     .frame(width: 30, alignment: .trailing)
             }
-            .onChange(of: settings.passwordLength) { _ in regenerate() }
+            .onChange(of: settings.passwordLength) { regenerate() }
             if settings.passwordType == 0 {
                 InsetDivider()
                 optionRow {
@@ -109,7 +109,7 @@ struct GeneratorView: View {
                         .multilineTextAlignment(.trailing)
                         .frame(width: 160)
                 }
-                .onChange(of: settings.symbolsAlphabet) { _ in regenerate() }
+                .onChange(of: settings.symbolsAlphabet) { regenerate() }
             }
             if settings.passwordType == 1 {
                 InsetDivider()
@@ -121,7 +121,7 @@ struct GeneratorView: View {
                         .multilineTextAlignment(.trailing)
                         .frame(width: 100)
                 }
-                .onChange(of: settings.separatorAlphabet) { _ in regenerate() }
+                .onChange(of: settings.separatorAlphabet) { regenerate() }
             }
             InsetDivider()
             optionRow {
@@ -129,7 +129,7 @@ struct GeneratorView: View {
                     .foregroundStyle(Brand.fg)
                     .tint(Brand.accent)
             }
-            .onChange(of: settings.excludeSimilarCharacters) { _ in regenerate() }
+            .onChange(of: settings.excludeSimilarCharacters) { regenerate() }
         }
     }
 

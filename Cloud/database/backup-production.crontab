@@ -1,0 +1,8 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# service-admin runs in CST (UTC+08:00); these are 02:00 and 02:30 UTC.
+0 10 * * * /home/administrator/.local/bin/run-upasswords-backup-cron full
+30 10 * * * /home/administrator/.local/bin/run-upasswords-backup-cron keys
+10 * * * * /home/administrator/.local/bin/run-upasswords-backup-cron r2
+*/15 * * * * /home/administrator/.local/bin/run-upasswords-backup-cron binlog

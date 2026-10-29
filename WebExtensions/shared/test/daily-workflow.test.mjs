@@ -65,8 +65,15 @@ test("createLoginItemXml creates native-compatible typed fields, timestamps and 
         ["login", "username"], ["password", "current-password"], ["website", "url"],
     ]);
     assert.deepEqual(fields.map((field) => field.textContent), ["user<&", "p&<\"'", "https://example.com/login?a=1&b=2"]);
+    const fieldIDs = fields.map((field) => field.getAttribute("id"));
+    assert.equal(new Set(fieldIDs).size, 3);
+    for (const id of fieldIDs) {
+        assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    }
     assert.equal(card.querySelector("note")?.textContent, "line 1\nline <2>&");
-    assert.equal(parseVaultXml(`<passworddatabase>${xml}</passworddatabase>`)[0].fields.length, 3);
+    const parsedFields = parseVaultXml(`<passworddatabase>${xml}</passworddatabase>`)[0].fields;
+    assert.equal(parsedFields.length, 3);
+    assert.deepEqual(parsedFields.map((field) => field.id), fieldIDs);
     assert.match(xml, /&amp;/);
 });
 
@@ -125,19 +132,25 @@ function mock(t, body, status = 200) {
 
 test("createItem sends baseRevision zero via CAS insert and expects revision one", async (t) => {
     const calls = mock(t, { results: [{ uuid, status: "ok", revision: 1 }] });
-    assert.deepEqual(await createItem("token", "vault", { uuid, bodyB64: "AQ==", modifiedMs: 12 }), { revision: 1 });
+    assert.deepEqual(await createItem("token", "vault", {
+        uuid, bodyB64: "AQ==", modifiedMs: 12, attachmentRefs: [],
+    }), { revision: 1 });
     assert.deepEqual(JSON.parse(calls[0].init.body), { items: [{
-        uuid, kind: 1, op: "upsert", baseRevision: 0, bodyB64: "AQ==", modifiedMs: 12,
+        uuid, kind: 1, op: "upsert", baseRevision: 0, bodyB64: "AQ==", modifiedMs: 12, attachmentRefs: [],
     }] });
     t.mock.restoreAll();
 });
 
 test("createItem conflicts are never retried and existing save rejects revision zero", async (t) => {
     const calls = mock(t, { results: [{ uuid, status: "conflict" }] });
-    await assert.rejects(() => createItem("token", "vault", { uuid, bodyB64: "AQ==", modifiedMs: 12 }),
+    await assert.rejects(() => createItem("token", "vault", {
+        uuid, bodyB64: "AQ==", modifiedMs: 12, attachmentRefs: [],
+    }),
         (error) => error instanceof RelayApiError && error.code === "item_conflict");
     assert.equal(calls.length, 1);
-    await assert.rejects(() => saveVaultItem("token", "vault", { uuid, revision: 0, bodyB64: "AQ==", modifiedMs: 12 }),
+    await assert.rejects(() => saveVaultItem("token", "vault", {
+        uuid, revision: 0, bodyB64: "AQ==", modifiedMs: 12, attachmentRefs: [],
+    }),
         (error) => error instanceof RelayApiError && error.code === "bad_item_revision");
 });
 
@@ -148,7 +161,9 @@ test("createItem rejects malformed response UUIDs and revisions", async (t) => {
         { uuid, status: "ok", revision: "1" },
     ]) {
         const calls = mock(t, { results: [response] });
-        await assert.rejects(() => createItem("token", "vault", { uuid, bodyB64: "AQ==", modifiedMs: 12 }),
+        await assert.rejects(() => createItem("token", "vault", {
+            uuid, bodyB64: "AQ==", modifiedMs: 12, attachmentRefs: [],
+        }),
             (error) => error instanceof RelayApiError && error.code === "bad_item_response");
         assert.equal(calls.length, 1);
         t.mock.restoreAll();

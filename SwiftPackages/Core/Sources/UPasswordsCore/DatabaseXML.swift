@@ -8,11 +8,12 @@ import Foundation
 ///   <label name id type color pin_to_top/>
 ///   <card title id symbol color template autofill favorite archived trashed
 ///         expiration reminder created modified>
-///     <field name type autofill history>value</field>
+///     <field id name type autofill history>value</field>
 ///     <note>…</note>
 ///     <label name id/>
-///     <image name>base64</image>
-///     <file name>base64</file>
+///     <image id version name>base64</image>
+///     <image id version name missing="true" />
+///     <file id version name>base64</file>
 ///     <icon source>base64</icon>        ← 本项目扩展:卡片图标(website/custom/url/builtin)
 ///   </card>
 /// </database>
@@ -85,7 +86,7 @@ public struct PasswordDatabase: Codable, Equatable {
         return db
     }
 
-    // MARK: - Merge(整库 LWW 合并:导入恢复等场景;同步收敛走 DatabaseItemCodec 逐条裁决)
+    // MARK: - Merge(整库导入辅助；不用于云端行级同步冲突裁决)
 
     /// Item-level merge: newest `modified`/`timeStamp` wins(本地不早于对端则保留本地)。
     public mutating func merge(with other: PasswordDatabase) {
@@ -153,8 +154,8 @@ extension PasswordDatabase {
         if let t = l.type, !t.isEmpty { s += " type=\"\(XMLEscape(t))\"" }
         if let c = l.color { s += " color=\"\(XMLEscape(c))\"" }
         if l.pinToTop { s += " pin_to_top=\"true\"" }
-        // 条件落盘 time(毫秒):0(存量库未编辑过)不写属性;>0(编辑/新建)才写,
-        // 令对端 LWW 判定有真实时间可比。毫秒按 Int64 整数输出:
+        // 条件落盘 time(毫秒):0(存量库未编辑过)不写属性;>0(编辑/新建)才写。
+        // 毫秒按 Int64 整数输出，避免 Double 插值大数时变成科学计数法:
         // Double 直接插值大数会变科学计数法(1.7e+12)
         if l.timeStamp > 0 { s += " time=\"\(Int64(l.timeStamp))\"" }
         return s + " />"
@@ -175,7 +176,9 @@ extension PasswordDatabase {
         if let r = c.reminder { s += " reminder=\"\(Int(r))\"" }
         s += " created=\"\(Int(c.created))\" modified=\"\(Int(c.modified))\">\n"
         for f in c.fields {
-            s += "        <field name=\"\(XMLEscape(f.name))\" type=\"\(f.type.rawValue)\" autofill=\"\(f.autofill.rawValue)\""
+            s += "        <field"
+            if f.hasPersistentID { s += " id=\"\(f.id.uuidString)\"" }
+            s += " name=\"\(XMLEscape(f.name))\" type=\"\(f.type.rawValue)\" autofill=\"\(f.autofill.rawValue)\""
             if !f.history.isEmpty {
                 let json = Self.historyJSON(f.history)
                 s += " history=\"\(XMLEscape(json))\""
@@ -190,10 +193,38 @@ extension PasswordDatabase {
             s += "        <label name=\"\(XMLEscape(name))\" id=\"\(lid.uuidString)\" />\n"
         }
         for img in c.images {
-            s += "        <image name=\"\(XMLEscape(img.name))\">\(img.data.base64EncodedString())</image>\n"
+            s += "        <image"
+            if img.hasPersistentID { s += " id=\"\(img.id.uuidString)\"" }
+            if img.hasPersistentContentVersion {
+                s += " version=\"\(img.contentVersion.uuidString)\""
+            }
+            s += " name=\"\(XMLEscape(img.name))\""
+            if let data = img.data {
+                if data.isEmpty {
+                    s += " empty=\"true\" />\n"
+                } else {
+                    s += ">\(data.base64EncodedString())</image>\n"
+                }
+            } else {
+                s += " missing=\"true\" />\n"
+            }
         }
         for file in c.files {
-            s += "        <file name=\"\(XMLEscape(file.name))\">\(file.data.base64EncodedString())</file>\n"
+            s += "        <file"
+            if file.hasPersistentID { s += " id=\"\(file.id.uuidString)\"" }
+            if file.hasPersistentContentVersion {
+                s += " version=\"\(file.contentVersion.uuidString)\""
+            }
+            s += " name=\"\(XMLEscape(file.name))\""
+            if let data = file.data {
+                if data.isEmpty {
+                    s += " empty=\"true\" />\n"
+                } else {
+                    s += ">\(data.base64EncodedString())</file>\n"
+                }
+            } else {
+                s += " missing=\"true\" />\n"
+            }
         }
         if let src = c.iconSource, !src.isEmpty {
             if let d = c.iconData, !d.isEmpty {
@@ -213,7 +244,9 @@ extension PasswordDatabase {
         s += " autofill=\"\(profile.registrationAutofillEnabled ? "on" : "off")\""
         s += " created=\"\(Int64(profile.created))\" modified=\"\(Int64(profile.modified))\">\n"
         for field in profile.fields {
-            s += "        <field name=\"\(XMLEscape(field.name))\""
+            s += "        <field"
+            if field.hasPersistentID { s += " id=\"\(field.id.uuidString)\"" }
+            s += " name=\"\(XMLEscape(field.name))\""
             s += " type=\"\(field.type.rawValue)\" autofill=\"\(field.autofill.rawValue)\""
             if !field.history.isEmpty {
                 s += " history=\"\(XMLEscape(Self.historyJSON(field.history)))\""
@@ -269,6 +302,7 @@ extension PasswordDatabase {
         guard pp.parse(), !parser.failed else {
             throw DatabaseXMLError.malformed
         }
+        guard parser.persistentIDsAreUnique else { throw DatabaseXMLError.malformed }
         var db = PasswordDatabase()
         db.labels = parser.labels
         db.cards = parser.cards
@@ -298,6 +332,40 @@ final class DBXMLParser: NSObject, XMLParserDelegate {
     private var currentField: Field? = nil
     private var textBuf = ""
     private var currentElement = ""
+
+    var persistentIDsAreUnique: Bool {
+        cards.allSatisfy { card in
+            identitiesAreUnique(card.fields.map { ($0.id, $0.hasPersistentID) })
+                && identitiesAreUnique((card.images + card.files).map { ($0.id, $0.hasPersistentID) })
+        } && userProfiles.allSatisfy { profile in
+            identitiesAreUnique(profile.fields.map { ($0.id, $0.hasPersistentID) })
+        }
+    }
+
+    private func identitiesAreUnique(_ values: [(UUID, Bool)]) -> Bool {
+        let ids = values.compactMap { $0.1 ? $0.0 : nil }
+        return Set(ids).count == ids.count
+    }
+
+    private func persistentIdentity(from attributes: [String: String]) -> (id: UUID, isPersistent: Bool)? {
+        guard let rawID = attributes["id"] else { return (UUID(), false) }
+        guard let id = UUID(uuidString: rawID),
+              id.uuidString.caseInsensitiveCompare(rawID) == .orderedSame else {
+            failed = true
+            return nil
+        }
+        return (id, true)
+    }
+
+    private func persistentContentVersion(from attributes: [String: String]) -> UUID? {
+        guard let rawVersion = attributes["version"] else { return nil }
+        guard let version = UUID(uuidString: rawVersion),
+              version.uuidString.caseInsensitiveCompare(rawVersion) == .orderedSame else {
+            failed = true
+            return nil
+        }
+        return version
+    }
 
     /// 接收元素开始事件，创建当前记录并读取已知属性。
     public func parser(_ p: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes attrs: [String: String] = [:]) {
@@ -347,7 +415,10 @@ final class DBXMLParser: NSObject, XMLParserDelegate {
             profile.modified = attrs["modified"].flatMap(Double.init) ?? 0
             currentProfile = profile
         case "field":
+            guard let identity = persistentIdentity(from: attrs) else { return }
             var f = Field(name: L10n.resolve(attrs["name"] ?? ""))
+            f.id = identity.id
+            f.hasPersistentID = identity.isPersistent
             if let t = attrs["type"], knownFieldTypes.contains(t) {
                 f.type = FieldType(rawValue: t) ?? .text
             } else {
@@ -361,11 +432,27 @@ final class DBXMLParser: NSObject, XMLParserDelegate {
             f.history = PasswordDatabase.history(fromJSON: attrs["history"])
             currentField = f
         case "image":
+            guard let identity = persistentIdentity(from: attrs) else { return }
+            pendingAttachmentID = identity.id
+            pendingAttachmentHasPersistentID = identity.isPersistent
+            pendingAttachmentContentVersion = persistentContentVersion(from: attrs)
+            pendingAttachmentHasPersistentContentVersion = attrs["version"] != nil
             pendingAttachmentName = attrs["name"] ?? ""
             pendingAttachmentKind = .image
+            pendingAttachmentIsMissing = attrs["missing"] == "true"
+            pendingAttachmentIsEmpty = attrs["empty"] == "true"
+            validateAttachmentMarkers(attrs)
         case "file":
+            guard let identity = persistentIdentity(from: attrs) else { return }
+            pendingAttachmentID = identity.id
+            pendingAttachmentHasPersistentID = identity.isPersistent
+            pendingAttachmentContentVersion = persistentContentVersion(from: attrs)
+            pendingAttachmentHasPersistentContentVersion = attrs["version"] != nil
             pendingAttachmentName = attrs["name"] ?? ""
             pendingAttachmentKind = .file
+            pendingAttachmentIsMissing = attrs["missing"] == "true"
+            pendingAttachmentIsEmpty = attrs["empty"] == "true"
+            validateAttachmentMarkers(attrs)
         case "icon":
             pendingIconSource = attrs["source"] ?? ""
         default:
@@ -379,9 +466,33 @@ final class DBXMLParser: NSObject, XMLParserDelegate {
     }
 
     private enum AttachmentKind { case image, file }
+    private var pendingAttachmentID: UUID? = nil
+    private var pendingAttachmentHasPersistentID = false
+    private var pendingAttachmentContentVersion: UUID? = nil
+    private var pendingAttachmentHasPersistentContentVersion = false
     private var pendingAttachmentName: String? = nil
     private var pendingAttachmentKind: AttachmentKind? = nil
+    private var pendingAttachmentIsMissing = false
+    private var pendingAttachmentIsEmpty = false
     private var pendingIconSource: String? = nil
+
+    private func validateAttachmentMarkers(_ attributes: [String: String]) {
+        for key in ["missing", "empty"] {
+            guard let value = attributes[key] else { continue }
+            guard value == "true" || value == "false" else {
+                failed = true
+                return
+            }
+        }
+        if pendingAttachmentIsMissing {
+            guard pendingAttachmentHasPersistentID,
+                  pendingAttachmentHasPersistentContentVersion,
+                  !pendingAttachmentIsEmpty else {
+                failed = true
+                return
+            }
+        }
+    }
 
     /// 在元素结束时将文本写入当前值并收集完成的记录。
     public func parser(_ p: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
@@ -399,13 +510,40 @@ final class DBXMLParser: NSObject, XMLParserDelegate {
         case "note":
             currentCard?.notes = textBuf
         case "image", "file":
-            let trimmed = textBuf.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty, let kind = pendingAttachmentKind,
-               let attachName = pendingAttachmentName,
-               let d = Data(base64Encoded: trimmed) {
-                let att = Attachment(name: attachName, data: d)
-                if kind == .image { currentCard?.images.append(att) } else { currentCard?.files.append(att) }
+            let encoded = textBuf.components(separatedBy: .whitespacesAndNewlines).joined()
+            guard let kind = pendingAttachmentKind, let attachName = pendingAttachmentName else {
+                failed = true
+                break
             }
+            let data: Data?
+            if pendingAttachmentIsMissing {
+                guard encoded.isEmpty else {
+                    failed = true
+                    break
+                }
+                data = nil
+            } else if pendingAttachmentIsEmpty {
+                guard encoded.isEmpty else {
+                    failed = true
+                    break
+                }
+                data = Data()
+            } else if encoded.isEmpty {
+                data = Data()
+            } else if let decoded = Data(base64Encoded: encoded) {
+                data = decoded
+            } else {
+                failed = true
+                break
+            }
+            var att = Attachment(name: attachName, data: data)
+            att.id = pendingAttachmentID ?? UUID()
+            att.hasPersistentID = pendingAttachmentHasPersistentID
+            if let contentVersion = pendingAttachmentContentVersion {
+                att.contentVersion = contentVersion
+            }
+            att.hasPersistentContentVersion = pendingAttachmentHasPersistentContentVersion
+            if kind == .image { currentCard?.images.append(att) } else { currentCard?.files.append(att) }
         case "icon":
             if currentCard != nil, let src = pendingIconSource, !src.isEmpty {
                 let trimmed = textBuf.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -422,7 +560,13 @@ final class DBXMLParser: NSObject, XMLParserDelegate {
             break
         }
         pendingAttachmentName = nil
+        pendingAttachmentID = nil
+        pendingAttachmentHasPersistentID = false
+        pendingAttachmentContentVersion = nil
+        pendingAttachmentHasPersistentContentVersion = false
         pendingAttachmentKind = nil
+        pendingAttachmentIsMissing = false
+        pendingAttachmentIsEmpty = false
         pendingIconSource = nil
         currentElement = ""
     }

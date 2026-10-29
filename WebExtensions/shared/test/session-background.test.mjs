@@ -102,7 +102,7 @@ test("decrypt and refresh keep exact popup sender boundaries even for a valid ge
         generation: begun.generation, items: [], vaultKey: Array(32).fill(71),
         snapshotVersion: 1, passwordVersion: 1 });
     const listener = f.listeners[0];
-    for (const action of ["decrypt", "refresh"]) {
+    for (const action of ["decrypt", "refresh", "seal-backup"]) {
         for (const sender of [
             { id: "extension-id", url: "https://example.test", tab: { id: 1 } },
             { id: "other-id", url: "moz-extension://id/src/popup.html" },

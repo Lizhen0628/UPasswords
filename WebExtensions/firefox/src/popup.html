@@ -192,6 +192,15 @@
         .detail-value input[type="password"] { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .06em; }
         .detail-value textarea { min-height: 96px; white-space: pre-wrap; }
         .detail-value .secondary { min-height: 40px; min-width: 52px; padding: 6px 10px; font-size: 12px; flex-shrink: 0; }
+        .detail-attachments { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+        .detail-attachments h3 { margin: 0; font-size: 13px; }
+        .detail-attachment { display: flex; flex-direction: column; gap: 7px; min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--subtle); }
+        .detail-attachment-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+        .detail-attachment-name { min-width: 0; overflow-wrap: anywhere; font-size: 12px; font-weight: 600; }
+        .detail-attachment-note { margin: 0; color: var(--secondary); font-size: 11px; overflow-wrap: anywhere; }
+        .detail-attachment .secondary { min-height: 30px; padding: 5px 9px; font-size: 11px; }
+        .detail-attachment-preview { max-width: 100%; max-height: 260px; object-fit: contain; object-position: left top; transform-origin: left top; }
+        .detail-attachment-controls { display: flex; gap: 6px; }
         #detailSaveSection { display: flex; flex-direction: column; gap: 12px; padding: 14px; border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); border-radius: var(--radius-lg); background: var(--accent-soft); }
         #detailLegacyNote { margin: 0; }
 
@@ -199,13 +208,77 @@
         #settingsBox { display: flex; flex-direction: column; gap: 16px; }
         body[data-panel="settings"] main { min-height: 260px; }
         .setting-row { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; }
+        .setting-toggle { flex-direction: row; align-items: center; justify-content: space-between; }
+        .setting-toggle input { width: 20px; min-height: 20px; margin: 0; }
         .setting-row .select-shell { display: flex; }
         .setting-row select { padding-right: 30px; }
         #persistenceNote, #sessionMode, #accountInfo, #settingsSyncStatus, #clipboardNote { margin: 0; color: var(--secondary); font-size: 12px; overflow-wrap: anywhere; }
         #settingsSyncStatus { padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid var(--line); background: var(--subtle); }
+        #backupExportBox { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+        #backupExportBox h3 { margin: 0; font-size: 13px; }
+        #backupExportBox p { margin: 0; color: var(--secondary); font-size: 12px; overflow-wrap: anywhere; }
+        #backupExportButton { display: inline-flex; align-items: center; justify-content: center; gap: 7px; width: 100%; }
+        #backupExportButton svg { width: 16px; height: 16px; }
+        .workflow-dialog { width: min(416px, calc(100% - 24px)); max-width: 416px; max-height: 84vh; overflow: auto; margin: auto; padding: 16px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface); box-shadow: var(--shadow); }
+        .workflow-dialog::backdrop { background: rgb(12 18 28 / .48); }
+        .workflow-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+        .workflow-dialog-head h2 { min-width: 0; margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+        .workflow-dialog-head button { flex: 0 0 36px; width: 36px; height: 36px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--secondary); background: var(--elevated); }
+        .workflow-dialog-head svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; }
+        .workflow-dialog .field { margin-block: 12px; }
+        .workflow-dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+        .workflow-dialog-actions > button { flex: 1 1 120px; }
+        .local-copy-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+        .local-copy-summary { min-width: 0; display: flex; flex-direction: column; gap: 3px; overflow-wrap: anywhere; }
+        .local-copy-summary strong { font-size: 13px; }
+        .local-copy-summary span { color: var(--secondary); font-size: 11px; }
+        .local-copy-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+        .local-copy-actions button { min-height: 32px; padding: 5px 8px; font-size: 11px; }
+        #localCopyItemList { display: flex; flex-direction: column; max-height: 220px; overflow: auto; border-top: 1px solid var(--line); }
+        .local-copy-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 9px 4px; border: 0; border-bottom: 1px solid var(--line); color: var(--text); background: transparent; text-align: left; }
+        .local-copy-item span:last-child { color: var(--secondary); font-size: 11px; overflow-wrap: anywhere; }
+        #localCopyDetail { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+        .local-copy-field { display: grid; grid-template-columns: minmax(72px, .35fr) minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+        .local-copy-field-label { min-width: 0; color: var(--secondary); font-size: 11px; overflow-wrap: anywhere; }
+        .local-copy-field-value { min-width: 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+        .local-copy-field button { min-height: 34px; padding: 5px 8px; }
+        .local-copy-notes, .local-copy-attachments { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+        #syncQuarantineBox { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+        #syncQuarantineBox[hidden] { display: none; }
+        #syncQuarantineBox h3 { margin: 0; font-size: 13px; }
+        #syncQuarantineSummary { margin: 0; color: var(--secondary); font-size: 12px; }
+        #syncQuarantineList { display: flex; flex-direction: column; gap: 6px; }
+        .sync-quarantine-item { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
+        .sync-quarantine-item span:last-child { color: var(--secondary); text-align: right; }
         #accountInfo { font-weight: 600; color: var(--text); }
         #contactFeedback a { color: var(--accent-strong); font-size: 12px; font-weight: 500; text-decoration: none; overflow-wrap: anywhere; }
         #contactFeedback a:hover, #contactFeedback a:focus-visible { text-decoration: underline; }
+        #conflictsBox { display: flex; flex-direction: column; gap: 10px; padding-top: 4px; border-top: 1px solid var(--line); }
+        .conflicts-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .conflicts-heading h3 { margin: 0; font-size: 13px; }
+        #conflictsStatus { margin: 0; color: var(--secondary); font-size: 12px; overflow-wrap: anywhere; }
+        #conflictsList { display: flex; flex-direction: column; gap: 10px; }
+        .conflict-group { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--subtle); }
+        .conflict-group-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+        .conflict-group-title { margin: 0; font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+        .conflict-meta { margin: 2px 0 0; color: var(--secondary); font-size: 11px; overflow-wrap: anywhere; }
+        .conflict-candidate { display: flex; flex-direction: column; gap: 7px; padding: 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--elevated); }
+        .conflict-candidate-header { display: flex; align-items: flex-start; gap: 8px; }
+        .conflict-candidate-header input { flex: 0 0 auto; margin-top: 3px; accent-color: var(--accent); }
+        .conflict-candidate-copy { min-width: 0; flex: 1; }
+        .conflict-candidate-title { min-width: 0; flex: 1; font-size: 12px; font-weight: 650; overflow-wrap: anywhere; }
+        .conflict-candidate-source { margin: 2px 0 0; color: var(--secondary); font-size: 11px; overflow-wrap: anywhere; }
+        .conflict-fields { display: flex; flex-direction: column; gap: 4px; padding-left: 24px; }
+        .conflict-field { display: flex; gap: 6px; font-size: 11px; min-width: 0; }
+        .conflict-field-name { flex: 0 0 72px; color: var(--secondary); overflow-wrap: anywhere; }
+        .conflict-field-value { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+        .conflict-actions { display: flex; justify-content: flex-end; gap: 7px; }
+        .conflict-actions .secondary { min-height: 30px; padding: 5px 8px; font-size: 11px; }
+        .conflict-composition { display: flex; flex-direction: column; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+        .conflict-composition > summary { cursor: pointer; font-size: 12px; font-weight: 600; }
+        .conflict-composition-control { display: grid; grid-template-columns: minmax(72px, 28%) minmax(0, 1fr); align-items: center; gap: 8px; font-size: 11px; }
+        .conflict-composition-control select { width: 100%; min-width: 0; }
+        .conflict-warning { margin: 0; color: var(--danger); font-size: 11px; overflow-wrap: anywhere; }
 
         /* 状态条：成功=中性 pill，错误=红色卡片 */
         #status { margin-top: 12px; font-size: 12px; overflow-wrap: anywhere; }
@@ -273,6 +346,7 @@
             <label class="field"><span data-zh="邮箱地址" data-en="Email address"></span><input type="email" id="email" autocomplete="off" placeholder="Email"></label>
             <div class="field"><label for="code" data-zh="邮箱验证码" data-en="Verification code"></label><div class="row"><input type="text" id="code" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="Code"><button class="secondary" id="sendCodeButton" type="button"></button></div></div>
             <button class="primary" id="loginButton" type="button"></button>
+            <button class="secondary" id="openLocalCopiesLoginButton" type="button" data-zh="本地备份与副本" data-en="Local backups and copies"></button>
         </section>
         <section class="panel" id="vaultBox" aria-labelledby="vaultStepTitle" hidden>
             <div class="hero"><div class="hero-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="8" cy="14" r="4"/><path d="m11 11 8-8M15 7l2.5 2.5M18 4l2 2"/></svg></div><div class="panel-heading"><h2 class="step" id="vaultStepTitle"></h2><p class="description" data-zh="连接此浏览器使用的密码库。" data-en="Connect a vault to this browser."></p></div></div>
@@ -339,15 +413,76 @@
         <section id="settingsBox" aria-labelledby="settingsHeading" hidden>
             <div class="panel-heading"><h2 class="step" id="settingsHeading" data-zh="设置" data-en="Settings"></h2><p class="description" data-zh="选择密码库自动锁定前的闲置时间。" data-en="Choose how long to wait before locking your vault after inactivity."></p></div>
             <label class="setting-row" for="lockTimeout"><span data-zh="闲置自动锁定" data-en="Lock after inactivity"></span><span class="select-shell"><select id="lockTimeout"><option value="5" data-zh="5 分钟" data-en="5 minutes">5 minutes</option><option value="15" data-zh="15 分钟" data-en="15 minutes">15 minutes</option><option value="30" data-zh="30 分钟" data-en="30 minutes">30 minutes</option><option value="60" data-zh="60 分钟" data-en="60 minutes">60 minutes</option></select></span></label>
+            <label class="setting-row setting-toggle" for="allowUnknownNetworkAttachments"><span data-zh="网络类型未知时允许后台下载附件" data-en="Allow background downloads when network type is unknown"></span><input id="allowUnknownNetworkAttachments" type="checkbox"></label>
+            <label class="setting-row setting-toggle" for="allowCellularAttachmentDownloads"><span data-zh="允许蜂窝网络后台下载附件" data-en="Allow background downloads on cellular networks"></span><input id="allowCellularAttachmentDownloads" type="checkbox"></label>
+            <p data-zh="省流量模式和离线时始终暂停后台下载；打开密码项或预览时可立即下载。" data-en="Background downloads always pause in data-saving mode and offline. Opening an item or preview can download immediately."></p>
+            <div class="setting-row"><button id="downloadAllAttachmentsButton" type="button" class="secondary" data-zh="下载全部附件" data-en="Download all attachments"></button><button id="endDownloadAllAttachmentsButton" type="button" class="secondary" hidden data-zh="结束下载全部请求" data-en="End download-all request"></button></div>
+            <p id="attachmentDownloadSummary" role="status" aria-live="polite"></p>
             <p id="persistenceNote" data-zh="设置保存在此浏览器中。" data-en="Settings are saved in this browser."></p>
             <p id="sessionMode"></p>
             <p id="accountInfo"></p>
             <p id="settingsSyncStatus" role="status" aria-live="polite"></p>
+            <section id="backupExportBox" aria-labelledby="backupExportHeading">
+                <h3 id="backupExportHeading" data-zh="导出密码库备份" data-en="Export vault backup"></h3>
+                <p data-zh="会校验云端附件版本和未解决候选；已裁决冲突历史暂不可采集，备份将标记为不完整。" data-en="Cloud attachment versions and unresolved candidates are verified. Resolved conflict history is unavailable, so the backup is marked incomplete."></p>
+                <button class="secondary" id="backupExportButton" type="button">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg>
+                    <span data-zh="导出单文件备份…" data-en="Export single-file backup…"></span>
+                </button>
+                <p id="backupExportStatus" role="status" aria-live="polite"></p>
+                <button class="secondary" id="openLocalCopiesSettingsButton" type="button" data-zh="管理本地备份与副本" data-en="Manage local backups and copies"></button>
+            </section>
+            <section id="syncQuarantineBox" aria-labelledby="syncQuarantineHeading" hidden>
+                <h3 id="syncQuarantineHeading" data-zh="已隔离的云端记录" data-en="Isolated cloud records"></h3>
+                <p id="syncQuarantineSummary" role="status" aria-live="polite"></p>
+                <div id="syncQuarantineList"></div>
+                <button class="secondary" id="retrySyncQuarantineButton" type="button" data-zh="重试隔离记录" data-en="Retry isolated records"></button>
+            </section>
             <p id="clipboardNote" class="clip-note" data-zh="复制密码后会由浏览器暂存；关闭弹窗后不保证能自动清除。" data-en="Copied passwords are held by the browser clipboard; automatic clearing after popup close is not guaranteed."></p>
+            <section id="conflictsBox" aria-labelledby="conflictsHeading">
+                <div class="conflicts-heading"><h3 id="conflictsHeading" data-zh="待处理的同步冲突" data-en="Sync conflicts"></h3><button class="secondary" id="refreshConflictsButton" type="button" aria-label="Refresh conflicts" title="Refresh conflicts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.7-4L3 9m0-5v5h5M4 13a8 8 0 0 0 14.7 4L21 15m0 5v-5h-5"/></svg><span class="visually-hidden" data-zh="刷新冲突" data-en="Refresh conflicts"></span></button></div>
+                <p id="conflictsStatus" role="status" aria-live="polite"></p>
+                <div id="conflictsList"></div>
+            </section>
             <div class="setting-row" id="contactFeedback"><span data-zh="联系与反馈" data-en="Contact & Feedback"></span><a href="mailto:contact@upasswords.com">contact@upasswords.com</a></div>
         </section>
         <div id="status" class="muted" role="status" aria-live="polite"></div>
     </main>
+    <dialog id="localBackupManagerDialog" class="workflow-dialog" aria-labelledby="localBackupManagerHeading">
+        <div class="workflow-dialog-head"><h2 id="localBackupManagerHeading" data-zh="本地备份与副本" data-en="Local backups and copies"></h2><button id="closeLocalBackupManagerButton" type="button" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+        <button class="secondary" id="importLocalBackupButton" type="button" data-zh="从备份恢复本地副本…" data-en="Restore a local copy from backup…"></button>
+        <input id="localBackupFileInput" type="file" accept=".upwbackup,application/octet-stream" hidden>
+        <p id="localBackupManagerStatus" role="status" aria-live="polite"></p>
+        <div id="localBackupCopyList" aria-live="polite"></div>
+    </dialog>
+    <dialog id="backupRestoreDialog" class="workflow-dialog" aria-labelledby="backupRestoreHeading">
+        <div class="workflow-dialog-head"><h2 id="backupRestoreHeading" data-zh="恢复独立本地副本" data-en="Restore an independent local copy"></h2><button id="closeBackupRestoreButton" type="button" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+        <label class="field"><span data-zh="备份原主密码" data-en="Backup master password"></span><input id="backupSourcePassword" type="password" autocomplete="current-password"></label>
+        <button class="secondary" id="reviewBackupButton" type="button" data-zh="验证并查看内容" data-en="Verify and review"></button>
+        <section id="backupRestoreReview" hidden>
+            <p id="backupRestoreSummary"></p>
+            <ul id="backupRestoreIssues"></ul>
+            <label class="setting-row setting-toggle" id="allowIncompleteRestoreRow" hidden><span data-zh="确认恢复不完整副本" data-en="Confirm restore of an incomplete copy"></span><input id="allowIncompleteRestore" type="checkbox"></label>
+            <label class="field"><span data-zh="副本名称" data-en="Copy name"></span><input id="localCopyName" type="text" maxlength="128" autocomplete="off"></label>
+            <label class="field"><span data-zh="新副本主密码" data-en="New copy master password"></span><input id="localCopyPassword" type="password" autocomplete="new-password"></label>
+            <label class="field"><span data-zh="确认新主密码" data-en="Confirm new master password"></span><input id="localCopyPasswordConfirm" type="password" autocomplete="new-password"></label>
+            <button class="primary" id="restoreBackupButton" type="button" data-zh="创建本地副本" data-en="Create local copy"></button>
+        </section>
+        <p id="backupRestoreStatus" role="status" aria-live="polite"></p>
+    </dialog>
+    <dialog id="localCopyUnlockDialog" class="workflow-dialog" aria-labelledby="localCopyUnlockHeading">
+        <div class="workflow-dialog-head"><h2 id="localCopyUnlockHeading" data-zh="打开本地副本" data-en="Open local copy"></h2><button id="closeLocalCopyUnlockButton" type="button" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+        <label class="field"><span data-zh="副本主密码" data-en="Copy master password"></span><input id="localCopyUnlockPassword" type="password" autocomplete="current-password"></label>
+        <button class="primary" id="unlockLocalCopyButton" type="button" data-zh="打开" data-en="Open"></button>
+        <p id="localCopyUnlockStatus" role="status" aria-live="polite"></p>
+    </dialog>
+    <dialog id="localCopyViewerDialog" class="workflow-dialog" aria-labelledby="localCopyViewerHeading">
+        <div class="workflow-dialog-head"><div><h2 id="localCopyViewerHeading"></h2><span data-zh="仅本机 · 不参与同步和自动填充" data-en="Local only · excluded from sync and autofill"></span></div><button id="closeLocalCopyViewerButton" type="button" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+        <label class="search"><span class="visually-hidden" data-zh="搜索本地副本" data-en="Search local copy"></span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><path d="m15 15 6 6"/></svg><input id="localCopySearch" type="search" autocomplete="off"></label>
+        <p id="localCopyIntegrityStatus" role="status" aria-live="polite"></p>
+        <div id="localCopyItemList" role="list"></div>
+        <section id="localCopyDetail" aria-live="polite" hidden></section>
+    </dialog>
     <nav id="navigation" aria-label="Main navigation" hidden>
         <button id="vaultTab" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span data-zh="密码库" data-en="Vault">Vault</span></button>
         <button id="generatorTab" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9.5v.01M12 9.5v.01M16 9.5v.01M8 14.5v.01M12 14.5v.01M16 14.5v.01" stroke-width="2.4"/></svg><span data-zh="生成器" data-en="Generator">Generator</span></button>

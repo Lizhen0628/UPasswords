@@ -1,5 +1,6 @@
 import SwiftUI
 import UPasswordsCore
+import UPasswordsPersistence
 import UPasswordsNetworking
 
 /// Detail pane, grouped-card style: centered header (large icon with a
@@ -9,6 +10,8 @@ import UPasswordsNetworking
 /// bar (编辑 / 设置标签 / 用于自动填充 / 收藏 / share).
 struct CardDetailView: View {
     @EnvironmentObject var ctx: AppContext
+    @State private var previewAttachment: Attachment?
+    @State private var pendingAttachmentPreviewID: UUID?
 
     var body: some View {
         Group {
@@ -27,6 +30,26 @@ struct CardDetailView: View {
         }
         .safeAreaInset(edge: .bottom) {
             bottomBar(currentCard)
+        }
+        .sheet(item: $previewAttachment) { attachment in
+            AttachmentImagePreview(attachment: attachment) {
+                saveAttachment(attachment)
+            }
+        }
+        .task(id: currentCard?.id) {
+            guard let cardID = currentCard?.id else { return }
+            ctx.prioritizeAttachmentDownload(cardID: cardID)
+        }
+        .onChange(of: currentCard.flatMap { card in
+            (card.images + card.files).first { $0.id == pendingAttachmentPreviewID }?.hasContent
+        }) { _, hasContent in
+            guard hasContent == true,
+                  let pendingAttachmentPreviewID,
+                  let attachment = currentCard.flatMap({ card in
+                      (card.images + card.files).first { $0.id == pendingAttachmentPreviewID }
+                  }), attachment.data != nil else { return }
+            self.pendingAttachmentPreviewID = nil
+            previewAttachment = attachment
         }
     }
 
@@ -258,20 +281,50 @@ struct CardDetailView: View {
     private func imagesSection(_ card: Card) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionTitle(L10n.db("images_label"))
+            attachmentDownloadNotice(cardID: card.id)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack {
                     ForEach(card.images) { img in
-                        if let ns = NSImage(data: img.data) {
-                            Image(nsImage: ns)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: 96, height: 96)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                                .contextMenu {
-                                    Button(L10n.t("copy_command")) {
-                                        ClipboardModel.shared.copy(img.data.base64EncodedString())
-                                    }
+                        if let data = img.data,
+                           let thumbnail = AttachmentImageDecoder.thumbnail(
+                            data: data,
+                            maxPixelSize: AttachmentImageDecoder.galleryThumbnailPixelSize) {
+                            Button {
+                                previewAttachment = img
+                            } label: {
+                                Image(decorative: thumbnail, scale: 1)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: 96, height: 96)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(img.name)
+                            .help(L10n.t("attachment_preview_button"))
+                            .contextMenu {
+                                attachmentRetentionButton(img, cardID: card.id)
+                                Button(L10n.t("copy_command")) {
+                                    ClipboardModel.shared.copy(data.base64EncodedString())
                                 }
+                            }
+                        } else {
+                            Button {
+                                requestAttachmentPreview(img)
+                            } label: {
+                                VStack(spacing: 6) {
+                                    attachmentStatusSymbol(for: card.id)
+                                        .font(.title2)
+                                    Text(L10n.t("attachment_content_unavailable"))
+                                        .font(.caption)
+                                        .multilineTextAlignment(.center)
+                                }
+                                .foregroundStyle(.secondary)
+                                .frame(width: 120, height: 96)
+                            }
+                            .buttonStyle(.plain)
+                            .help(L10n.t("attachment_download_retry"))
+                            .accessibilityLabel(img.name)
+                            .contextMenu { attachmentRetentionButton(img, cardID: card.id) }
                         }
                     }
                 }
@@ -285,6 +338,7 @@ struct CardDetailView: View {
     private func filesSection(_ card: Card) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionTitle(L10n.db("files_label"))
+            if card.images.isEmpty { attachmentDownloadNotice(cardID: card.id) }
             VStack(spacing: 0) {
                 ForEach(Array(card.files.enumerated()), id: \.element.id) { i, file in
                     fileRow(file)
@@ -301,23 +355,70 @@ struct CardDetailView: View {
             Text(file.name)
                 .lineLimit(1)
             Spacer()
-            Text(ByteCountFormatter.string(fromByteCount: Int64(file.length), countStyle: .file))
-                .foregroundStyle(.secondary).font(.caption)
-            Button(L10n.t("save_button")) { saveAttachment(file) }
+            if let data = file.data {
+                Text(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))
+                    .foregroundStyle(.secondary).font(.caption)
+                if AttachmentImageDecoder.isImage(data) {
+                    Button {
+                        previewAttachment = file
+                    } label: {
+                        Image(systemName: "eye")
+                    }
+                    .buttonStyle(.link)
+                    .help(L10n.t("attachment_preview_button"))
+                    .accessibilityLabel(L10n.t("attachment_preview_button"))
+                }
+                Button(L10n.t("save_button")) { saveAttachment(file) }
+                    .buttonStyle(.link)
+            } else {
+                Button {
+                    if let cardID = ctx.selectedCardId {
+                        ctx.prioritizeAttachmentDownload(cardID: cardID, retryFailures: true)
+                    }
+                } label: {
+                    if let cardID = ctx.selectedCardId {
+                        attachmentStatusSymbol(for: cardID)
+                    }
+                }
                 .buttonStyle(.link)
+                .help(L10n.t("attachment_download_retry"))
+                .accessibilityLabel(L10n.t("attachment_download_retry"))
+            }
         }
         .font(.system(size: 13))
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+        .contextMenu {
+            if let cardID = ctx.selectedCardId { attachmentRetentionButton(file, cardID: cardID) }
+        }
+    }
+
+    private func attachmentRetentionButton(_ attachment: Attachment, cardID: UUID) -> some View {
+        let isKeptOffline = ctx.isAttachmentKeptOffline(cardID: cardID, attachmentID: attachment.id)
+        return Button(L10n.t(isKeptOffline ? "attachment_release_offline" : "attachment_keep_offline")) {
+            ctx.setAttachmentKeptOffline(!isKeptOffline, cardID: cardID, attachmentID: attachment.id)
+        }
+        .disabled(!attachment.hasPersistentID || !attachment.hasPersistentContentVersion)
+    }
+
+    @ViewBuilder
+    private func attachmentDownloadNotice(cardID: UUID) -> some View {
+        if let status = ctx.attachmentDownloadStatusText(cardID: cardID) {
+            Text(status).font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     @MainActor private func saveAttachment(_ file: Attachment) {
+        guard let data = file.data else {
+            AppToast.shared.show(L10n.t("attachment_content_unavailable"))
+            return
+        }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = file.name
         if panel.runModal() == .OK, let url = panel.url {
             do {
-                try file.data.write(to: url)
-                Log.info("ui", "detail save attachment cardId ok name.len=\(url.lastPathComponent.count) bytes=\(file.length)")
+                try data.write(to: url)
+                Log.info("ui", "detail save attachment cardId ok name.len=\(url.lastPathComponent.count) bytes=\(data.count)")
                 AppToast.shared.show(L10n.t("file_saved_message") + " " + url.lastPathComponent)
             } catch {
                 Log.error("ui", "detail save attachment failed: \(error)")
@@ -328,6 +429,27 @@ struct CardDetailView: View {
 
     private func sectionTitle(_ s: String) -> some View {
         Text(s).font(.caption.bold()).foregroundStyle(.secondary)
+    }
+
+    private func requestAttachmentPreview(_ attachment: Attachment) {
+        guard let cardID = ctx.selectedCardId, ctx.relayBound else {
+            AppToast.shared.show(L10n.t("attachment_content_unavailable"))
+            return
+        }
+        pendingAttachmentPreviewID = attachment.id
+        ctx.prioritizeAttachmentDownload(cardID: cardID, retryFailures: true)
+    }
+
+    @ViewBuilder
+    private func attachmentStatusSymbol(for cardID: UUID) -> some View {
+        switch ctx.attachmentDownloadStates[cardID] {
+        case .queued, .downloading:
+            ProgressView().controlSize(.small)
+        case .failed:
+            Image(systemName: "arrow.clockwise").foregroundStyle(.orange)
+        case nil:
+            Image(systemName: "icloud.and.arrow.down")
+        }
     }
 
     private func trashActions(_ card: Card) -> some View {

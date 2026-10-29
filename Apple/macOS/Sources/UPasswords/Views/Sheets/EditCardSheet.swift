@@ -1,6 +1,8 @@
-import SwiftUI
 import AppKit
+import SwiftUI
+
 import UPasswordsCore
+import UPasswordsPersistence
 
 /// A working copy of the card being edited, plus sub-state for the
 /// symbol/color/template pickers.
@@ -1262,12 +1264,23 @@ private struct ImagesTab: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 120))], spacing: 12) {
                     ForEach(card.images) { img in
                         VStack(spacing: 4) {
-                            if let ns = NSImage(data: img.data) {
-                                Image(nsImage: ns)
+                            if let data = img.data,
+                               let thumbnail = AttachmentImageDecoder.thumbnail(
+                                data: data,
+                                maxPixelSize: AttachmentImageDecoder.galleryThumbnailPixelSize) {
+                                Image(decorative: thumbnail, scale: 1)
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
                                     .frame(width: 110, height: 110)
                                     .clipShape(RoundedRectangle(cornerRadius: 8))
+                            } else {
+                                Label(
+                                    L10n.t("attachment_content_unavailable"),
+                                    systemImage: "icloud.slash")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 110, height: 110)
+                                    .multilineTextAlignment(.center)
                             }
                             Button(role: .destructive) {
                                 card.images.removeAll { $0.id == img.id }
@@ -1299,9 +1312,16 @@ private struct ImagesTab: View {
         panel.allowsMultipleSelection = true
         if panel.runModal() == .OK {
             for url in panel.urls {
-                if let data = try? Data(contentsOf: url) {
-                    // 单张图片 150 KB 上限
+                do {
+                    let data = try AttachmentFileReader.readContents(of: url)
                     card.images.append(Attachment(name: url.lastPathComponent, data: data))
+                    Log.info("ui", "image attachment selected bytes=\(data.count)")
+                } catch let error as AttachmentFileReader.ReadError {
+                    Log.error("ui", "image attachment size check failed: \(error)")
+                    AppToast.shared.show(error.localizedDescription)
+                } catch {
+                    Log.error("ui", "image attachment read failed: \(error)")
+                    AppToast.shared.show(L10n.t("ios_import_unreadable_message"))
                 }
             }
         }
@@ -1314,7 +1334,6 @@ private struct ImagesTab: View {
 private struct FilesTab: View {
     @Binding var card: Card
 
-    private let maxFileBytes = 150 * 1024
 
     var body: some View {
         VStack {
@@ -1332,8 +1351,13 @@ private struct FilesTab: View {
                         Image(systemName: "doc")
                         Text(file.name)
                         Spacer()
-                        Text(ByteCountFormatter.string(fromByteCount: Int64(file.length), countStyle: .file))
-                            .font(.caption).foregroundStyle(.secondary)
+                        if let length = file.contentLength {
+                            Text(ByteCountFormatter.string(fromByteCount: Int64(length), countStyle: .file))
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Text(L10n.t("attachment_content_unavailable"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         Button(role: .destructive) {
                             card.files.removeAll { $0.id == file.id }
                         } label: {
@@ -1360,12 +1384,17 @@ private struct FilesTab: View {
         panel.allowsMultipleSelection = true
         if panel.runModal() == .OK {
             for url in panel.urls {
-                guard let data = try? Data(contentsOf: url) else { continue }
-                if data.count > maxFileBytes {
-                    AppToast.shared.show(L10n.t("attach_file_error"))
-                    continue
+                do {
+                    let data = try AttachmentFileReader.readContents(of: url)
+                    card.files.append(Attachment(name: url.lastPathComponent, data: data))
+                    Log.info("ui", "file attachment selected bytes=\(data.count)")
+                } catch let error as AttachmentFileReader.ReadError {
+                    Log.error("ui", "file attachment size check failed: \(error)")
+                    AppToast.shared.show(error.localizedDescription)
+                } catch {
+                    Log.error("ui", "file attachment read failed: \(error)")
+                    AppToast.shared.show(L10n.t("ios_import_unreadable_message"))
                 }
-                card.files.append(Attachment(name: url.lastPathComponent, data: data))
             }
         }
     }

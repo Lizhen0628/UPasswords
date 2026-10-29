@@ -80,7 +80,7 @@ struct AppearanceSettingsView: View {
             }
         }
         .navigationTitle(L10n.t("ios_appearance_section"))
-        .onChange(of: lockPhotoItem) { item in
+        .onChange(of: lockPhotoItem) { _, item in
             loadLockPhoto(item)
         }
     }

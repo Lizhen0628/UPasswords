@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 
 import UPasswordsCore
+import UPasswordsPersistence
 
 // MARK: - 条目详情
 
@@ -16,6 +17,7 @@ struct CardDetailView: View {
     @State private var showPurgeConfirm = false
     @State private var expandedHistory: Set<UUID> = []
     @State private var attachmentSheet: AttachmentSheet? = nil
+    @State private var pendingAttachmentID: UUID? = nil
     @State private var qrPayload: String? = nil
 
     /// 附件交互:图片预览 / 文件经临时文件转系统分享。
@@ -44,6 +46,19 @@ struct CardDetailView: View {
         .background(Brand.bg)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
+        .task(id: cardID) {
+            vault.prioritizeAttachmentDownload(cardID: cardID)
+        }
+        .onChange(of: card.flatMap { item in
+            (item.images + item.files).first { $0.id == pendingAttachmentID }?.hasContent
+        }) { _, hasContent in
+            guard hasContent == true, let pendingAttachmentID,
+                  let attachment = card.flatMap({ item in
+                      (item.images + item.files).first { $0.id == pendingAttachmentID }
+                  }) else { return }
+            self.pendingAttachmentID = nil
+            openAttachment(attachment)
+        }
         .sheet(isPresented: $showEdit) {
             if let card { CardEditView(draft: card, isNew: false) }
         }
@@ -58,7 +73,9 @@ struct CardDetailView: View {
         .sheet(item: $attachmentSheet) { sheet in
             switch sheet {
             case .preview(let att):
-                AttachmentPreviewSheet(attachment: att)
+                AttachmentPreviewSheet(attachment: att) {
+                    shareAttachment(att)
+                }
             case .share(let url):
                 ActivityView(items: [url])
             }
@@ -381,6 +398,9 @@ struct CardDetailView: View {
     private func attachmentsSection(_ card: Card) -> some View {
         BrandSection(title: L10n.t("ios_attachments_section_title")) {
             let all = card.images + card.files
+            if let status = vault.attachmentDownloadStatusText(cardID: card.id) {
+                Text(status).font(.caption).foregroundStyle(Brand.muted).padding(12)
+            }
             ForEach(Array(all.enumerated()), id: \.element.id) { i, att in
                 Button { openAttachment(att) } label: {
                     HStack(spacing: 12) {
@@ -392,9 +412,16 @@ struct CardDetailView: View {
                             .foregroundStyle(Brand.fg)
                             .lineLimit(1)
                         Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(Brand.fg.opacity(0.25))
+                        if vault.isAttachmentKeptOffline(cardID: card.id, attachmentID: att.id) {
+                            Image(systemName: "pin.fill")
+                                .accessibilityLabel(L10n.t("attachment_keep_offline"))
+                        }
+                        if att.hasContent {
+                            Image(systemName: "checkmark.circle")
+                                .accessibilityLabel(L10n.t("attachment_available_locally"))
+                        } else {
+                            attachmentStatus(for: card.id)
+                        }
                     }
                     .padding(.horizontal, 16)
                     .frame(height: 42)
@@ -402,6 +429,13 @@ struct CardDetailView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(att.name)
+                .contextMenu {
+                    let isKeptOffline = vault.isAttachmentKeptOffline(cardID: card.id, attachmentID: att.id)
+                    Button(L10n.t(isKeptOffline ? "attachment_release_offline" : "attachment_keep_offline")) {
+                        vault.setAttachmentKeptOffline(!isKeptOffline, cardID: card.id, attachmentID: att.id)
+                    }
+                    .disabled(!att.hasPersistentID || !att.hasPersistentContentVersion)
+                }
                 if i < all.count - 1 { InsetDivider(leading: 54) }
             }
         }
@@ -409,16 +443,54 @@ struct CardDetailView: View {
 
     /// 图片直接预览;其余附件写临时文件交系统分享。
     private func openAttachment(_ att: Attachment) {
-        if UIImage(data: att.data) != nil {
+        guard let data = att.data else {
+            guard vault.relayBound else {
+                vault.showToast(L10n.t("attachment_content_unavailable"))
+                return
+            }
+            pendingAttachmentID = att.id
+            vault.prioritizeAttachmentDownload(cardID: cardID, retryFailures: true)
+            return
+        }
+        if AttachmentImageDecoder.isImage(data) {
             attachmentSheet = .preview(att)
             return
         }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(att.name)
+        shareAttachment(att)
+    }
+
+    @ViewBuilder
+    private func attachmentStatus(for cardID: UUID) -> some View {
+        switch vault.attachmentDownloadStates[cardID] {
+        case .queued, .downloading:
+            ProgressView()
+                .controlSize(.small)
+                .tint(Brand.accent)
+        case .failed:
+            Image(systemName: "arrow.clockwise")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Brand.yellow)
+        case nil:
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Brand.fg.opacity(0.25))
+        }
+    }
+
+    private func shareAttachment(_ attachment: Attachment) {
+        guard let data = attachment.data else {
+            vault.showToast(L10n.t("attachment_content_unavailable"))
+            return
+        }
+        let name = URL(fileURLWithPath: attachment.name).lastPathComponent
+        let safeName = name.isEmpty ? "attachment" : name
+        let uniqueName = "\(UUID().uuidString)-\(safeName)"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(uniqueName)
         do {
-            try att.data.write(to: url, options: .atomic)
+            try data.write(to: url, options: .atomic)
             attachmentSheet = .share(url)
         } catch {
-            Log.error("app", "ios attachment share write \"\(att.name)\" failed: \(error)")
+            Log.error("app", "ios attachment share write \"\(attachment.name)\" failed: \(error)")
             vault.showToast(L10n.t("ios_import_unreadable_message"))
         }
     }
@@ -548,36 +620,5 @@ struct PasskeyRowView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-    }
-}
-
-// MARK: - 附件图片预览
-
-/// 将选定附件导出为临时预览内容的展示容器。
-struct AttachmentPreviewSheet: View {
-    let attachment: Attachment
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                if let image = UIImage(data: attachment.data) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .padding(8)
-                } else {
-                    EmptyStateView(icon: "photo", title: attachment.name)
-                }
-            }
-            .background(Brand.bg)
-            .navigationTitle(attachment.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.t("ios_done_button")) { dismiss() }
-                }
-            }
-        }
     }
 }

@@ -1,4 +1,20 @@
-import { decryptItemBodyWithKey, importVaultDecryptKey } from "../core/vault-crypto.js";
+import {
+    decryptAttachmentVersion,
+    decryptItemBodyWithKey,
+    envelopeChangedAt,
+    encryptAttachmentVersion,
+    encryptItemBody,
+    importVaultDecryptKey,
+    VaultCryptoError,
+} from "../core/vault-crypto.js";
+import {
+    decryptSyncQuarantinePayload,
+    encryptSyncQuarantinePayload,
+    isValidEncryptedSyncQuarantineItem,
+    isValidSyncQuarantineIdentity,
+} from "../core/sync-quarantine.js";
+import { isValidRelayItemRow } from "../api/relay.js";
+import { MAX_BACKUP_SNAPSHOT_BYTES, sealBackupPayload } from "../core/portable-backup-package.js";
 import type { ExtensionItem } from "../core/types.js";
 import type { VaultSessionRequest, VaultSessionResponse } from "../messaging/protocol.js";
 
@@ -25,6 +41,7 @@ type SessionRecord = {
     vaultKey?: number[];
     passwordVersion?: number;
     snapshotVersion?: number;
+    envelopeB64?: string;
 };
 
 type SessionContext = { token: string; vaultId: string; userId?: string };
@@ -163,6 +180,19 @@ export function createUnlockSession(options: UnlockSessionOptions) {
             && Array.from(value).every(byte => Number.isInteger(byte) && byte >= 0 && byte <= 255);
     }
 
+    function validEnvelopeB64(value: unknown): value is string {
+        if (typeof value !== "string" || value.length > 1_400 || value.length % 4 !== 0
+            || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) return false;
+        try {
+            const binary = atob(value);
+            if (binary.length > 1_024) return false;
+            const envelope = Uint8Array.from(binary, character => character.charCodeAt(0));
+            return envelopeChangedAt(envelope) !== null;
+        } catch {
+            return false;
+        }
+    }
+
     /** Recheck after storage awaits; queued invalidation must take effect before any plaintext response. */
     async function stillCurrent(
         record: SessionRecord,
@@ -249,7 +279,8 @@ export function createUnlockSession(options: UnlockSessionOptions) {
                     || !Array.isArray(request.items)) return locked();
                 if ((request.vaultKey !== undefined && !validKey(request.vaultKey))
                     || (request.passwordVersion !== undefined && !validVersion(request.passwordVersion))
-                    || (request.snapshotVersion !== undefined && !validVersion(request.snapshotVersion))) {
+                    || (request.snapshotVersion !== undefined && !validVersion(request.snapshotVersion))
+                    || (request.envelopeB64 !== undefined && !validEnvelopeB64(request.envelopeB64))) {
                     return locked("invalid_session_commit");
                 }
                 const committed: SessionRecord = {
@@ -259,6 +290,7 @@ export function createUnlockSession(options: UnlockSessionOptions) {
                     ...(request.vaultKey === undefined ? {} : { vaultKey: [...request.vaultKey] }),
                     ...(request.passwordVersion === undefined ? {} : { passwordVersion: request.passwordVersion }),
                     ...(request.snapshotVersion === undefined ? {} : { snapshotVersion: request.snapshotVersion }),
+                    ...(request.envelopeB64 === undefined ? {} : { envelopeB64: request.envelopeB64 }),
                     expiresAt: now() + await idleTimeout(),
                 };
                 await writeRecord(committed);
@@ -269,9 +301,203 @@ export function createUnlockSession(options: UnlockSessionOptions) {
                     expiresAt: committed.expiresAt, persistent, ...versions(committed),
                 };
             }
-            if (request.action === "decrypt" || request.action === "refresh") {
+            if (request.action === "decrypt" || request.action === "decrypt-attachment"
+                || request.action === "encrypt" || request.action === "encrypt-attachment"
+                || request.action === "refresh"
+                || request.action === "seal-quarantine" || request.action === "open-quarantine"
+                || request.action === "seal-backup") {
                 if (record.items === null || record.ticket !== null
                     || request.generation !== record.generation) return locked("session_generation_mismatch");
+                if (request.action === "seal-quarantine" || request.action === "open-quarantine") {
+                    if (!validKey(record.vaultKey)) return locked("session_key_missing");
+                    const rawKey = Uint8Array.from(record.vaultKey);
+                    try {
+                        if (request.action === "seal-quarantine") {
+                            if (!isValidSyncQuarantineIdentity(request.quarantineIdentity)
+                                || !isValidRelayItemRow(request.quarantineRow)) {
+                                return locked("invalid_quarantine_payload");
+                            }
+                            const encryptedPayloadB64 = await encryptSyncQuarantinePayload(
+                                request.quarantineRow, rawKey, request.quarantineIdentity,
+                            );
+                            if (!await stillCurrent(record, epoch)) return locked();
+                            log("quarantine-seal");
+                            return { type: "vault-session", unlocked: true,
+                                generation: record.generation, quarantineCipherB64: encryptedPayloadB64,
+                                ...versions(record) };
+                        }
+                        if (!isValidEncryptedSyncQuarantineItem(request.quarantine)) {
+                            return locked("invalid_quarantine_payload");
+                        }
+                        const quarantineRow = await decryptSyncQuarantinePayload(request.quarantine, rawKey);
+                        if (!await stillCurrent(record, epoch)) return locked();
+                        log("quarantine-open");
+                        return { type: "vault-session", unlocked: true,
+                            generation: record.generation, quarantineRow, ...versions(record) };
+                    } catch (error) {
+                        const code = error instanceof Error ? error.message : "unknown";
+                        if (request.action === "seal-quarantine") {
+                            log("quarantine-seal-failed");
+                            return locked(code === "sync_quarantine_payload_too_large"
+                                ? code : "quarantine_encrypt_failed");
+                        }
+                        log("quarantine-open-failed");
+                        return locked("quarantine_decrypt_failed");
+                    } finally {
+                        rawKey.fill(0);
+                    }
+                }
+                if (request.action === "seal-backup") {
+                    const startedAt = now();
+                    log("backup-seal-start");
+                    const encodedEnvelope = record.envelopeB64;
+                    const metadata = request.backupMetadata;
+                    if (!validKey(record.vaultKey) || typeof request.backupXml !== "string"
+                        || !validEnvelopeB64(encodedEnvelope)
+                        || !metadata || !Number.isSafeInteger(metadata.createdAtMs)
+                        || !Array.isArray(metadata.attachments) || !Array.isArray(metadata.conflicts)
+                        || !Array.isArray(metadata.issues)) {
+                        return locked("invalid_backup_payload");
+                    }
+                    const snapshotBytes = new TextEncoder().encode(request.backupXml);
+                    if (snapshotBytes.length > MAX_BACKUP_SNAPSHOT_BYTES) {
+                        snapshotBytes.fill(0);
+                        return locked("backup_snapshot_too_large");
+                    }
+                    snapshotBytes.fill(0);
+                    let envelope: Uint8Array;
+                    try {
+                        const binary = atob(encodedEnvelope);
+                        envelope = Uint8Array.from(binary, character => character.charCodeAt(0));
+                    } catch {
+                        return locked("invalid_backup_envelope");
+                    }
+                    if (envelopeChangedAt(envelope) === null || envelope.length > 1_024) {
+                        envelope.fill(0);
+                        return locked("invalid_backup_envelope");
+                    }
+                    const rawKey = Uint8Array.from(record.vaultKey);
+                    try {
+                        const sealed = await sealBackupPayload(
+                            request.backupXml,
+                            envelope,
+                            {
+                                createdAt: new Date(metadata.createdAtMs),
+                                ...(metadata.headSequence === undefined ? {} : { headSequence: metadata.headSequence }),
+                                attachments: metadata.attachments,
+                                conflicts: metadata.conflicts,
+                                issues: metadata.issues,
+                            },
+                            rawKey,
+                        );
+                        if (!await stillCurrent(record, epoch)) return locked();
+                        let body = "";
+                        let manifest = "";
+                        for (const byte of sealed.body) body += String.fromCharCode(byte);
+                        for (const byte of sealed.manifest) manifest += String.fromCharCode(byte);
+                        options.log?.("backup-seal", { count: 0, persistent, elapsedMs: now() - startedAt });
+                        return {
+                            type: "vault-session",
+                            unlocked: true,
+                            generation: record.generation,
+                            bodyB64: btoa(body),
+                            backupManifestB64: btoa(manifest),
+                            backupInfo: sealed.info,
+                            ...versions(record),
+                        };
+                    } catch (error) {
+                        const code = error instanceof Error ? error.message : "unknown";
+                        options.log?.("backup-seal-failed", { count: 0, persistent, elapsedMs: now() - startedAt });
+                        return locked(code.startsWith("backup_") ? code : "backup_seal_failed");
+                    } finally {
+                        rawKey.fill(0);
+                        envelope.fill(0);
+                    }
+                }
+                if (request.action === "decrypt-attachment") {
+                    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+                    const validBase64 = (value: unknown): value is string => typeof value === "string"
+                        && value.length > 0 && value.length % 4 === 0
+                        && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value);
+                    const attachmentID = request.attachmentID;
+                    const contentVersion = request.contentVersion;
+                    const cipherB64 = request.cipherB64;
+                    const dekWrappedB64 = request.dekWrappedB64;
+                    if (!validKey(record.vaultKey) || typeof attachmentID !== "string"
+                        || !uuidPattern.test(attachmentID) || typeof contentVersion !== "string"
+                        || !uuidPattern.test(contentVersion) || !validBase64(cipherB64)
+                        || !validBase64(dekWrappedB64) || cipherB64.length > 28_000_000
+                        || dekWrappedB64.length > 1024) {
+                        return locked("invalid_attachment_ciphertext");
+                    }
+                    const rawKey = Uint8Array.from(record.vaultKey);
+                    let cipher: Uint8Array | undefined;
+                    let wrapped: Uint8Array | undefined;
+                    let plaintext: Uint8Array | undefined;
+                    try {
+                        cipher = Uint8Array.from(atob(cipherB64), char => char.charCodeAt(0));
+                        wrapped = Uint8Array.from(atob(dekWrappedB64), char => char.charCodeAt(0));
+                        plaintext = await decryptAttachmentVersion(
+                            cipher, wrapped, rawKey, attachmentID, contentVersion,
+                        );
+                        if (!await stillCurrent(record, epoch)) return locked();
+                        let binary = "";
+                        const chunkSize = 0x8000;
+                        for (let offset = 0; offset < plaintext.length; offset += chunkSize) {
+                            binary += String.fromCharCode(...plaintext.subarray(offset, offset + chunkSize));
+                        }
+                        log("decrypt-attachment", plaintext.length);
+                        return { type: "vault-session", unlocked: true, generation: record.generation,
+                            attachmentB64: btoa(binary), ...versions(record) };
+                    } catch {
+                        log("decrypt-attachment-failed");
+                        return locked("attachment_decrypt_failed");
+                    } finally {
+                        rawKey.fill(0);
+                        cipher?.fill(0);
+                        wrapped?.fill(0);
+                        plaintext?.fill(0);
+                    }
+                }
+                if (request.action === "encrypt-attachment") {
+                    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+                    const validBase64 = (value: unknown): value is string => typeof value === "string"
+                        && value.length > 0 && value.length % 4 === 0
+                        && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value);
+                    if (!validKey(record.vaultKey) || typeof request.attachmentID !== "string"
+                        || !uuidPattern.test(request.attachmentID) || typeof request.contentVersion !== "string"
+                        || !uuidPattern.test(request.contentVersion) || !validBase64(request.plaintextB64)
+                        || request.plaintextB64.length > 28_000_000) {
+                        return locked("invalid_attachment_plaintext");
+                    }
+                    const rawKey = Uint8Array.from(record.vaultKey);
+                    let plaintext: Uint8Array | undefined;
+                    try {
+                        plaintext = Uint8Array.from(atob(request.plaintextB64), char => char.charCodeAt(0));
+                        const encrypted = await encryptAttachmentVersion(
+                            plaintext, rawKey, request.attachmentID, request.contentVersion,
+                        );
+                        if (!await stillCurrent(record, epoch)) return locked();
+                        const toBase64 = (bytes: Uint8Array): string => {
+                            let binary = "";
+                            const chunkSize = 0x8000;
+                            for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+                                binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+                            }
+                            return btoa(binary);
+                        };
+                        log("encrypt-attachment", plaintext.length);
+                        return { type: "vault-session", unlocked: true, generation: record.generation,
+                            cipherB64: toBase64(encrypted.cipher),
+                            dekWrappedB64: toBase64(encrypted.dekWrapped), ...versions(record) };
+                    } catch {
+                        log("encrypt-attachment-failed");
+                        return locked("attachment_encrypt_failed");
+                    } finally {
+                        rawKey.fill(0);
+                        plaintext?.fill(0);
+                    }
+                }
                 if (request.action === "decrypt") {
                     if (!validKey(record.vaultKey)) return locked("session_key_missing");
                     if (!Array.isArray(request.rows)) return locked("invalid_session_rows");
@@ -281,6 +507,7 @@ export function createUnlockSession(options: UnlockSessionOptions) {
                         rawKey.fill(0);
                         if (!await stillCurrent(record, epoch)) return locked();
                         const fragments = [];
+                        const failures: { uuid: string; reason: "authenticationFailed" | "unsupportedFormat" }[] = [];
                         const seen = new Set<string>();
                         for (const row of request.rows) {
                             if (!row || typeof row.uuid !== "string"
@@ -291,7 +518,21 @@ export function createUnlockSession(options: UnlockSessionOptions) {
                                 || !validVersion(row.modifiedMs)) return locked("invalid_session_rows");
                             seen.add(row.uuid.toLowerCase());
                             const body = Uint8Array.from(atob(row.bodyB64), char => char.charCodeAt(0));
-                            const xml = await decryptItemBodyWithKey(body, key, row.uuid);
+                            let xml: string;
+                            try {
+                                xml = await decryptItemBodyWithKey(body, key, row.uuid);
+                            } catch (error) {
+                                if (!(error instanceof VaultCryptoError)
+                                    || !["item_decrypt_failed", "invalid_item_encoding"].includes(error.message)) {
+                                    throw error;
+                                }
+                                failures.push({ uuid: row.uuid,
+                                    reason: error.message === "invalid_item_encoding"
+                                        ? "unsupportedFormat" : "authenticationFailed" });
+                                body.fill(0);
+                                continue;
+                            }
+                            body.fill(0);
                             if (!await stillCurrent(record, epoch)) return locked();
                             fragments.push({ uuid: row.uuid, xml, revision: row.revision,
                                 kind: row.kind, modifiedMs: row.modifiedMs });
@@ -299,10 +540,33 @@ export function createUnlockSession(options: UnlockSessionOptions) {
                         if (!await stillCurrent(record, epoch)) return locked();
                         log("decrypt", fragments.length);
                         return { type: "vault-session", unlocked: true, generation: record.generation,
-                            fragments, ...versions(record) };
+                            fragments, failures, ...versions(record) };
                     } catch {
                         log("decrypt-failed");
                         return locked("item_decrypt_failed");
+                    } finally {
+                        rawKey.fill(0);
+                    }
+                }
+                if (request.action === "encrypt") {
+                    if (!validKey(record.vaultKey) || typeof request.uuid !== "string"
+                        || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(request.uuid)
+                        || typeof request.xml !== "string" || request.xml.length === 0
+                        || request.xml.length > 8 * 1024 * 1024) {
+                        return locked("invalid_session_encryption");
+                    }
+                    const rawKey = Uint8Array.from(record.vaultKey);
+                    try {
+                        const body = await encryptItemBody(request.xml, rawKey, request.uuid);
+                        if (!await stillCurrent(record, epoch)) return locked();
+                        log("encrypt");
+                        let binary = "";
+                        for (const byte of body) binary += String.fromCharCode(byte);
+                        return { type: "vault-session", unlocked: true, generation: record.generation,
+                            bodyB64: btoa(binary), ...versions(record) };
+                    } catch {
+                        log("encrypt-failed");
+                        return locked("item_encrypt_failed");
                     } finally {
                         rawKey.fill(0);
                     }

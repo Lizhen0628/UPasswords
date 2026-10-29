@@ -10,6 +10,10 @@ struct LockScreen: View {
     @EnvironmentObject var vault: Vault
 
     @State private var password = ""
+    @State private var previousPassword = ""
+    @State private var remotePasswordForAdoption = ""
+    @State private var showPreviousPasswordPrompt = false
+    @State private var previousPasswordFailed = false
     @State private var confirm = ""
     @State private var enableFaceID = true
     @State private var shake = false
@@ -142,6 +146,47 @@ struct LockScreen: View {
             case .failure(let error):
                 Log.warn("db", "ios import file picker failed: \(error)")
             }
+        }
+        .alert(L10n.t("sync_previous_password_title"), isPresented: $showPreviousPasswordPrompt) {
+            SecureField(L10n.t("ios_master_password_prompt"), text: $previousPassword)
+            Button(L10n.t("unlock_button")) {
+                let remotePassword = remotePasswordForAdoption
+                let oldPassword = previousPassword
+                Task {
+                    let result = await vault.adoptRemotePassword(
+                        remotePassword, previousPassword: oldPassword)
+                    switch result {
+                    case .success:
+                        remotePasswordForAdoption = ""
+                        previousPassword = ""
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    case .wrongPreviousPassword:
+                        previousPassword = ""
+                        previousPasswordFailed = true
+                        try? await Task.sleep(for: .milliseconds(300))
+                        showPreviousPasswordPrompt = true
+                    case .wrongPassword:
+                        remotePasswordForAdoption = ""
+                        previousPassword = ""
+                        errorText = L10n.t("sync_adopt_failed_hint")
+                    case .previousPasswordRequired:
+                        showPreviousPasswordPrompt = true
+                    case .protectedData:
+                        remotePasswordForAdoption = ""
+                        previousPassword = ""
+                    }
+                }
+            }
+            .disabled(previousPassword.isEmpty)
+            Button(L10n.t("cancel_button"), role: .cancel) {
+                remotePasswordForAdoption = ""
+                previousPassword = ""
+                previousPasswordFailed = false
+            }
+        } message: {
+            Text(previousPasswordFailed
+                 ? L10n.t("sync_previous_password_error")
+                 : L10n.t("sync_previous_password_message"))
         }
     }
 
@@ -540,10 +585,19 @@ struct LockScreen: View {
     private func unlock() {
         Task { @MainActor in
             // 远端兜底:他机改密轮换后本地本体过期,需拉远端收敛(见 Vault 注释)
-            if await vault.unlockWithRemoteFallback(with: password) {
+            switch await vault.unlockWithRemoteFallback(with: password) {
+            case .unlocked:
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
-            } else {
+            case .previousPasswordRequired:
+                remotePasswordForAdoption = password
+                password = ""
+                previousPassword = ""
+                previousPasswordFailed = false
+                showPreviousPasswordPrompt = true
+            case .wrongPassword:
                 fail(L10n.t("ios_wrong_password_error"))
+            case .unavailable:
+                fail(L10n.t("unlock_environment_error"))
             }
         }
     }

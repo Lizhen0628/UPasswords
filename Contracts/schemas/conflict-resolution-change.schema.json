@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://upasswords.local/contracts/conflict-resolution-change.schema.json",
+  "title": "UPasswords conflict resolution change event",
+  "description": "Atomic row-level conflict resolution event. The server carries encrypted item bodies only and never decrypts vault data.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "seq",
+    "uuid",
+    "op",
+    "revision",
+    "conflictId",
+    "baseRevision",
+    "winnerCandidateId",
+    "winnerKind",
+    "winnerOp",
+    "resolutionType"
+  ],
+  "properties": {
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "description": "The original identity whose conflict group was resolved."
+    },
+    "op": {
+      "const": "resolve"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Final source revision, including the source tombstone revision when restored under a new UUID."
+    },
+    "resolvedItemUuid": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Final active identity; omitted when the selected result is deletion."
+    },
+    "resolvedRevision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "conflictId": {
+      "$ref": "#/$defs/id"
+    },
+    "baseRevision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "winnerCandidateId": {
+      "$ref": "#/$defs/id"
+    },
+    "winnerKind": {
+      "type": "integer",
+      "enum": [1, 2, 3]
+    },
+    "winnerOp": {
+      "enum": ["upsert", "delete"]
+    },
+    "resolutionType": {
+      "enum": ["candidate", "composed"],
+      "description": "Whether one retained candidate was selected or the client submitted a newly encrypted field composition. winnerCandidateId is the metadata base for composed results."
+    },
+    "deleted": {
+      "type": "boolean",
+      "description": "True if the resolved target is no longer live when this event is read."
+    },
+    "kind": {
+      "type": "integer",
+      "enum": [1, 2, 3]
+    },
+    "bodyB64": {
+      "type": "string",
+      "contentEncoding": "base64"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "modifiedMs": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "winnerOp": {
+            "const": "delete"
+          }
+        }
+      },
+      "then": {
+        "required": ["deleted"],
+        "properties": {
+          "resolutionType": {
+            "const": "candidate"
+          },
+          "deleted": {
+            "const": true
+          }
+        },
+        "not": {
+          "anyOf": [
+            { "required": ["resolvedItemUuid"] },
+            { "required": ["resolvedRevision"] },
+            { "required": ["kind"] },
+            { "required": ["bodyB64"] },
+            { "required": ["sha256"] },
+            { "required": ["modifiedMs"] }
+          ]
+        }
+      },
+      "else": {
+        "required": ["resolvedItemUuid"],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "deleted": {
+                  "const": true
+                }
+              },
+              "required": ["deleted"]
+            },
+            "else": {
+              "required": ["resolvedRevision", "kind", "bodyB64", "sha256", "modifiedMs"]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    }
+  }
+}

@@ -85,6 +85,9 @@ func (s *Server) Maintain(ctx context.Context) error {
 	}
 	cutoff := now() - s.Config.limit("CHANGE_RETENTION_DAYS")*dayMS
 	e = s.transaction(ctx, func(t *sql.Tx) error {
+		if _, e := t.ExecContext(ctx, "DELETE c FROM item_conflicts c WHERE c.status='resolved' AND c.expires_ms IS NOT NULL AND c.expires_ms<? AND NOT EXISTS(SELECT 1 FROM rekeys r WHERE r.vault_id=c.vault_id AND r.expires_ms>?)", now(), now()); e != nil {
+			return e
+		}
 		if _, e := t.ExecContext(ctx, "UPDATE vaults v JOIN (SELECT vault_id,MAX(seq) AS m FROM item_changes WHERE created_ms<? GROUP BY vault_id) c ON c.vault_id=v.vault_id SET v.changes_floor_seq=GREATEST(v.changes_floor_seq,c.m)", cutoff); e != nil {
 			return e
 		}
@@ -114,7 +117,12 @@ func (s *Server) Maintain(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
+	type expiredAttachmentVersion struct {
+		id, version, key string
+		bytes            int64
+	}
 	for _, v := range vaults {
+		expiredVersions := []expiredAttachmentVersion{}
 		e = s.transaction(ctx, func(t *sql.Tx) error {
 			if _, e := loadVault(ctx, t, v.uid, v.id, true); e != nil {
 				var a *apiError
@@ -123,54 +131,118 @@ func (s *Server) Maintain(ctx context.Context) error {
 				}
 				return e
 			}
-			// Rows are removed first; immutable blobs receive a full-day grace before sweeping.
+			// Missing owners become tombstones; encrypted versions remain recoverable during retention.
+			if _, e := t.ExecContext(ctx, "INSERT INTO attachment_tombstones(vault_id,attach_uuid,card_uuid,deleted_ms) SELECT a.vault_id,a.attach_uuid,a.card_uuid,? FROM attachments a LEFT JOIN vault_items i ON i.vault_id=a.vault_id AND i.item_uuid=a.card_uuid WHERE a.vault_id=? AND i.item_uuid IS NULL AND a.created_ms<? ON DUPLICATE KEY UPDATE deleted_ms=VALUES(deleted_ms)", now(), v.id, now()-7*dayMS); e != nil {
+				return e
+			}
+			if _, e := t.ExecContext(ctx, "UPDATE attachment_versions av JOIN attachments a ON a.vault_id=av.vault_id AND a.attach_uuid=av.attach_uuid AND a.content_version=av.content_version LEFT JOIN vault_items i ON i.vault_id=a.vault_id AND i.item_uuid=a.card_uuid SET av.retired_ms=COALESCE(av.retired_ms,?),av.unreferenced_ms=IF(EXISTS(SELECT 1 FROM attachment_version_conflicts c WHERE c.vault_id=av.vault_id AND c.attach_uuid=av.attach_uuid AND c.content_version=av.content_version),NULL,COALESCE(av.unreferenced_ms,?)) WHERE a.vault_id=? AND i.item_uuid IS NULL AND a.created_ms<?", now(), now(), v.id, now()-7*dayMS); e != nil {
+				return e
+			}
 			if _, e := t.ExecContext(ctx, "DELETE a FROM attachments a LEFT JOIN vault_items i ON i.vault_id=a.vault_id AND i.item_uuid=a.card_uuid WHERE a.vault_id=? AND i.item_uuid IS NULL AND a.created_ms<?", v.id, now()-7*dayMS); e != nil {
 				return e
 			}
-			known := map[string]bool{}
-			rs, e := t.QueryContext(ctx, "SELECT object_key FROM attachments WHERE vault_id=?", v.id)
-			if e != nil {
+			if _, e := t.ExecContext(ctx, "UPDATE attachment_versions av SET av.unreferenced_ms=? WHERE av.vault_id=? AND av.retired_ms IS NOT NULL AND av.unreferenced_ms IS NULL AND NOT EXISTS(SELECT 1 FROM attachments a WHERE a.vault_id=av.vault_id AND a.attach_uuid=av.attach_uuid AND a.content_version=av.content_version) AND NOT EXISTS(SELECT 1 FROM attachment_version_conflicts c WHERE c.vault_id=av.vault_id AND c.attach_uuid=av.attach_uuid AND c.content_version=av.content_version)", now(), v.id); e != nil {
 				return e
 			}
-			for rs.Next() {
-				var key string
-				if e = rs.Scan(&key); e != nil {
-					rs.Close()
+			var activeRekeys int
+			if e = t.QueryRowContext(ctx, "SELECT COUNT(*) FROM rekeys WHERE vault_id=? AND expires_ms>?", v.id, now()).Scan(&activeRekeys); e != nil {
+				return e
+			}
+			if activeRekeys == 0 {
+				if _, e = t.ExecContext(ctx, "UPDATE attachment_versions av SET purge_started_ms=COALESCE(purge_started_ms,?) WHERE av.vault_id=? AND av.unreferenced_ms IS NOT NULL AND av.unreferenced_ms<? AND NOT EXISTS(SELECT 1 FROM attachments a WHERE a.vault_id=av.vault_id AND a.attach_uuid=av.attach_uuid AND a.content_version=av.content_version) AND NOT EXISTS(SELECT 1 FROM attachment_version_conflicts c WHERE c.vault_id=av.vault_id AND c.attach_uuid=av.attach_uuid AND c.content_version=av.content_version)", now(), v.id, now()-30*dayMS); e != nil {
 					return e
 				}
-				known[key] = true
-			}
-			e = rs.Err()
-			rs.Close()
-			if e != nil {
-				return e
-			}
-			cursor := ""
-			for {
-				objects, next, e := s.Objects.List(ctx, attachPrefix(v.id), cursor)
+				versions, e := t.QueryContext(ctx, "SELECT attach_uuid,content_version,object_key,bytes FROM attachment_versions av WHERE av.vault_id=? AND av.purge_started_ms IS NOT NULL AND NOT EXISTS(SELECT 1 FROM attachments a WHERE a.vault_id=av.vault_id AND a.attach_uuid=av.attach_uuid AND a.content_version=av.content_version) AND NOT EXISTS(SELECT 1 FROM attachment_version_conflicts c WHERE c.vault_id=av.vault_id AND c.attach_uuid=av.attach_uuid AND c.content_version=av.content_version) FOR UPDATE", v.id)
 				if e != nil {
 					return e
 				}
-				for _, o := range objects {
-					if !known[o.Key] && o.Modified.UnixMilli() < now()-dayMS {
-						if e = s.Objects.Delete(ctx, o.Key); e != nil {
-							return e
-						}
+				for versions.Next() {
+					var item expiredAttachmentVersion
+					if e = versions.Scan(&item.id, &item.version, &item.key, &item.bytes); e != nil {
+						versions.Close()
+						return e
 					}
+					expiredVersions = append(expiredVersions, item)
 				}
-				if next == "" {
-					break
+				e = versions.Err()
+				versions.Close()
+				if e != nil {
+					return e
 				}
-				if next == cursor {
-					return errors.New("object listing made no progress")
-				}
-				cursor = next
 			}
-			_, e = t.ExecContext(ctx, "UPDATE vaults v SET item_count=(SELECT COUNT(*) FROM vault_sync_items i WHERE i.vault_id=v.vault_id),attach_bytes=(SELECT COALESCE(SUM(bytes),0) FROM attachments a WHERE a.vault_id=v.vault_id) WHERE v.vault_id=?", v.id)
+			_, e = t.ExecContext(ctx, "UPDATE vaults v SET item_count=(SELECT COUNT(*) FROM vault_sync_items i WHERE i.vault_id=v.vault_id),attach_bytes=(SELECT COALESCE(SUM(bytes),0) FROM attachment_versions a WHERE a.vault_id=v.vault_id) WHERE v.vault_id=?", v.id)
 			return e
 		})
 		if e != nil {
 			return e
+		}
+		for _, item := range expiredVersions {
+			if e = s.Objects.Delete(ctx, item.key); e != nil {
+				return e
+			}
+			e = s.transaction(ctx, func(t *sql.Tx) error {
+				if _, e := loadVault(ctx, t, v.uid, v.id, true); e != nil {
+					var a *apiError
+					if errors.As(e, &a) && a.Status == 404 {
+						return nil
+					}
+					return e
+				}
+				result, e := t.ExecContext(ctx, "DELETE av FROM attachment_versions av WHERE av.vault_id=? AND av.attach_uuid=? AND av.content_version=? AND av.purge_started_ms IS NOT NULL AND NOT EXISTS(SELECT 1 FROM attachments a WHERE a.vault_id=av.vault_id AND a.attach_uuid=av.attach_uuid AND a.content_version=av.content_version) AND NOT EXISTS(SELECT 1 FROM attachment_version_conflicts c WHERE c.vault_id=av.vault_id AND c.attach_uuid=av.attach_uuid AND c.content_version=av.content_version)", v.id, item.id, item.version)
+				if e != nil {
+					return e
+				}
+				deleted, e := result.RowsAffected()
+				if e != nil {
+					return e
+				}
+				if deleted > 0 {
+					_, e = t.ExecContext(ctx, "UPDATE vaults SET attach_bytes=GREATEST(0,attach_bytes-?) WHERE vault_id=?", item.bytes, v.id)
+				}
+				return e
+			})
+			if e != nil {
+				return e
+			}
+		}
+		known := map[string]bool{}
+		rs, e := s.DB.QueryContext(ctx, "SELECT object_key FROM attachment_versions WHERE vault_id=?", v.id)
+		if e != nil {
+			return e
+		}
+		for rs.Next() {
+			var key string
+			if e = rs.Scan(&key); e != nil {
+				rs.Close()
+				return e
+			}
+			known[key] = true
+		}
+		e = rs.Err()
+		rs.Close()
+		if e != nil {
+			return e
+		}
+		cursor := ""
+		for {
+			objects, next, e := s.Objects.List(ctx, attachPrefix(v.id), cursor)
+			if e != nil {
+				return e
+			}
+			for _, o := range objects {
+				if !known[o.Key] && o.Modified.UnixMilli() < now()-dayMS {
+					if e = s.Objects.Delete(ctx, o.Key); e != nil {
+						return e
+					}
+				}
+			}
+			if next == "" {
+				break
+			}
+			if next == cursor {
+				return errors.New("object listing made no progress")
+			}
+			cursor = next
 		}
 	}
 	for _, q := range []struct {

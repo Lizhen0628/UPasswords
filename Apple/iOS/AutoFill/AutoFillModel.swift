@@ -32,6 +32,9 @@ final class AutoFillModel: ObservableObject {
     @Published var showUnlockError = false
     @Published private(set) var biometricWorking = false
     @Published private(set) var pickedID: UUID? = nil
+    @Published private(set) var pendingConflictedCardCount = 0
+    @Published private(set) var conflictStateUnavailable = false
+    @Published var conflictBlocked = false
 
     private var context: ASCredentialProviderExtensionContext?
     private var serviceHosts: [String] = []
@@ -44,6 +47,8 @@ final class AutoFillModel: ObservableObject {
     private var vaultDB: PasswordDatabase? = nil
     private var vaultName: String? = nil
     private var vaultKey: SymmetricKey? = nil
+    private var eligibleCards: [Card] = []
+    private var pendingConflictIDs = Set<UUID>()
 
     var biometricAvailable: Bool { PasswordStore.biometricAvailable() }
 
@@ -214,20 +219,59 @@ final class AutoFillModel: ObservableObject {
 
     private func accept(database db: PasswordDatabase) {
         vaultDB = db
-        all = db.cards.filter {
-            guard !$0.trashed && !$0.archived && !$0.template else { return false }
+        eligibleCards = cardsEligibleForCurrentFlow(in: db)
+        guard refreshConflictMarkers() else {
+            all = []
+            conflictStateUnavailable = true
+            stage = .unlocked
+            return
+        }
+        pendingConflictedCardCount = eligibleCards.filter {
+            pendingConflictIDs.contains($0.id)
+        }.count
+        all = eligibleCards.filter { !pendingConflictIDs.contains($0.id) }
+        stage = .unlocked
+    }
+
+    private func cardsEligibleForCurrentFlow(in database: PasswordDatabase) -> [Card] {
+        database.cards.filter { card in
+            guard !card.trashed && !card.archived && !card.template else { return false }
             switch flow {
             case .password:
-                return !$0.login.isEmpty && !$0.password.isEmpty
+                return !card.login.isEmpty && !card.password.isEmpty
             case .oneTimeCode:
-                return $0.fields.contains { $0.type.isOneTimePassword && $0.hasValue }
+                return card.fields.contains { $0.type.isOneTimePassword && $0.hasValue }
             case .passkey:
-                return $0.passkey != nil
+                return card.passkey != nil
             case .passkeyRegistration:
-                return false // 注册流不展示列表
+                return false
             }
         }
-        stage = .unlocked
+    }
+
+    /// Reads the app-shared conflict markers before exposing or submitting credentials.
+    private func refreshConflictMarkers() -> Bool {
+        guard let name = vaultName else { return false }
+        do {
+            let state = try SharedVaultStore.store.loadSyncState(for: name)
+            pendingConflictIDs = Set(state.pendingConflicts.keys)
+            conflictStateUnavailable = false
+            if let vaultDB {
+                eligibleCards = cardsEligibleForCurrentFlow(in: vaultDB)
+                pendingConflictedCardCount = eligibleCards.filter {
+                    pendingConflictIDs.contains($0.id)
+                }.count
+                all = eligibleCards.filter { !pendingConflictIDs.contains($0.id) }
+            }
+            return true
+        } catch {
+            pendingConflictIDs.removeAll()
+            pendingConflictedCardCount = 0
+            conflictStateUnavailable = true
+            all = []
+            Log.error("sync", "autofill conflict-state read failed: \(error)")
+            return false
+        }
     }
 
     /// 合并写:以磁盘最新库为基线应用单点变更后落盘。
@@ -354,6 +398,14 @@ final class AutoFillModel: ObservableObject {
 
     func pick(_ card: Card) {
         guard pickedID == nil else { return }
+        guard refreshConflictMarkers() else {
+            conflictBlocked = true
+            return
+        }
+        guard !pendingConflictIDs.contains(card.id) else {
+            conflictBlocked = true
+            return
+        }
         switch flow {
         case .password:
             pickPassword(card)
@@ -459,9 +511,14 @@ final class AutoFillModel: ObservableObject {
 
     private func pickPassword(_ card: Card) {
         pickedID = card.id
-        Log.info("app", "autofill: picked cardId=\(card.id) (只提交该站点凭据)")
         Task {
             try? await Task.sleep(for: .milliseconds(350))
+            guard refreshConflictMarkers(), !pendingConflictIDs.contains(card.id) else {
+                pickedID = nil
+                conflictBlocked = true
+                return
+            }
+            Log.info("app", "autofill: picked cardId=\(card.id) (只提交该站点凭据)")
             let credential = ASPasswordCredential(user: card.login, password: card.password)
             context?.completeRequest(withSelectedCredential: credential)
         }
@@ -480,6 +537,11 @@ final class AutoFillModel: ObservableObject {
         Log.info("app", "autofill: picked otp cardId=\(card.id)")
         Task {
             try? await Task.sleep(for: .milliseconds(350))
+            guard refreshConflictMarkers(), !pendingConflictIDs.contains(card.id) else {
+                pickedID = nil
+                conflictBlocked = true
+                return
+            }
             context?.completeOneTimeCodeRequest(using: ASOneTimeCodeCredential(code: code),
                                                 completionHandler: nil)
         }

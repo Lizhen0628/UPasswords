@@ -23,6 +23,7 @@ import (
 // Object is metadata for an encrypted blob or public catalog icon.
 type Object struct {
 	Key, ContentType string
+	ETag             string
 	Size             int64
 	Modified         time.Time
 }
@@ -62,7 +63,10 @@ func (s *S3Store) Get(ctx context.Context, key string) (io.ReadCloser, Object, e
 		}
 		return nil, Object{}, e
 	}
-	return v.Body, Object{Key: key, Size: aws.ToInt64(v.ContentLength), ContentType: aws.ToString(v.ContentType), Modified: aws.ToTime(v.LastModified)}, nil
+	return v.Body, Object{
+		Key: key, ETag: aws.ToString(v.ETag), Size: aws.ToInt64(v.ContentLength),
+		ContentType: aws.ToString(v.ContentType), Modified: aws.ToTime(v.LastModified),
+	}, nil
 }
 
 // Delete removes an object key; database references must be coordinated separately.
@@ -83,7 +87,10 @@ func (s *S3Store) List(ctx context.Context, prefix, cursor string) ([]Object, st
 	}
 	out := []Object{}
 	for _, o := range v.Contents {
-		out = append(out, Object{Key: aws.ToString(o.Key), Size: aws.ToInt64(o.Size), Modified: aws.ToTime(o.LastModified)})
+		out = append(out, Object{
+			Key: aws.ToString(o.Key), ETag: aws.ToString(o.ETag),
+			Size: aws.ToInt64(o.Size), Modified: aws.ToTime(o.LastModified),
+		})
 	}
 	return out, aws.ToString(v.NextContinuationToken), nil
 }

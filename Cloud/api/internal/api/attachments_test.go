@@ -3,8 +3,11 @@ package api
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -16,17 +19,21 @@ func TestAttachmentOwnershipAndCommitFailure(t *testing.T) {
 	other, _ := login(t, s, m, "attother-"+randomHex(5)+"@example.com")
 	vid := newVault(t, h, token)
 	id := "32345678-1234-4234-8234-123456789abc"
+	version := "42345678-1234-4234-8234-123456789abc"
 	path := "/v1/vaults/" + vid + "/attachments/" + id
 	upload := randomHex(16)
 	raw := []byte("encrypted-attachment")
-	req := httptest.NewRequest("PUT", path+"?upload="+upload, bytes.NewReader(raw))
+	req := httptest.NewRequest("PUT", path+"?upload="+upload+"&version="+version, bytes.NewReader(raw))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set(syncProtocolHeader, strconv.Itoa(syncProtocolVersion))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != 200 {
 		t.Fatalf("stage %d %s", w.Code, w.Body.String())
 	}
-	b := map[string]any{"uploadId": upload, "sha256": digest(raw), "cardUuid": id, "dekWrapped": b64(bytes.Repeat([]byte{1}, 40))}
+	dek := bytes.Repeat([]byte{1}, 40)
+	b := map[string]any{"uploadId": upload, "sha256": digest(raw), "cardUuid": id,
+		"contentVersion": version, "dekWrapped": b64(dek)}
 	store := s.Objects.(*memoryStore)
 	store.FailPut = true
 	if status, _ := call(t, h, "POST", path+"/commit", token, b); status != 500 {
@@ -40,20 +47,103 @@ func TestAttachmentOwnershipAndCommitFailure(t *testing.T) {
 	if status, out := call(t, h, "POST", path+"/commit", token, b); status != 200 {
 		t.Fatalf("commit %d %v", status, out)
 	}
+	row := incoming(id, 1, 0, "card")
+	row["attachmentRefs"] = []any{map[string]any{
+		"attachmentId": id, "contentVersion": version,
+	}}
+	if status, out := call(t, h, "POST", "/v1/vaults/"+vid+"/items", token,
+		map[string]any{"items": []any{row}}); status != 200 {
+		t.Fatalf("item reference activation %d %v", status, out)
+	}
 	for _, method := range []string{"GET", "DELETE"} {
 		if status, _ := call(t, h, method, path, other, nil); status != 404 {
 			t.Fatalf("cross-user attachment %s %d", method, status)
 		}
 	}
-	req = httptest.NewRequest("GET", path, nil)
+	req = httptest.NewRequest("GET", path+"?version="+version, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set(syncProtocolHeader, strconv.Itoa(syncProtocolVersion))
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != 200 || !bytes.Equal(w.Body.Bytes(), raw) {
+	if w.Code != 200 || !bytes.Equal(w.Body.Bytes(), raw) || w.Header().Get("X-Dek-Wrapped") != b64(dek) || w.Header().Get("X-Content-Version") != version {
 		t.Fatal("attachment did not roundtrip")
 	}
 	if status, _ := call(t, h, "DELETE", path, token, nil); status != 200 {
 		t.Fatal("delete failed")
+	}
+	if status, _ := call(t, h, "GET", path+"?version="+version, token, nil); status != 200 {
+		t.Fatal("deleted attachment version should remain recoverable during retention")
+	}
+}
+
+func TestAttachmentVersionCASRetainsPreviousVersion(t *testing.T) {
+	s, mail := testServer(t)
+	handler := s.Handler()
+	token, _ := login(t, s, mail, "attachversions-"+randomHex(5)+"@example.com")
+	vaultID := newVault(t, handler, token)
+	attachmentID := "32345678-1234-4234-8234-123456789abc"
+	cardID := "52345678-1234-4234-8234-123456789abc"
+	version1 := "42345678-1234-4234-8234-123456789abc"
+	version2 := "62345678-1234-4234-8234-123456789abc"
+	path := "/v1/vaults/" + vaultID + "/attachments/" + attachmentID
+	commit := func(version string, raw []byte) int {
+		t.Helper()
+		uploadID := randomHex(16)
+		put := httptest.NewRequest(http.MethodPut, path+"?upload="+uploadID+"&version="+version, bytes.NewReader(raw))
+		put.Header.Set("Authorization", "Bearer "+token)
+		put.Header.Set(syncProtocolHeader, strconv.Itoa(syncProtocolVersion))
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, put)
+		if response.Code != http.StatusOK {
+			t.Fatalf("stage returned %d: %s", response.Code, response.Body.String())
+		}
+		body := map[string]any{
+			"uploadId": uploadID, "sha256": digest(raw), "cardUuid": cardID,
+			"contentVersion": version,
+			"dekWrapped":     b64(bytes.Repeat([]byte{byte(len(raw))}, 40)),
+		}
+		status, _ := call(t, handler, http.MethodPost, path+"/commit", token, body)
+		return status
+	}
+
+	if status := commit(version1, []byte("cipher-one")); status != http.StatusOK {
+		t.Fatalf("first version commit returned %d", status)
+	}
+	firstRow := incoming(cardID, 1, 0, "card-one")
+	firstRow["attachmentRefs"] = []any{map[string]any{"attachmentId": attachmentID, "contentVersion": version1}}
+	if status, _ := call(t, handler, http.MethodPost, "/v1/vaults/"+vaultID+"/items", token, map[string]any{"items": []any{firstRow}}); status != http.StatusOK {
+		t.Fatalf("first row commit returned %d", status)
+	}
+	if status := commit(version2, []byte("cipher-two")); status != http.StatusOK {
+		t.Fatalf("replacement commit returned %d", status)
+	}
+	secondRow := incoming(cardID, 1, 1, "card-two")
+	secondRow["attachmentRefs"] = []any{map[string]any{"attachmentId": attachmentID, "contentVersion": version2}}
+	if status, _ := call(t, handler, http.MethodPost, "/v1/vaults/"+vaultID+"/items", token, map[string]any{"items": []any{secondRow}}); status != http.StatusOK {
+		t.Fatalf("replacement row commit returned %d", status)
+	}
+	staleRow := incoming(cardID, 1, 1, "stale-card")
+	staleRow["attachmentRefs"] = []any{map[string]any{"attachmentId": attachmentID, "contentVersion": version1}}
+	if status, out := call(t, handler, http.MethodPost, "/v1/vaults/"+vaultID+"/items", token, map[string]any{"items": []any{staleRow}}); status != http.StatusOK || result(out)["status"] != "conflict" {
+		t.Fatalf("stale row base was not rejected: %d %v", status, out)
+	}
+	for _, version := range []string{version1, version2} {
+		request := httptest.NewRequest(http.MethodGet, path+"?version="+version, nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set(syncProtocolHeader, strconv.Itoa(syncProtocolVersion))
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || response.Header().Get("X-Content-Version") != version {
+			t.Fatalf("retained version %s unavailable: %d", version, response.Code)
+		}
+	}
+	var count int
+	if err := s.DB.QueryRow("SELECT COUNT(*) FROM attachment_versions WHERE vault_id=? AND attach_uuid=?", vaultID, attachmentID).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("expected two retained versions, got %d: %v", count, err)
+	}
+	var currentVersion string
+	if err := s.DB.QueryRow("SELECT content_version FROM attachments WHERE vault_id=? AND attach_uuid=?", vaultID, attachmentID).Scan(&currentVersion); err != nil || currentVersion != version2 {
+		t.Fatalf("row CAS did not activate the requested version: %q %v", currentVersion, err)
 	}
 }
 func TestCodeAttemptsReplayAndSessionRevocation(t *testing.T) {
@@ -210,4 +300,206 @@ func TestMaintenanceGraceAndFloor(t *testing.T) {
 	}
 	stream.Close()
 
+}
+
+func TestExpiredAttachmentPurgeIsDurableAndRetryable(t *testing.T) {
+	s, mail := testServer(t)
+	handler := s.Handler()
+	token, _ := login(t, s, mail, "attachment-purge-"+randomHex(5)+"@example.com")
+	vaultID := newVault(t, handler, token)
+	cardID := "72345678-1234-4234-8234-123456789abc"
+	attachmentID := "82345678-1234-4234-8234-123456789abc"
+	contentVersion := "92345678-1234-4234-8234-123456789abc"
+	path := "/v1/vaults/" + vaultID + "/attachments/" + attachmentID
+	uploadID := randomHex(16)
+	ciphertext := []byte("encrypted-attachment")
+	put := httptest.NewRequest(http.MethodPut, path+"?upload="+uploadID+"&version="+contentVersion, bytes.NewReader(ciphertext))
+	put.Header.Set("Authorization", "Bearer "+token)
+	put.Header.Set(syncProtocolHeader, strconv.Itoa(syncProtocolVersion))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, put)
+	if response.Code != http.StatusOK {
+		t.Fatalf("stage returned %d: %s", response.Code, response.Body.String())
+	}
+	dek := bytes.Repeat([]byte{1}, 40)
+	commit := map[string]any{
+		"uploadId": uploadID, "sha256": digest(ciphertext), "cardUuid": cardID,
+		"contentVersion": contentVersion, "dekWrapped": b64(dek),
+	}
+	if status, out := call(t, handler, http.MethodPost, path+"/commit", token, commit); status != http.StatusOK {
+		t.Fatalf("commit returned %d: %v", status, out)
+	}
+	row := incoming(cardID, 1, 0, "attachment-owner")
+	row["attachmentRefs"] = []any{map[string]any{"attachmentId": attachmentID, "contentVersion": contentVersion}}
+	if status, out := call(t, handler, http.MethodPost, "/v1/vaults/"+vaultID+"/items", token, map[string]any{"items": []any{row}}); status != http.StatusOK {
+		t.Fatalf("activate reference returned %d: %v", status, out)
+	}
+	if status, out := call(t, handler, http.MethodDelete, path, token, nil); status != http.StatusOK {
+		t.Fatalf("delete returned %d: %v", status, out)
+	}
+	old := now() - 31*dayMS
+	if _, err := s.DB.Exec("UPDATE attachment_versions SET unreferenced_ms=?,retired_ms=? WHERE vault_id=? AND attach_uuid=? AND content_version=?", old, old, vaultID, attachmentID, contentVersion); err != nil {
+		t.Fatal(err)
+	}
+	objects := s.Objects.(*memoryStore)
+	objects.FailDelete = true
+	if err := s.Maintain(context.Background()); err == nil {
+		t.Fatal("failed object deletion was ignored")
+	}
+	var purgeStarted sql.NullInt64
+	var retainedBytes int64
+	if err := s.DB.QueryRow("SELECT purge_started_ms,bytes FROM attachment_versions WHERE vault_id=? AND attach_uuid=? AND content_version=?", vaultID, attachmentID, contentVersion).Scan(&purgeStarted, &retainedBytes); err != nil {
+		t.Fatal(err)
+	}
+	if !purgeStarted.Valid || retainedBytes != int64(len(ciphertext)) {
+		t.Fatal("failed cleanup did not keep a charged, retryable version")
+	}
+	var quotaBytes int64
+	if err := s.DB.QueryRow("SELECT attach_bytes FROM vaults WHERE vault_id=?", vaultID).Scan(&quotaBytes); err != nil || quotaBytes != retainedBytes {
+		t.Fatalf("failed cleanup changed quota: %d %v", quotaBytes, err)
+	}
+	if status, _ := call(t, handler, http.MethodGet, path+"?version="+contentVersion, token, nil); status != http.StatusNotFound {
+		t.Fatal("purge-pending content remained downloadable")
+	}
+	restore := incoming(cardID, 1, 1, "attachment-owner")
+	restore["attachmentRefs"] = []any{map[string]any{
+		"attachmentId": attachmentID, "contentVersion": contentVersion, "restoreDeleted": true,
+	}}
+	if status, _ := call(t, handler, http.MethodPost, "/v1/vaults/"+vaultID+"/items", token,
+		map[string]any{"items": []any{restore}}); status != http.StatusConflict {
+		t.Fatal("purge-pending content was restored")
+	}
+	if status, _ := call(t, handler, http.MethodPost, "/v1/vaults/"+vaultID+"/rekey/begin", token,
+		map[string]any{"envelope": fakeEnvelope(), "itemCount": int64(1), "dekCount": int64(1)}); status != http.StatusConflict {
+		t.Fatal("rekey began while attachment cleanup was pending")
+	}
+	objects.FailDelete = false
+	if _, err := s.DB.Exec("CREATE TRIGGER fail_attachment_version_purge BEFORE DELETE ON attachment_versions FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='test cleanup failure'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Maintain(context.Background()); err == nil {
+		t.Fatal("failed metadata deletion was ignored")
+	}
+	if err := s.DB.QueryRow("SELECT attach_bytes FROM vaults WHERE vault_id=?", vaultID).Scan(&quotaBytes); err != nil || quotaBytes != retainedBytes {
+		t.Fatalf("SQL cleanup failure changed quota: %d %v", quotaBytes, err)
+	}
+	if _, _, err := objects.Get(context.Background(), attachPrefix(vaultID)+attachmentID+"/"+contentVersion+"/"+digest(ciphertext)); err == nil {
+		t.Fatal("object was not deleted before the metadata failure")
+	}
+	if _, err := s.DB.Exec("DROP TRIGGER fail_attachment_version_purge"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Maintain(context.Background()); err != nil {
+		t.Fatalf("retry cleanup failed: %v", err)
+	}
+	var versionCount int
+	if err := s.DB.QueryRow("SELECT COUNT(*) FROM attachment_versions WHERE vault_id=? AND attach_uuid=?", vaultID, attachmentID).Scan(&versionCount); err != nil || versionCount != 0 {
+		t.Fatalf("purged version count %d: %v", versionCount, err)
+	}
+	if err := s.DB.QueryRow("SELECT attach_bytes FROM vaults WHERE vault_id=?", vaultID).Scan(&quotaBytes); err != nil || quotaBytes != 0 {
+		t.Fatalf("purge quota %d: %v", quotaBytes, err)
+	}
+}
+
+func TestAttachmentReferenceRestoreAndRowCASRollback(t *testing.T) {
+	s, mail := testServer(t)
+	handler := s.Handler()
+	token, _ := login(t, s, mail, "attach-restore-"+randomHex(5)+"@example.com")
+	vaultID := newVault(t, handler, token)
+	attachmentID := "32345678-1234-4234-8234-123456789abc"
+	cardID := "52345678-1234-4234-8234-123456789abc"
+	contentVersion := "42345678-1234-4234-8234-123456789abc"
+	attachmentPath := "/v1/vaults/" + vaultID + "/attachments/" + attachmentID
+	uploadID := randomHex(16)
+	ciphertext := []byte("encrypted-attachment")
+	put := httptest.NewRequest(http.MethodPut,
+		attachmentPath+"?upload="+uploadID+"&version="+contentVersion, bytes.NewReader(ciphertext))
+	put.Header.Set("Authorization", "Bearer "+token)
+	put.Header.Set(syncProtocolHeader, strconv.Itoa(syncProtocolVersion))
+	putResponse := httptest.NewRecorder()
+	handler.ServeHTTP(putResponse, put)
+	if putResponse.Code != http.StatusOK {
+		t.Fatalf("stage returned %d: %s", putResponse.Code, putResponse.Body.String())
+	}
+	commit := map[string]any{
+		"uploadId": uploadID, "sha256": digest(ciphertext), "cardUuid": cardID,
+		"contentVersion": contentVersion, "dekWrapped": b64(bytes.Repeat([]byte{1}, 40)),
+	}
+	if status, out := call(t, handler, http.MethodPost, attachmentPath+"/commit", token, commit); status != http.StatusOK {
+		t.Fatalf("commit returned %d: %v", status, out)
+	}
+	initialRow := incoming(cardID, 1, 0, "card-before-delete")
+	initialRow["attachmentRefs"] = []any{map[string]any{
+		"attachmentId": attachmentID, "contentVersion": contentVersion,
+	}}
+	itemsPath := "/v1/vaults/" + vaultID + "/items"
+	if status, out := call(t, handler, http.MethodPost, itemsPath, token,
+		map[string]any{"items": []any{initialRow}}); status != http.StatusOK {
+		t.Fatalf("initial row commit returned %d: %v", status, out)
+	}
+	if status, out := call(t, handler, http.MethodDelete, attachmentPath, token, nil); status != http.StatusOK {
+		t.Fatalf("attachment delete returned %d: %v", status, out)
+	}
+	restoredRow := incoming(cardID, 1, 1, "card-restored")
+	restoredRow["attachmentRefs"] = []any{map[string]any{
+		"attachmentId": attachmentID, "contentVersion": contentVersion, "restoreDeleted": true,
+	}}
+	if status, out := call(t, handler, http.MethodPost, itemsPath, token,
+		map[string]any{"items": []any{restoredRow}}); status != http.StatusOK || result(out)["status"] != "ok" {
+		t.Fatalf("deleted attachment did not restore: %d %v", status, out)
+	}
+	var activeCount, tombstoneCount int
+	var retired, unreferenced sql.NullInt64
+	if err := s.DB.QueryRow("SELECT COUNT(*) FROM attachments WHERE vault_id=? AND attach_uuid=? AND content_version=?",
+		vaultID, attachmentID, contentVersion).Scan(&activeCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.QueryRow("SELECT COUNT(*) FROM attachment_tombstones WHERE vault_id=? AND attach_uuid=?",
+		vaultID, attachmentID).Scan(&tombstoneCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.QueryRow("SELECT retired_ms,unreferenced_ms FROM attachment_versions WHERE vault_id=? AND attach_uuid=? AND content_version=?",
+		vaultID, attachmentID, contentVersion).Scan(&retired, &unreferenced); err != nil {
+		t.Fatal(err)
+	}
+	if activeCount != 1 || tombstoneCount != 0 || retired.Valid || unreferenced.Valid {
+		t.Fatal("attachment restore did not atomically reactivate its retained version")
+	}
+	if _, err := s.DB.Exec("CREATE TRIGGER fail_attachment_reference_change BEFORE INSERT ON item_changes FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='test item change failure'"); err != nil {
+		t.Fatal(err)
+	}
+	removalRow := incoming(cardID, 1, 2, "card-reference-removal")
+	removalRow["attachmentRefs"] = []any{}
+	failureStatus, _ := call(t, handler, http.MethodPost, itemsPath, token,
+		map[string]any{"items": []any{removalRow}})
+	if _, err := s.DB.Exec("DROP TRIGGER fail_attachment_reference_change"); err != nil {
+		t.Fatal(err)
+	}
+	if failureStatus != http.StatusInternalServerError {
+		t.Fatalf("injected change-event failure returned %d", failureStatus)
+	}
+	var revision int64
+	var body []byte
+	if err := s.DB.QueryRow("SELECT revision,body FROM vault_sync_items WHERE vault_id=? AND item_uuid=?",
+		vaultID, cardID).Scan(&revision, &body); err != nil {
+		t.Fatal(err)
+	}
+	if revision != 2 || string(body) != "card-restored" {
+		t.Fatal("failed reference change partially updated the card row")
+	}
+	if err := s.DB.QueryRow("SELECT COUNT(*) FROM attachments WHERE vault_id=? AND attach_uuid=? AND content_version=?",
+		vaultID, attachmentID, contentVersion).Scan(&activeCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.QueryRow("SELECT COUNT(*) FROM attachment_tombstones WHERE vault_id=? AND attach_uuid=?",
+		vaultID, attachmentID).Scan(&tombstoneCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.QueryRow("SELECT retired_ms,unreferenced_ms FROM attachment_versions WHERE vault_id=? AND attach_uuid=? AND content_version=?",
+		vaultID, attachmentID, contentVersion).Scan(&retired, &unreferenced); err != nil {
+		t.Fatal(err)
+	}
+	if activeCount != 1 || tombstoneCount != 0 || retired.Valid || unreferenced.Valid {
+		t.Fatal("failed reference change partially retired or removed the attachment")
+	}
 }

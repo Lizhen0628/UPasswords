@@ -10,12 +10,24 @@ const fragment = (xml, extra = {}) => ({ uuid, xml, kind: 1, revision: 3, modifi
 const rejected = value => assert.throws(() => projectVaultFragment(value), VaultCryptoError);
 
 test("cached projection preserves source revision and decodes the card fields", () => {
-    const xml = `<card id="${uuid.toUpperCase()}" title="Work"><field name="User" type="login">Alice &amp; Bob</field><field type="website">https://example.com</field></card>`;
+    const fieldId = "87654321-abcd-4321-abcd-123456789abc";
+    const xml = `<card id="${uuid.toUpperCase()}" title="Work"><field id="${fieldId}" name="User" type="login">Alice &amp; Bob</field><field type="website">https://example.com</field></card>`;
     const item = projectVaultFragment(fragment(xml));
     assert.equal(item.title, "Work");
     assert.equal(item.fields[0].value, "Alice & Bob");
+    assert.equal(item.fields[0].id, fieldId);
+    assert.equal(item.fields[1].id, undefined, "legacy fields stay unmatched rather than receiving a guessed ID");
     assert.equal(item.host, "https://example.com");
     assert.deepEqual(item.source, { xml, revision: 3 });
+});
+
+test("cached projection rejects malformed and duplicate persistent field IDs", () => {
+    for (const fields of [
+        `<field id="bad" name="A">a</field>`,
+        `<field id="${uuid}" name="A">a</field><field id="${uuid.toUpperCase()}" name="B">b</field>`,
+    ]) {
+        rejected(fragment(`<card id="${uuid}">${fields}</card>`));
+    }
 });
 
 test("cached labels and inactive cards remain verified but are not fill candidates", () => {

@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import UPasswordsCore
 
@@ -15,6 +16,29 @@ final class CipherTests: XCTestCase {
 // MARK: - v2 信封加密
 
 final class CipherV2Tests: XCTestCase {
+
+    func testBrowserEncryptedSnapshotMatchesNativeContainerAndXML() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let vectorURL = repositoryRoot
+            .appendingPathComponent("Contracts/test-vectors/browser-encrypted-snapshot.json")
+        let vectorData = try Data(contentsOf: vectorURL)
+        let vector = try XCTUnwrap(try JSONSerialization.jsonObject(with: vectorData) as? [String: String])
+        let vaultKeyData = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(vector["vaultKey"])))
+        let body = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(vector["body"])))
+        let expectedXML = try XCTUnwrap(vector["xml"])
+        let plaintext = try DatabaseCipher.decryptBody(
+            body,
+            vaultKey: SymmetricKey(data: vaultKeyData))
+
+        XCTAssertEqual(String(data: plaintext, encoding: .utf8), expectedXML)
+        let database = try PasswordDatabase.parse(plaintext)
+        XCTAssertEqual(database.cards.first?.title, "Browser copy")
+    }
 
     /// 本体:库密钥加解密往返;错误库密钥解不开。
     func testBodyRoundTrip() throws {

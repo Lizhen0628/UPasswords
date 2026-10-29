@@ -124,6 +124,122 @@ test("delta deduplicates revisions, tracks deletes and no-op leaves version unch
     cache.close();
 });
 
+test("an unreadable changed row is quarantined while other rows and the cursor commit", async () => {
+    const cache = await makeCache();
+    const testScope = freshScope();
+    const epoch = await cache.getEpoch(testScope);
+    await cache.commit({
+        scope: testScope, envelope: "env1", passwordVersion: 1, cursor: 1, accountEpoch: epoch,
+        rows: [row("a", 1), row("b", 1)],
+    }, null);
+    routeFetch(async (url) => {
+        if (url.pathname.endsWith("/v1")) return { ...meta(3), envelope: "env1" };
+        if (url.pathname.endsWith("/seq")) return { headSeq: 3, passwordVersion: 1 };
+        if (url.pathname.endsWith("/changes")) return {
+            headSeq: 3,
+            changes: [
+                { seq: 2, uuid: UUID_A, op: "upsert", revision: 2, bodyB64: btoa("broken-a"), kind: 1, modifiedMs: 2 },
+                { seq: 3, uuid: UUID_B, op: "upsert", revision: 2, bodyB64: btoa("cipher-2"), kind: 1, modifiedMs: 2 },
+            ],
+        };
+        throw new Error(url.pathname);
+    });
+    const sealed = [];
+    const result = await synchronizeVault({
+        token: "t",
+        scope: testScope,
+        cache,
+        validate,
+        verifyRows: async rows => rows.filter(value => value.uuid === UUID_A)
+            .map(value => ({ uuid: value.uuid, reason: "authenticationFailed" })),
+        sealQuarantine: async (quarantineIdentity, quarantinedRow) => {
+            sealed.push({ quarantineIdentity, quarantinedRow });
+            return btoa("encrypted-quarantine-payload-with-authentication-tag");
+        },
+    });
+
+    assert.equal(result.snapshot.cursor, 3);
+    assert.deepEqual(result.snapshot.rows.map(value => [value.uuid, value.revision]), [
+        [UUID_A, 1],
+        [UUID_B, 2],
+    ]);
+    assert.deepEqual(result.changedRows.map(value => value.uuid), [UUID_B]);
+    assert.equal(result.quarantinedCount, 1);
+    assert.equal(result.snapshot.quarantinedItems[0].id, "change:2");
+    assert.equal(result.snapshot.quarantinedItems[0].uuid, UUID_A);
+    assert.equal(sealed.length, 1);
+    assert.equal(sealed[0].quarantinedRow.revision, 2);
+    cache.close();
+});
+
+test("quarantine encryption failure leaves the old snapshot and cursor untouched", async () => {
+    const cache = await makeCache();
+    const testScope = freshScope();
+    const epoch = await cache.getEpoch(testScope);
+    const original = await cache.commit({
+        scope: testScope, envelope: "env1", passwordVersion: 1, cursor: 1, accountEpoch: epoch,
+        rows: [row("a", 1)],
+    }, null);
+    routeFetch(async (url) => {
+        if (url.pathname.endsWith("/v1")) return { ...meta(2), envelope: "env1" };
+        if (url.pathname.endsWith("/seq")) return { headSeq: 2, passwordVersion: 1 };
+        if (url.pathname.endsWith("/changes")) return {
+            headSeq: 2,
+            changes: [{
+                seq: 2, uuid: UUID_A, op: "upsert", revision: 2,
+                bodyB64: btoa("broken-a"), kind: 1, modifiedMs: 2,
+            }],
+        };
+        throw new Error(url.pathname);
+    });
+    await assert.rejects(() => synchronizeVault({
+        token: "t",
+        scope: testScope,
+        cache,
+        validate,
+        verifyRows: async rows => rows.map(value => ({ uuid: value.uuid, reason: "authenticationFailed" })),
+        sealQuarantine: async () => { throw new Error("quarantine_encrypt_failed"); },
+    }), /quarantine_encrypt_failed/);
+
+    const retained = await cache.read(testScope);
+    assert.equal(retained.version, original.version);
+    assert.equal(retained.cursor, 1);
+    assert.deepEqual(retained.rows, original.rows);
+    assert.deepEqual(retained.quarantinedItems, []);
+    cache.close();
+});
+
+test("resolution event atomically moves a restored item to its new identity", async () => {
+    const cache = await makeCache();
+    const testScope = freshScope();
+    const epoch = await cache.getEpoch(testScope);
+    await cache.commit({
+        scope: testScope, envelope: "env1", passwordVersion: 1, cursor: 4, accountEpoch: epoch,
+        rows: [row("old", 2)],
+    }, null);
+    routeFetch(async (url) => {
+        if (url.pathname.endsWith("/seq")) return { headSeq: 5, passwordVersion: 1 };
+        if (url.pathname.endsWith("/changes")) return {
+            headSeq: 5,
+            changes: [{
+                seq: 5, uuid: UUID_OLD, op: "resolve", revision: 3,
+                conflictId: "a".repeat(32), baseRevision: 1,
+                winnerCandidateId: "b".repeat(32), winnerKind: 1, winnerOp: "upsert",
+                resolutionType: "candidate", resolvedItemUuid: UUID_NEW,
+                resolvedRevision: 1, kind: 1, bodyB64: btoa("restored"),
+                sha256: "c".repeat(64), modifiedMs: 5,
+            }],
+        };
+        throw new Error(url.pathname);
+    });
+    const result = await synchronizeVault({ token: "t", scope: testScope, cache, validate, verifyRows: verify() });
+    assert.deepEqual(result.deletedIds, [UUID_OLD]);
+    assert.deepEqual(result.changedRows.map((item) => item.uuid), [UUID_NEW]);
+    assert.deepEqual(result.snapshot.rows.map((item) => item.uuid), [UUID_NEW]);
+    assert.equal(result.snapshot.cursor, 5);
+    cache.close();
+});
+
 test("410 causes staged rebuild; failed verification keeps old cache intact", async () => {
     const cache = await makeCache();
     const testScope = freshScope();

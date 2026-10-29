@@ -6,6 +6,38 @@ import UPasswordsPersistence
 /// 切换密码库:先验证目标库解锁密码,成功才切换。
 extension AppContext {
 
+    /// Renames the legacy files and the native business store as one session-level operation.
+    ///
+    /// - Parameters:
+    ///   - oldName: Existing local database name.
+    ///   - newName: New local database name.
+    /// - Throws: Validation, file, or native-store errors.
+    func renameDatabase(from oldName: String, to newName: String) throws {
+        guard oldName != newName else { return }
+        var nativeRenamed = false
+        if let nativeStore {
+            guard try nativeStore.containsVault(name: newName) == false else {
+                throw DatabaseStore.StoreError(L10n.t("database_already_exists_error"))
+            }
+            if try nativeStore.containsVault(name: oldName) {
+                try nativeStore.renameVault(from: oldName, to: newName)
+                nativeRenamed = true
+            }
+        }
+        do {
+            try store.rename(oldName, to: newName)
+        } catch {
+            if nativeRenamed {
+                do {
+                    try nativeStore?.renameVault(from: newName, to: oldName)
+                } catch {
+                    Log.error("db", "native rename rollback failed: \(error)")
+                }
+            }
+            throw error
+        }
+    }
+
     /// 弹窗要求输入目标库的解锁密码,验证通过后直接切换并解锁;
     /// 取消或失败则留在当前会话(密码错误可原地重试)。
     /// 供「管理密码库」弹窗与菜单栏「切换密码库」共用。
@@ -44,6 +76,39 @@ extension AppContext {
 }
 
 extension AppContext {
+    /// 请求旧主密码以验证并保护本机副本，再接管已用新密码加密的云端库。
+    func promptPreviousPasswordForRekey(newPassword: String) async {
+        let alert = NSAlert()
+        alert.messageText = L10n.t("sync_previous_password_title")
+        alert.informativeText = L10n.t("sync_previous_password_message")
+        alert.addButton(withTitle: L10n.t("unlock_button"))
+        alert.addButton(withTitle: L10n.t("cancel_button"))
+        let input = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        alert.accessoryView = input
+        alert.window.initialFirstResponder = input
+        NSApp.activate(ignoringOtherApps: true)
+        while alert.runModal() == .alertFirstButtonReturn {
+            guard !input.stringValue.isEmpty else {
+                alert.informativeText = L10n.t("sync_previous_password_error")
+                continue
+            }
+            switch await adoptRemotePassword(newPassword, previousPassword: input.stringValue) {
+            case .success:
+                AppToast.shared.show(L10n.t("last_sync_completed_prompt"))
+                return
+            case .wrongPreviousPassword:
+                alert.informativeText = L10n.t("sync_previous_password_error")
+                input.stringValue = ""
+            case .wrongPassword:
+                AppToast.shared.show(L10n.t("sync_adopt_failed_hint"))
+                return
+            case .previousPasswordRequired, .protectedData:
+                return
+            }
+        }
+        Log.info("sync", "previous password prompt cancelled")
+    }
+
     /// 远端被「其他设备改后的新密码」加密时的接管弹窗:输入新密码 →
     /// 合并+换密+重传。
     /// 若密码反复不对,多半是局面反转(本机才是改密方,云端还是旧密码),
@@ -73,10 +138,9 @@ extension AppContext {
         let pw = input.stringValue
         Task {
             let result = await adoptRemotePassword(pw)
-            switch result {
-            case .success:
+            if result == .success {
                 AppToast.shared.show(L10n.t("last_sync_completed_prompt"))
-            case .wrongPassword:
+            } else if result == .wrongPassword {
                 AppToast.shared.show(L10n.t("sync_adopt_failed_hint"))
             }
         }

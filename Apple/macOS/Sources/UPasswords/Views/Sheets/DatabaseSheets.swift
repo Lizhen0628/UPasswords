@@ -182,6 +182,13 @@ struct ManageDatabasesSheet: View {
                                     .font(.caption).foregroundStyle(.green)
                             }
                             Menu {
+                                if ctx.phase == .unlocked, db.name != ctx.databaseName {
+                                    Button(L10n.t("database_card_import_title")) {
+                                        ctx.activeSheet = .importCards(
+                                            sourceName: db.name,
+                                            destinationName: ctx.databaseName)
+                                    }
+                                }
                                 if db.isMain == false {
                                     Button(L10n.t("main_database_name")) {
                                         ctx.store.mainDatabaseName = db.name
@@ -251,7 +258,7 @@ struct ManageDatabasesSheet: View {
         alert.addButton(withTitle: L10n.t("cancel_button"))
         if alert.runModal() == .alertFirstButtonReturn, !input.stringValue.isEmpty {
             do {
-                try ctx.store.rename(db.name, to: input.stringValue)
+                try ctx.renameDatabase(from: db.name, to: input.stringValue)
                 if ctx.databaseName == db.name { ctx.databaseName = input.stringValue }
                 // 云端身份随改名迁移:网盘三件套改名 + 注册表 PATCH + 绑定换键
                 let oldName = db.name

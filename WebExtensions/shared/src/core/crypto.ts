@@ -12,6 +12,14 @@ export async function sha256Hex(text: string): Promise<string> {
         .join("");
 }
 
+/** SHA-256 of exact bytes, hex-encoded without converting binary data to text. */
+export async function sha256BytesHex(bytes: Uint8Array): Promise<string> {
+    const digest = await crypto.subtle.digest("SHA-256", bytes as unknown as ArrayBuffer);
+    return Array.from(new Uint8Array(digest))
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("");
+}
+
 /** Stable fingerprint of an item (id + title + host), for change detection. */
 export async function itemFingerprint(item: { id: number; title: string; host: string }): Promise<string> {
     return sha256Hex(`${item.id}:${item.title}:${item.host}`);

@@ -5,9 +5,16 @@ import {
     isValidRelayItemRow,
     listVaultItems,
     RelayApiError,
+    type RelayChange,
     type RelayItemRow,
 } from "../api/relay.js";
 import type { CacheScope, EncryptedCache, EncryptedSnapshot } from "../storage/encrypted-cache.js";
+import {
+    parseEncryptedSyncQuarantineItems,
+    type EncryptedSyncQuarantineItem,
+    type SyncQuarantineIdentity,
+    type SyncQuarantineReason,
+} from "../core/sync-quarantine.js";
 
 /** 同步验证、会话或分页边界失败的机器可识别错误。 */
 export class VaultSyncError extends Error {
@@ -25,8 +32,15 @@ export interface SynchronizeVaultOptions {
     keyVersion?: number;
     /** 每个异步边界检查账户、库和解锁代次；失效时必须抛错。 */
     validate: () => Promise<void>;
-    /** 缓存提交前认证解密并验证行身份；失败时保留旧快照。 */
-    verifyRows: (rows: RelayItemRow[]) => Promise<void>;
+    /** 缓存提交前逐行解密并验证；可将认证/格式失败作为隔离候选返回。 */
+    verifyRows: (rows: RelayItemRow[]) => Promise<RowVerificationFailure[] | void>;
+    /** 使用后台解锁会话的 VEK 加密隔离载荷，不把密钥传给弹窗。 */
+    sealQuarantine?: (identity: SyncQuarantineIdentity, row: RelayItemRow) => Promise<string>;
+}
+
+export interface RowVerificationFailure {
+    uuid: string;
+    reason: SyncQuarantineReason;
 }
 
 interface SyncResult {
@@ -35,6 +49,12 @@ interface SyncResult {
     deletedIds: string[];
     rebuilt: boolean;
     changedCount: number;
+    quarantinedCount: number;
+}
+
+interface RowProvenance {
+    source: "change" | "snapshot";
+    sequence: number | null;
 }
 
 const MAX_SNAPSHOT_PAGES = 200;
@@ -61,7 +81,7 @@ function describeSyncError(error: unknown): string {
 
 /** All network/decryption work stays outside the single atomic cache transaction. */
 export async function synchronizeVault(options: SynchronizeVaultOptions): Promise<SyncResult> {
-    const { token, scope, cache, validate, verifyRows } = options;
+    const { token, scope, cache, validate, verifyRows, sealQuarantine } = options;
     const startedAt = Date.now();
     let stage = "cache-read";
     console.info("[upw] vault sync started");
@@ -99,14 +119,16 @@ export async function synchronizeVault(options: SynchronizeVaultOptions): Promis
             }
             if (!envelope) throw new VaultSyncError("missing_envelope");
             let rows: Map<string, RelayItemRow>;
+            const provenance = new Map<string, RowProvenance>();
             let cursor = rebuilt ? initialHead : cached?.cursor ?? initialHead;
             try {
                 stage = rebuilt ? "snapshot" : "changes";
                 rows = rebuilt
-                    ? await fetchFullSnapshot(token, scope.vaultId, validate)
+                    ? await fetchFullSnapshot(token, scope.vaultId, validate, provenance)
                     : new Map((cached?.rows ?? []).map((row) => [row.uuid.toLowerCase(), row]));
                 cursor = await drainChanges(
-                    token, scope.vaultId, cursor, validate, rows, initial.passwordVersion, rebuilt,
+                    token, scope.vaultId, cursor, validate, rows, provenance,
+                    initial.passwordVersion, rebuilt,
                 );
             } catch (error) {
                 if (!cursorExpired(error)) throw error;
@@ -124,25 +146,85 @@ export async function synchronizeVault(options: SynchronizeVaultOptions): Promis
                 if (attempt === MAX_RESTARTS) throw new VaultSyncError("sync_incomplete");
                 continue;
             }
-            const nextRows = [...rows.values()].sort((a, b) => a.uuid.localeCompare(b.uuid));
             const oldRows = new Map((cached?.rows ?? []).map((row) => [row.uuid.toLowerCase(), row]));
+            const previousQuarantines = cached?.quarantinedItems ?? [];
+            const quarantinesByID = new Map(previousQuarantines.map(item => [item.id, item]));
+            const candidateRows = [...rows.values()].sort((a, b) => a.uuid.localeCompare(b.uuid));
+            const candidateChanges = changedRowsFor(candidateRows, oldRows, rebuilt);
+            // Rebuilds always authenticate the complete final snapshot, including unchanged rows.
+            const fallbackRows: RelayItemRow[] = [];
+            if (candidateChanges.length) {
+                stage = "verify";
+                const failures = await checked(validate, () => verifyRows(candidateChanges)) ?? [];
+                const failureByUUID = new Map<string, SyncQuarantineReason>();
+                for (const failure of failures) {
+                    if (!failure || typeof failure.uuid !== "string"
+                        || (failure.reason !== "authenticationFailed" && failure.reason !== "unsupportedFormat")) {
+                        throw new VaultSyncError("invalid_row_verification_result");
+                    }
+                    const uuid = failure.uuid.toLowerCase();
+                    if (!rows.has(uuid) || failureByUUID.has(uuid)) {
+                        throw new VaultSyncError("invalid_row_verification_result");
+                    }
+                    failureByUUID.set(uuid, failure.reason);
+                }
+                for (const [uuid, reason] of failureByUUID) {
+                    const row = rows.get(uuid);
+                    const source = provenance.get(uuid);
+                    if (!row || !source) throw new VaultSyncError("missing_quarantine_source");
+                    if (!sealQuarantine) throw new VaultSyncError("quarantine_unavailable");
+                    const identity: SyncQuarantineIdentity = {
+                        id: source.source === "change"
+                            ? `change:${source.sequence}`
+                            : `snapshot:${row.uuid.toLowerCase()}:${row.revision}`,
+                        uuid: row.uuid,
+                        revision: row.revision,
+                        source: source.source,
+                        sequence: source.sequence,
+                        reason,
+                        capturedAt: Date.now(),
+                    };
+                    if (!quarantinesByID.has(identity.id)) {
+                        const encryptedPayloadB64 = await checked(validate, () => sealQuarantine(identity, row));
+                        const [quarantine] = parseEncryptedSyncQuarantineItems([
+                            { ...identity, encryptedPayloadB64 },
+                        ]);
+                        quarantinesByID.set(identity.id, quarantine);
+                    }
+                    const previous = oldRows.get(uuid);
+                    if (previous) {
+                        rows.set(uuid, previous);
+                        if (rebuilt) fallbackRows.push(previous);
+                    } else {
+                        rows.delete(uuid);
+                    }
+                    provenance.delete(uuid);
+                    console.warn(`[upw] row isolated uuid=${uuid} reason=${reason}`);
+                }
+                if (fallbackRows.length) {
+                    const fallbackFailures = await checked(validate, () => verifyRows(fallbackRows)) ?? [];
+                    if (fallbackFailures.length) throw new VaultSyncError("cached_row_unreadable");
+                }
+            }
+            const nextRows = [...rows.values()].sort((a, b) => a.uuid.localeCompare(b.uuid));
             const differences = nextRows.filter((row) => {
                 const previous = oldRows.get(row.uuid.toLowerCase());
                 return !previous || !sameRow(previous, row);
             });
             const deletedIds = [...oldRows.keys()].filter((uuid) => !rows.has(uuid));
             const changedRows = rebuilt ? nextRows : differences;
-            // Rebuilds always authenticate the complete final snapshot, including unchanged rows.
-            if (changedRows.length) {
-                stage = "verify";
-                await checked(validate, () => verifyRows(changedRows));
-            }
+            const quarantinedItems = [...quarantinesByID.values()].sort((a, b) => a.id.localeCompare(b.id));
+            const quarantinesChanged = JSON.stringify(quarantinedItems) !== JSON.stringify(previousQuarantines);
             const unchanged = cached !== null && !rebuilt && differences.length === 0
-                && deletedIds.length === 0 && cursor === cached.cursor && envelope === cached.envelope;
+                && deletedIds.length === 0 && cursor === cached.cursor && envelope === cached.envelope
+                && !quarantinesChanged;
             await validate();
             if (unchanged) {
                 console.info(`[upw] vault sync unchanged elapsedMs=${Date.now() - startedAt}`);
-                return { snapshot: cached, changedRows: [], deletedIds: [], rebuilt: false, changedCount: 0 };
+                return {
+                    snapshot: cached, changedRows: [], deletedIds: [], rebuilt: false,
+                    changedCount: 0, quarantinedCount: 0,
+                };
             }
             // No post-commit validator: the caller must receive the persisted result before invalidating UI.
             stage = "commit";
@@ -153,10 +235,13 @@ export async function synchronizeVault(options: SynchronizeVaultOptions): Promis
                 cursor,
                 accountEpoch: initialEpoch,
                 rows: nextRows,
+                quarantinedItems,
             }, expectedVersion);
             const changedCount = differences.length + deletedIds.length;
+            const priorQuarantineIDs = new Set(previousQuarantines.map(item => item.id));
+            const quarantinedCount = quarantinedItems.filter(item => !priorQuarantineIDs.has(item.id)).length;
             console.info(`[upw] vault sync completed rebuilt=${rebuilt} rows=${changedRows.length} deleted=${deletedIds.length} elapsedMs=${Date.now() - startedAt}`);
-            return { snapshot, changedRows, deletedIds, rebuilt, changedCount };
+            return { snapshot, changedRows, deletedIds, rebuilt, changedCount, quarantinedCount };
         }
         throw new VaultSyncError("sync_incomplete");
     } catch (error) {
@@ -176,6 +261,7 @@ async function fetchFullSnapshot(
     token: string,
     vaultId: string,
     validate: () => Promise<void>,
+    provenance: Map<string, RowProvenance>,
 ): Promise<Map<string, RelayItemRow>> {
     const rows = new Map<string, RelayItemRow>();
     let cursor: { ms: number; uuid: string } | null = null;
@@ -184,7 +270,10 @@ async function fetchFullSnapshot(
         for (const row of result.items) {
             const key = row.uuid.toLowerCase();
             const previous = rows.get(key);
-            if (!previous || row.revision > previous.revision) rows.set(key, row);
+            if (!previous || row.revision > previous.revision) {
+                rows.set(key, row);
+                provenance.set(key, { source: "snapshot", sequence: null });
+            }
             else if (row.revision === previous.revision && !sameRow(previous, row)) {
                 throw new VaultSyncError("inconsistent_revision");
             }
@@ -206,6 +295,7 @@ async function drainChanges(
     startingCursor: number,
     validate: () => Promise<void>,
     rows: Map<string, RelayItemRow>,
+    provenance: Map<string, RowProvenance>,
     passwordVersion: number,
     rebuilt: boolean,
 ): Promise<number> {
@@ -218,9 +308,19 @@ async function drainChanges(
                 if (change.revision > passwordVersion || !rebuilt) throw new VaultSyncError("password_changed");
                 continue;
             }
+            if (change.op === "resolve") {
+                const resolved = applyResolutionChange(rows, change);
+                provenance.delete(change.uuid.toLowerCase());
+                if (change.resolvedItemUuid) provenance.delete(change.resolvedItemUuid.toLowerCase());
+                if (resolved) provenance.set(resolved.uuid.toLowerCase(), {
+                    source: "change", sequence: change.seq,
+                });
+                continue;
+            }
             const key = change.uuid.toLowerCase();
             if (change.op === "purge" || change.deleted) {
                 rows.delete(key);
+                provenance.delete(key);
                 continue;
             }
             const row = {
@@ -232,7 +332,10 @@ async function drainChanges(
             };
             if (!isValidRelayItemRow(row)) throw new VaultSyncError("incomplete_upsert");
             const previous = rows.get(key);
-            if (!previous || row.revision > previous.revision) rows.set(key, row);
+            if (!previous || row.revision > previous.revision) {
+                rows.set(key, row);
+                provenance.set(key, { source: "change", sequence: change.seq });
+            }
             else if (row.revision === previous.revision && !sameRow(previous, row)) {
                 throw new VaultSyncError("inconsistent_revision");
             }
@@ -240,4 +343,94 @@ async function drainChanges(
         if (result.changes.length < CHANGE_PAGE_SIZE) return cursor;
     }
     throw new VaultSyncError("too_many_change_pages");
+}
+
+/**
+ * Apply the server's atomic resolution event without treating it as an ordinary upsert.
+ * A restore may move the live content to a new UUID, so both identities must be updated
+ * before the cursor is committed.
+ */
+function applyResolutionChange(
+    rows: Map<string, RelayItemRow>,
+    change: RelayChange,
+): RelayItemRow | null {
+    rows.delete(change.uuid.toLowerCase());
+    if (change.winnerOp === "delete" || change.deleted === true) {
+        if (change.resolvedItemUuid) rows.delete(change.resolvedItemUuid.toLowerCase());
+        return null;
+    }
+    if (!change.resolvedItemUuid || change.resolvedRevision === undefined
+        || change.kind === undefined || !change.bodyB64 || change.modifiedMs === undefined) {
+        throw new VaultSyncError("incomplete_resolution");
+    }
+    const row: RelayItemRow = {
+        uuid: change.resolvedItemUuid,
+        kind: change.kind,
+        revision: change.resolvedRevision,
+        bodyB64: change.bodyB64,
+        modifiedMs: change.modifiedMs,
+    };
+    if (!isValidRelayItemRow(row)) throw new VaultSyncError("incomplete_resolution");
+    const key = row.uuid.toLowerCase();
+    const previous = rows.get(key);
+    if (previous && previous.revision > row.revision) {
+        throw new VaultSyncError("inconsistent_resolution");
+    }
+    if (previous && previous.revision === row.revision && !sameRow(previous, row)) {
+        throw new VaultSyncError("inconsistent_resolution");
+    }
+    rows.set(key, row);
+    return row;
+}
+
+function changedRowsFor(
+    rows: RelayItemRow[],
+    oldRows: Map<string, RelayItemRow>,
+    rebuilt: boolean,
+): RelayItemRow[] {
+    if (rebuilt) return rows;
+    return rows.filter(row => {
+        const previous = oldRows.get(row.uuid.toLowerCase());
+        return !previous || !sameRow(previous, row);
+    });
+}
+
+/** Reopens locally VEK-protected rows after a client gains support for their format. */
+export async function retryQuarantinedRows(options: {
+    quarantinedItems: EncryptedSyncQuarantineItem[];
+    rows: RelayItemRow[];
+    openQuarantine: (item: EncryptedSyncQuarantineItem) => Promise<RelayItemRow>;
+    verifyRows: (rows: RelayItemRow[]) => Promise<RowVerificationFailure[] | void>;
+}): Promise<{ rows: RelayItemRow[]; quarantinedItems: EncryptedSyncQuarantineItem[]; restoredRows: RelayItemRow[]; recoveredCount: number }> {
+    const rowsByUUID = new Map(options.rows.map(row => [row.uuid.toLowerCase(), row]));
+    const remaining = new Map(options.quarantinedItems.map(item => [item.id, item]));
+    const restoredRows: RelayItemRow[] = [];
+    for (const item of options.quarantinedItems) {
+        let row: RelayItemRow;
+        try {
+            row = await options.openQuarantine(item);
+        } catch (error) {
+            if (error instanceof Error && error.message === "quarantine_decrypt_failed") continue;
+            throw error;
+        }
+        if (!isValidRelayItemRow(row) || row.uuid.toLowerCase() !== item.uuid.toLowerCase()
+            || row.revision !== item.revision) {
+            continue;
+        }
+        const failures = await options.verifyRows([row]) ?? [];
+        if (failures.length) continue;
+        const current = rowsByUUID.get(row.uuid.toLowerCase());
+        if (current && current.revision === row.revision && !sameRow(current, row)) continue;
+        if (!current || current.revision < row.revision) {
+            rowsByUUID.set(row.uuid.toLowerCase(), row);
+            restoredRows.push(row);
+        }
+        remaining.delete(item.id);
+    }
+    return {
+        rows: [...rowsByUUID.values()].sort((a, b) => a.uuid.localeCompare(b.uuid)),
+        quarantinedItems: [...remaining.values()].sort((a, b) => a.id.localeCompare(b.id)),
+        restoredRows,
+        recoveredCount: options.quarantinedItems.length - remaining.size,
+    };
 }

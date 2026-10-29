@@ -135,6 +135,7 @@ extension Vault {
     /// 登出:先在服务端吊销本机会话(令牌即刻作废),再清本机令牌与当前库绑定
     /// (账户与网盘文件不动)。服务端撤销失败仍继续本地登出——令牌已在本地销毁。
     func relayLogout() async {
+        cancelAttachmentDownloads()
         if let token = relay.token(database: databaseName) {
             do {
                 try await relayClient.revokeOwnSession(token: token)
@@ -275,6 +276,7 @@ extension Vault {
     func relayUnbindVault(code: String) async {
         guard let binding = relay.binding(database: databaseName),
               let token = relay.token(database: databaseName) else { return }
+        cancelAttachmentDownloads()
         do {
             try await relayClient.deleteVault(token: token, vaultId: binding.vaultId, code: code)
             relay.setBinding(nil, database: databaseName)
@@ -283,6 +285,7 @@ extension Vault {
             showToast(L10n.t("relay_unbind_ok_toast"))
         } catch {
             Log.warn("sync", "ios relay unbind failed: \(error)")
+            scheduleMissingAttachmentDownloads()
             showToast(error.localizedDescription)
         }
     }
@@ -291,6 +294,7 @@ extension Vault {
     func relayDeregisterAccount(code: String) async {
         guard let binding = relay.binding(database: databaseName),
               let token = relay.token(database: databaseName) else { return }
+        cancelAttachmentDownloads()
         do {
             try await relayClient.deregister(token: token, code: code)
             relay.setBinding(nil, database: databaseName)
@@ -299,6 +303,7 @@ extension Vault {
             showToast(L10n.t("relay_deregister_ok_toast"))
         } catch {
             Log.warn("sync", "ios relay deregister failed: \(error)")
+            scheduleMissingAttachmentDownloads()
             showToast(error.localizedDescription)
         }
     }

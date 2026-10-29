@@ -4,7 +4,7 @@ import UPasswordsCore
 import UPasswordsPersistence
 
 /// 修改密码、备份、行级云同步(api.upasswords.com /v1,见 Cloud/DESIGN.md §6):
-/// 拉取(游标增量) → 上行(脏集合 CAS);冲突逐条 LWW 自动收敛,无整库弹窗。
+/// 拉取(游标增量) → 上行(脏集合 CAS);仅有可靠共同基线的非重叠修改自动合并。
 extension AppContext {
 
     // MARK: - 行级同步状态(存储在 AppContext.rowSync)
@@ -13,12 +13,53 @@ extension AppContext {
     func resetRowSyncForFreshBinding() {
         guard let vaultKey else { return }
         do {
-            let state = RowSyncState()
+            var state = RowSyncState()
+            // Import receipts belong to this local database, independently of its cloud binding.
+            state.importedSourceKeys = rowSync.importedSourceKeys
+            state.quarantinedItems = rowSync.quarantinedItems
             try commitSyncSnapshot(database, name: databaseName, vaultKey: vaultKey, state: state)
             rowSync = state
             Log.info("sync", "fresh binding snapshot committed")
         } catch {
             Log.error("sync", "reset row sync state failed: \(error)")
+        }
+    }
+
+    /// Retries retained cloud records using the currently unlocked vault key.
+    func retryQuarantinedSyncItems() async {
+        guard phase == .unlocked, syncState != .syncing,
+              !rowSync.quarantinedItems.isEmpty,
+              let snapshotKey = vaultKey,
+              let binding = relay.binding(database: databaseName),
+              let token = relay.token(database: databaseName) else { return }
+        let name = databaseName
+        let sessionID = syncSessionID
+        let snapshot = database
+        var recovered = snapshot
+        var state = rowSync
+        let key = RowSyncKey(raw: snapshotKey.withUnsafeBytes { Data($0) })
+        syncState = .syncing
+        Log.info("sync", "quarantined record retry started count=\(state.quarantinedItems.count)")
+        do {
+            let count = try await RowSync.retryQuarantinedItems(
+                client: relayClient, token: token, vaultId: binding.vaultId,
+                key: key, database: &recovered, state: &state)
+            try validateSyncSession(name: name, key: snapshotKey, sessionID: sessionID)
+            guard database.xmlData() == snapshot.xmlData() else {
+                throw RowSyncSafetyError.localDataNeedsRecovery
+            }
+            try commitSyncSnapshot(recovered, name: name, vaultKey: snapshotKey, state: state)
+            database = recovered
+            rowSync = state
+            syncState = .idle
+            AppToast.shared.show(String(format: L10n.t("sync_quarantine_retry_success_fmt"), count))
+            Log.info("sync", "quarantined record retry committed recovered=\(count)")
+            Task { [weak self] in await self?.sync(auto: true) }
+        } catch {
+            guard syncSessionID == sessionID, databaseName == name else { return }
+            syncState = .error(error.localizedDescription)
+            Log.error("sync", "quarantined record retry failed: \(error)")
+            AppToast.shared.show(error.localizedDescription)
         }
     }
 
@@ -30,7 +71,7 @@ extension AppContext {
 
     /// await 后验证库名、密钥与会话代次;旧任务不得写入新会话。
     /// - Throws: 会话已改变或任务取消。
-    private func validateSyncSession(name: String, key: SymmetricKey?, sessionID: UUID) throws {
+    func validateSyncSession(name: String, key: SymmetricKey?, sessionID: UUID) throws {
         try Task.checkCancellation()
         guard syncSessionID == sessionID, databaseName == name, vaultKey == key else {
             Log.warn("sync", "discarding stale sync result after session changed")
@@ -48,7 +89,7 @@ extension AppContext {
             Log.warn("db", "changePassword \"\(databaseName)\" failed: wrong current password")
             throw DatabaseCipher.CipherError(message: L10n.t("wrong_password_error"))
         }
-        guard vaultKey != nil else {
+        guard let oldVaultKey = vaultKey else {
             Log.error("db", "changePassword \"\(databaseName)\" failed: no vault key in session")
             throw DatabaseCipher.CipherError(message: L10n.t("sync_error"))
         }
@@ -63,7 +104,8 @@ extension AppContext {
         }
         let envelope = try DatabaseCipher.wrapVaultKey(effectiveKey, password: new)
         try commitSyncSnapshot(database, name: databaseName, vaultKey: effectiveKey,
-                               state: rowSync, envelope: envelope)
+                               state: rowSync, envelope: envelope,
+                               rekeyBackupHistoryFrom: oldVaultKey)
         PasswordStore.savePassword(new, databaseName: databaseName)
         if settings.fastUnlock && PasswordStore.biometricAvailable() {
             PasswordStore.savePasswordForBiometric(new, databaseName: databaseName)
@@ -82,7 +124,8 @@ extension AppContext {
             Task { [weak self] in
                 guard let self, self.databaseName == name,
                       self.syncSessionID == sessionID, self.vaultKey == effectiveKey else { return }
-                await self.relayRekeyUpload(newKey: effectiveKey, new: new)
+                await self.relayRekeyUpload(
+                    oldKey: oldVaultKey, newKey: effectiveKey, new: new)
             }
         } else {
             Log.info("sync", "password changed with relay unbound — other devices adopt via next sync")
@@ -91,7 +134,8 @@ extension AppContext {
 
     /// 改密的云端接力:rekey 全量换入(§6.5)。本端即改密端,成功后直接
     /// 以新密钥全量对账(清游标重拉),失败下轮同步自愈。
-    private func relayRekeyUpload(newKey: SymmetricKey, new newPassword: String) async {
+    private func relayRekeyUpload(oldKey: SymmetricKey, newKey: SymmetricKey,
+                                  new newPassword: String) async {
         guard phase == .unlocked, vaultKey == newKey,
               let binding = relay.binding(database: databaseName),
               let token = relay.token(database: databaseName) else { return }
@@ -105,11 +149,14 @@ extension AppContext {
             var state = rowSync
             try await RowSync.rekey(
                 client: relayClient, token: token, vaultId: binding.vaultId,
-                database: snapshot, newKey: RowSyncKey(raw: newKey.withUnsafeBytes { Data($0) }),
+                database: snapshot, oldKey: RowSyncKey(raw: oldKey.withUnsafeBytes { Data($0) }),
+                newKey: RowSyncKey(raw: newKey.withUnsafeBytes { Data($0) }),
                 newEnvelope: envelope, state: &state)
             try validateSyncSession(name: name, key: newKey, sessionID: sessionID)
             // 上传期间新增的本地编辑保留在本体中,由下轮 dirty 重算带走。
-            state.recomputeDirty(database: database)
+            try state.recomputeDirty(
+                database: database,
+                key: RowSyncKey(raw: newKey.withUnsafeBytes { Data($0) }))
             try commitSyncSnapshot(database, name: name, vaultKey: newKey,
                                    state: state, envelope: envelope)
             rowSync = state
@@ -126,15 +173,40 @@ extension AppContext {
     // MARK: - Backup
 
     func backupNow() {
+        guard phase == .unlocked else { return }
         save()
+        startBackupCapture(auto: false)
+    }
+
+    /// Restores a backup as an independent local database without replacing the active vault.
+    func restoreBackupAsCopy(
+        backup: URL,
+        name: String,
+        sourcePassword: String,
+        newPassword: String,
+        expectedPackageVerificationToken: String? = nil,
+        allowIncompletePackage: Bool = false
+    ) -> String? {
+        guard relay.binding(database: name) == nil else {
+            return L10n.t("backup_restore_bound_name_error")
+        }
         do {
-            try store.backup(name: databaseName)
-            Log.info("backup", "manual backup of \"\(databaseName)\" ok")
-            AppToast.shared.show(L10n.t("database_saved_message") + " " + L10n.t("backup_command"))
-            syncAfterBackup(auto: false)
+            _ = try store.restoreBackupAsCopy(
+                backup: backup,
+                name: name,
+                sourcePassword: sourcePassword,
+                newPassword: newPassword,
+                expectedPackageVerificationToken: expectedPackageVerificationToken,
+                allowIncompletePackage: allowIncompletePackage)
+            _ = try nativeStore?.importLegacyIfNeeded(
+                name: name, password: newPassword, legacyStore: store)
+            Log.info("backup", "restored \"\(backup.lastPathComponent)\" as copy \"\(name)\"")
+            AppToast.shared.show(String(format: L10n.t("backup_copy_created_fmt"), name))
+            return nil
         } catch {
-            Log.error("backup", "manual backup of \"\(databaseName)\" failed: \(error)")
+            Log.error("backup", "restore \"\(backup.lastPathComponent)\" as \"\(name)\" failed: \(error)")
             AppToast.shared.show(error.localizedDescription)
+            return error.localizedDescription
         }
     }
 
@@ -147,13 +219,128 @@ extension AppContext {
             Log.debug("backup", "auto-backup not due (elapsed \(Int(elapsed))s < interval \(Int(interval))s)")
             return
         }
+        startBackupCapture(auto: true)
+    }
+
+    func cancelBackupCapture() {
+        backupCaptureTask?.cancel()
+        backupCaptureTask = nil
+    }
+
+    /// Protects the current local vault first, then adopts a fresh cloud snapshot after cursor expiry.
+    func recoverExpiredSyncCursor() async {
+        guard phase == .unlocked, syncCursorRecoveryRequired, syncState != .syncing,
+              backupCaptureTask == nil,
+              let binding = relay.binding(database: databaseName),
+              let token = relay.token(database: databaseName),
+              let vaultKey else { return }
+        let name = databaseName
+        let sessionID = syncSessionID
+        let snapshot = database
+        let previousState = rowSync
+        syncState = .syncing
+        Log.info("sync", "cursor recovery started for \"\(name)\" pending=\(previousState.dirtyUpserts.count + previousState.dirtyDeletes.count)")
         do {
-            try store.backup(name: databaseName)
-            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "backup.last.\(databaseName)")
-            Log.info("backup", "auto backup of \"\(databaseName)\" ok")
-            syncAfterBackup(auto: true)
+            let protected = try await BackupPackage.capture(
+                store: store,
+                name: name,
+                database: snapshot,
+                vaultKey: vaultKey,
+                syncState: previousState,
+                cloud: BackupPackage.CloudSource(
+                    client: relayClient, token: token, vaultID: binding.vaultId),
+                cloudRequired: true)
+            try validateSyncSession(name: name, key: vaultKey, sessionID: sessionID)
+            var state = RowSyncState()
+            state.importedSourceKeys = previousState.importedSourceKeys
+            state.dirtyDeletes = previousState.dirtyDeletes
+            let rebuilt = try await RowSync.fullRebuild(
+                client: relayClient,
+                token: token,
+                vaultId: binding.vaultId,
+                key: RowSyncKey(raw: vaultKey.withUnsafeBytes { Data($0) }),
+                localDatabase: PasswordDatabase(),
+                state: &state)
+            state.quarantinedCandidates = previousState.quarantinedCandidates
+            try validateSyncSession(name: name, key: vaultKey, sessionID: sessionID)
+            try commitSyncSnapshot(rebuilt, name: name, vaultKey: vaultKey, state: state)
+            database = rebuilt
+            rowSync = state
+            syncCursorRecoveryRequired = false
+            syncState = .idle
+            AppToast.shared.show(String(
+                format: L10n.t("sync_cursor_recovery_success_fmt"),
+                protected.url.lastPathComponent))
+            Log.info(
+                "sync",
+                "cursor recovery committed backup=\(protected.url.lastPathComponent) complete=\(protected.assessment.isComplete)")
+            Task { [weak self] in await self?.sync(auto: true) }
         } catch {
-            Log.error("backup", "auto backup of \"\(databaseName)\" failed: \(error)")
+            guard syncSessionID == sessionID, databaseName == name else { return }
+            syncState = .error(error.localizedDescription)
+            Log.error("sync", "cursor recovery failed for \"\(name)\": \(error)")
+            AppToast.shared.show(error.localizedDescription)
+        }
+    }
+
+    private func startBackupCapture(auto: Bool) {
+        guard phase == .unlocked, let vaultKey else {
+            Log.warn("backup", "capture skipped: database is locked")
+            return
+        }
+        cancelBackupCapture()
+        let name = databaseName
+        let sessionID = syncSessionID
+        let snapshot = database
+        let state = rowSync
+        let binding = relay.binding(database: name)
+        let token = relay.token(database: name)
+        let cloud = binding.flatMap { binding in
+            token.map { BackupPackage.CloudSource(client: relayClient, token: $0, vaultID: binding.vaultId) }
+        }
+        let store = store
+        Log.info("backup", "\(auto ? "auto" : "manual") package capture started for \"\(name)\"")
+        backupCaptureTask = Task { [weak self] in
+            do {
+                let result = try await BackupPackage.capture(
+                    store: store,
+                    name: name,
+                    database: snapshot,
+                    vaultKey: vaultKey,
+                    syncState: state,
+                    cloud: cloud,
+                    cloudRequired: binding != nil)
+                guard let self else { return }
+                self.backupCaptureTask = nil
+                guard self.phase == .unlocked,
+                      self.databaseName == name,
+                      self.syncSessionID == sessionID else { return }
+                self.backupListDidChange()
+                if auto {
+                    UserDefaults.standard.set(
+                        Date().timeIntervalSince1970,
+                        forKey: "backup.last.\(name)")
+                }
+                let resultText = result.assessment.isComplete
+                    ? L10n.t("backup_package_saved_complete")
+                    : String(
+                        format: L10n.t("backup_package_saved_incomplete_fmt"),
+                        result.assessment.issues.count)
+                if !auto { AppToast.shared.show(resultText) }
+                Log.info(
+                    "backup",
+                    "\(auto ? "auto" : "manual") package capture saved \"\(name)\" complete=\(result.assessment.isComplete) issues=\(result.assessment.issues.count)")
+                self.syncAfterBackup(auto: auto)
+            } catch is CancellationError {
+                Log.info("backup", "package capture cancelled for \"\(name)\"")
+            } catch {
+                guard let self else { return }
+                self.backupCaptureTask = nil
+                Log.error("backup", "package capture failed for \"\(name)\": \(error)")
+                if !auto, self.phase == .unlocked, self.databaseName == name {
+                    AppToast.shared.show(error.localizedDescription)
+                }
+            }
         }
     }
 
@@ -176,17 +363,19 @@ extension AppContext {
 
     /// 接管的结果:成功 / 密码不对。
     enum AdoptResult {
-        case success, wrongPassword
+        case success, wrongPassword, wrongPreviousPassword, previousPasswordRequired, protectedData
     }
 
     /// 远端不可解密修复 A:输入「其他设备改后的新主密码」接管远端——
     /// 解信封换 VEK → 行级全量重建 → 本地落盘 + 快照推送。
     @discardableResult
-    func adoptRemotePassword(_ newPassword: String) async -> AdoptResult {
+    func adoptRemotePassword(_ newPassword: String, previousPassword: String? = nil) async -> AdoptResult {
         guard let binding = relay.binding(database: databaseName),
-              let token = relay.token(database: databaseName) else { return .wrongPassword }
+              let token = relay.token(database: databaseName) else { return .protectedData }
         let name = databaseName
         let originalKey = vaultKey
+        let originalDatabase = database
+        let startedUnlocked = originalKey != nil
         let sessionID = syncSessionID
         Log.info("sync", "adopt remote password started")
         do {
@@ -200,21 +389,72 @@ extension AppContext {
                 Log.warn("sync", "adopt: envelope unwrap failed with given password")
                 return .wrongPassword
             }
-            var state = RowSyncState()
-            let rebuilt = try await RowSync.fullRebuild(
-                client: relayClient, token: token, vaultId: binding.vaultId,
-                key: RowSyncKey(raw: remoteVEK.withUnsafeBytes { Data($0) }), state: &state)
+            let localDatabase: PasswordDatabase?
+            let localVaultKey: SymmetricKey?
+            var state: RowSyncState
+            if startedUnlocked {
+                localDatabase = originalDatabase
+                localVaultKey = originalKey
+                state = rowSync
+            } else if store.exists(name) {
+                guard let previousPassword, !previousPassword.isEmpty else {
+                    return .previousPasswordRequired
+                }
+                do {
+                    let (database, key) = try store.loadUnlocked(
+                        name: name, password: previousPassword)
+                    localDatabase = database
+                    localVaultKey = key
+                } catch {
+                    guard Self.isPasswordRejection(error) else { throw error }
+                    Log.warn("sync", "local copy password verification failed")
+                    return .wrongPreviousPassword
+                }
+                state = try store.loadSyncState(for: name)
+            } else {
+                localDatabase = nil
+                localVaultKey = nil
+                state = try store.loadSyncState(for: name)
+            }
+            let rowKey = RowSyncKey(raw: remoteVEK.withUnsafeBytes { Data($0) })
+            let rebuilt: PasswordDatabase
+            if let localDatabase, let localVaultKey {
+                let adoption = try await RowSync.adoptRemoteRekey(
+                    client: relayClient, token: token, vaultId: binding.vaultId,
+                    oldKey: RowSyncKey(raw: localVaultKey.withUnsafeBytes { Data($0) }),
+                    newKey: rowKey, localDatabase: localDatabase, state: state)
+                rebuilt = adoption.database
+                state = adoption.state
+            } else {
+                guard state.pendingConflicts.isEmpty, state.dirtyUpserts.isEmpty,
+                      state.dirtyDeletes.isEmpty, state.quarantinedItems.isEmpty else {
+                    throw RowSyncSafetyError.localDataNeedsRecovery
+                }
+                let importedSourceKeys = state.importedSourceKeys
+                state = RowSyncState()
+                state.importedSourceKeys = importedSourceKeys
+                rebuilt = try await RowSync.fullRebuild(
+                    client: relayClient, token: token, vaultId: binding.vaultId,
+                    key: rowKey, state: &state)
+            }
             try validateSyncSession(name: name, key: originalKey, sessionID: sessionID)
+            if startedUnlocked, database.xmlData() != originalDatabase.xmlData() {
+                throw RowSyncSafetyError.localDataNeedsRecovery
+            }
             try commitSyncSnapshot(
                 rebuilt, name: name, vaultKey: remoteVEK, state: state, envelope: envelope)
-            database = rebuilt
-            rowSync = state
-            vaultKey = remoteVEK
-            password = newPassword
-            syncSessionID = UUID()
-            PasswordStore.savePassword(newPassword, databaseName: name)
-            if settings.fastUnlock && PasswordStore.biometricAvailable() {
-                PasswordStore.savePasswordForBiometric(newPassword, databaseName: name)
+            if startedUnlocked {
+                database = rebuilt
+                rowSync = state
+                vaultKey = remoteVEK
+                password = newPassword
+                syncSessionID = UUID()
+                PasswordStore.savePassword(newPassword, databaseName: name)
+                if settings.fastUnlock && PasswordStore.biometricAvailable() {
+                    PasswordStore.savePasswordForBiometric(newPassword, databaseName: name)
+                }
+            } else {
+                try unlock(name: name, password: newPassword)
             }
             relay.recordPasswordVersion(record.passwordVersion, database: name)
             if let selected = selectedCardId, database.card(id: selected) == nil {
@@ -224,13 +464,20 @@ extension AppContext {
             SafariSnapshotBridge.push(databaseName: databaseName, store: store)
             Log.info("sync", "adopted new password via envelope (rows rebuilt: \(rebuilt.cards.count) cards)")
             return .success
+        } catch let error as RowSyncSafetyError {
+            Log.error("sync", "adopt remote password paused; local data retained: \(error)")
+            if syncSessionID == sessionID {
+                syncState = .error(error.localizedDescription)
+                AppToast.shared.show(error.localizedDescription)
+            }
+            return .protectedData
         } catch {
             Log.error("sync", "adopt remote password failed: \(error)")
             if syncSessionID == sessionID {
                 syncState = .error(error.localizedDescription)
                 AppToast.shared.show(error.localizedDescription)
             }
-            return .wrongPassword
+            return .protectedData
         }
     }
 
@@ -250,10 +497,12 @@ extension AppContext {
             var state = rowSync
             try await RowSync.rekey(
                 client: relayClient, token: token, vaultId: binding.vaultId,
-                database: snapshot, newKey: RowSyncKey(raw: key.withUnsafeBytes { Data($0) }),
+                database: snapshot, oldKey: RowSyncKey(raw: key.withUnsafeBytes { Data($0) }),
+                newKey: RowSyncKey(raw: key.withUnsafeBytes { Data($0) }),
                 newEnvelope: envelope, state: &state)
             try validateSyncSession(name: name, key: key, sessionID: sessionID)
-            state.recomputeDirty(database: database)
+            let rowKey = RowSyncKey(raw: key.withUnsafeBytes { Data($0) })
+            try state.recomputeDirty(database: database, key: rowKey)
             try commitSyncSnapshot(database, name: name, vaultKey: key, state: state, envelope: envelope)
             rowSync = state
             syncRemoteUnreadable = false
@@ -380,6 +629,7 @@ extension AppContext {
         let sessionID = syncSessionID
         let snapshot = database
         let key = RowSyncKey(raw: snapshotKey.withUnsafeBytes { Data($0) })
+        var state = rowSync
         Log.info("sync", "sync \"\(name)\" started (rows\(auto ? ", auto" : ""))")
         syncState = .syncing
         do {
@@ -395,22 +645,34 @@ extension AppContext {
                     return nil
                 }
             }
-            var state = rowSync
-            state.recomputeDirty(database: snapshot)
+            try state.recomputeDirty(database: snapshot, key: key)
             var db = snapshot
             var outcome = RowSyncOutcome()
             do {
+                if state.needsContentBaselineMigration {
+                    Log.info("sync", "legacy content baseline migration started")
+                    db = try await RowSync.fullRebuild(
+                        client: relayClient, token: token, vaultId: binding.vaultId,
+                        key: key, localDatabase: db, state: &state)
+                    outcome.pulledItems = db.cards.count + db.labels.count + db.userProfiles.count
+                }
                 let pulled = try await RowSync.pull(
                     client: relayClient, token: token, vaultId: binding.vaultId,
                     key: key, database: &db, state: &state)
-                outcome.pulledItems = pulled.pulledItems
+                outcome.pulledItems += pulled.pulledItems
+                outcome.quarantinedItems += pulled.quarantinedItems
             } catch RelayClient.RelayError.cursorExpired {
                 try validateSyncSession(name: name, key: snapshotKey, sessionID: sessionID)
                 // 游标落后越过保留地板:全量重建(快照+差量)
                 Log.warn("sync", "cursor expired — full rebuild")
-                db = try await RowSync.fullRebuild(
-                    client: relayClient, token: token, vaultId: binding.vaultId,
-                    key: key, state: &state)
+                do {
+                    db = try await RowSync.fullRebuild(
+                        client: relayClient, token: token, vaultId: binding.vaultId,
+                        key: key, localDatabase: snapshot, state: &state)
+                } catch RowSyncSafetyError.localDataNeedsRecovery {
+                    syncCursorRecoveryRequired = true
+                    throw RowSyncSafetyError.localDataNeedsRecovery
+                }
                 outcome.pulledItems = db.cards.count + db.labels.count + db.userProfiles.count
             } catch let signal as RowSyncRekeySignal {
                 // 对端 rekey:旧 VEK 解不开新密文,强制锁定接管
@@ -423,14 +685,20 @@ extension AppContext {
                 return nil
             }
             try validateSyncSession(name: name, key: snapshotKey, sessionID: sessionID)
-            if db.migrateLegacyPersonalInfo() > 0 { state.recomputeDirty(database: db) }
-            let pushed = try await RowSync.push(
-                client: relayClient, token: token, vaultId: binding.vaultId,
-                key: key, database: &db, state: &state)
-            outcome.pushedItems = pushed.pushedItems
-            outcome.conflictsResolved = pushed.conflictsResolved
+            if db.migrateLegacyPersonalInfo() > 0 {
+                try state.recomputeDirty(database: db, key: key)
+            }
+            if state.needsSyncContinuation {
+                Log.info("sync", "sync checkpoint committed before continuing after quarantine")
+            } else {
+                let pushed = try await RowSync.push(
+                    client: relayClient, token: token, vaultId: binding.vaultId,
+                    key: key, database: &db, state: &state)
+                outcome.pushedItems = pushed.pushedItems
+                outcome.conflictsResolved = pushed.conflictsResolved
+            }
             try validateSyncSession(name: name, key: snapshotKey, sessionID: sessionID)
-            guard database == snapshot else {
+            guard database.xmlData() == snapshot.xmlData() else {
                 Log.warn("sync", "sync snapshot discarded: local edits arrived during await")
                 throw DatabaseCipher.CipherError(message: L10n.t("sync_error"))
             }
@@ -438,6 +706,7 @@ extension AppContext {
                                    state: state, envelope: adoptedEnvelope)
             database = db
             rowSync = state
+            scheduleMissingAttachmentDownloads()
             relay.recordPasswordVersion(record.passwordVersion, database: name)
             SafariSnapshotBridge.push(databaseName: name, store: store)
             if let selected = selectedCardId, database.card(id: selected) == nil {
@@ -446,15 +715,21 @@ extension AppContext {
             syncRemoteUnreadable = false
             let finished = Date()
             lastSync = finished
+            syncCursorRecoveryRequired = false
             syncState = .idle
             Log.info("sync", "sync \"\(databaseName)\" finished via rows (cursor=\(state.cursor) pending=\(state.dirtyUpserts.count + state.dirtyDeletes.count))")
             if !auto {
-                // 手动同步反馈结果:无变化/拉取·上传条数(时间看设置页状态行)
-                if outcome.pulledItems == 0 && outcome.pushedItems == 0 {
+                if state.quarantinedItems.count > 0 && outcome.quarantinedItems > 0 {
+                    AppToast.shared.show(String(format: L10n.t("sync_quarantine_summary_fmt"),
+                                                state.quarantinedItems.count))
+                } else if outcome.pulledItems == 0 && outcome.pushedItems == 0 {
                     AppToast.shared.show(L10n.t("sync_result_latest"))
                 } else {
                     AppToast.shared.show(String(format: L10n.t("sync_result_fmt"), outcome.pulledItems, outcome.pushedItems))
                 }
+            }
+            if state.needsSyncContinuation {
+                Task { [weak self] in await self?.sync(auto: true) }
             }
             return outcome
         } catch RelayClient.RelayError.unauthorized {
@@ -463,6 +738,20 @@ extension AppContext {
         } catch {
             Log.error("sync", "row sync did not commit: \(error)")
             guard syncSessionID == sessionID, databaseName == name else { return nil }
+            let markerUpdates = state.pendingConflicts.filter {
+                rowSync.pendingConflicts[$0.key] != $0.value
+            }
+            if !markerUpdates.isEmpty {
+                var protectedState = rowSync
+                protectedState.pendingConflicts.merge(markerUpdates) { _, updated in updated }
+                do {
+                    try commitSyncSnapshot(
+                        database, name: name, vaultKey: snapshotKey, state: protectedState)
+                    rowSync = protectedState
+                } catch {
+                    Log.error("sync", "conflict marker persistence failed: \(error)")
+                }
+            }
             // 调用任务被取消:静默收场,不作为失败上报
             if Task.isCancelled {
                 syncState = .idle

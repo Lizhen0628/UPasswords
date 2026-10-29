@@ -44,6 +44,8 @@ export type ExtensionAutofill =
 
 /** 扩展使用的字段投影，value 为明文，只在可信解锁会话和主动填充时消费。 */
 export interface ExtensionField {
+    /** Persistent field identity; absent in legacy XML that cannot be matched safely. */
+    id?: string;
     name: string;
     type: ExtensionFieldType;
     value: string;

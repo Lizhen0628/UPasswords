@@ -1,0 +1,91 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://upasswords.local/contracts/conflict-resolution.schema.json",
+    "title": "UPasswords encrypted conflict resolution request",
+    "description": "Request body for the development row-level conflict resolution endpoint. The server compares the complete candidate set and current state but never decrypts the body.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "generation",
+        "candidateIds",
+        "winnerCandidateId",
+        "expectedCurrentRevision",
+        "expectedDeletedSeq"
+    ],
+    "properties": {
+        "generation": {
+            "type": "integer",
+            "minimum": 0
+        },
+        "candidateIds": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{32}$"
+            }
+        },
+        "winnerCandidateId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+        },
+        "expectedCurrentRevision": {
+            "type": "integer",
+            "minimum": 0
+        },
+        "expectedDeletedSeq": {
+            "type": "integer",
+            "minimum": 0
+        },
+        "attachmentRefs": {
+            "type": "array",
+            "maxItems": 500,
+            "uniqueItems": true,
+            "description": "Selected encrypted card attachment versions activated atomically with the resolution. Required by clients that resolve a card conflict with pinned attachment versions; omitted legacy requests are rejected when pinned versions exist.",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["attachmentId", "contentVersion"],
+                "properties": {
+                    "attachmentId": { "type": "string", "format": "uuid" },
+                    "contentVersion": { "type": "string", "format": "uuid" },
+                    "restoreDeleted": { "type": "boolean" }
+                }
+            }
+        },
+        "restoreItemUuid": {
+            "type": "string",
+            "format": "uuid"
+        },
+        "bodyB64": {
+            "type": "string",
+            "contentEncoding": "base64"
+        },
+        "mergedBodyB64": {
+            "type": "string",
+            "minLength": 1,
+            "contentEncoding": "base64",
+            "description": "Client-encrypted field-composed body for the existing item identity. The server never decrypts it."
+        },
+        "mergedModifiedMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 253402300799999,
+            "description": "Modified time authenticated inside mergedBodyB64."
+        }
+    },
+    "dependentRequired": {
+        "restoreItemUuid": ["bodyB64"],
+        "bodyB64": ["restoreItemUuid"],
+        "mergedBodyB64": ["mergedModifiedMs"],
+        "mergedModifiedMs": ["mergedBodyB64"]
+    },
+    "not": {
+        "anyOf": [
+            { "required": ["restoreItemUuid", "mergedBodyB64"] },
+            { "required": ["restoreItemUuid", "mergedModifiedMs"] }
+        ]
+    }
+}

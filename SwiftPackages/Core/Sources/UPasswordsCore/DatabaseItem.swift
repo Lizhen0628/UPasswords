@@ -3,8 +3,8 @@ import Foundation
 // MARK: - 条目级编解码与行级同步基元
 //
 // 行级同步的条目体 = 单条目 XML 元素的 UTF-8 字节(服务端只见其 AES-GCM
-// 密文)。本文件提供 Card/CardLabel/UserProfile 与元素字节的编解码,以及同步冲突的
-// 逐条裁决(LWW:mtime 新者胜;标签按 timeStamp)。
+// 密文)。本文件提供 Card/CardLabel/UserProfile 与元素字节的编解码，以及旧版整条目
+// 时间戳裁决辅助函数；当前云端同步使用加密共同基线进行三方合并。
 
 /// 一个可同步条目(客户端 kind:1=card、2=label、3=user profile;部署端支持情况须与 Cloud 的迁移状态一并核对)。
 public enum DatabaseItem: Equatable {
@@ -21,7 +21,7 @@ public enum DatabaseItem: Equatable {
         }
     }
 
-    /// 行级同步的决胜时间，单位为 Unix 毫秒：卡片和资料用 modified，标签用 timeStamp。
+    /// 条目来源时间，单位为 Unix 毫秒：卡片和资料用 modified，标签用 timeStamp。
     public var modifiedMs: TimeInterval {
         switch self {
         case .card(let c): return c.modified
@@ -37,6 +37,12 @@ public enum DatabaseItem: Equatable {
         case .label: return 2
         case .userProfile: return 3
         }
+    }
+
+    /// Whether this item contains an attachment reference whose bytes are not local.
+    public var hasUnavailableAttachmentContent: Bool {
+        guard case let .card(card) = self else { return false }
+        return (card.images + card.files).contains { !$0.hasContent }
     }
 }
 
@@ -73,7 +79,7 @@ public enum DatabaseItemCodec {
         let pp = XMLParser(data: data)
         pp.delegate = parser
         pp.shouldResolveExternalEntities = false
-        guard pp.parse(), !parser.failed else { return nil }
+        guard pp.parse(), !parser.failed, parser.persistentIDsAreUnique else { return nil }
         switch kind {
         case 1:
             guard let c = parser.cards.first, c.id == uuid else { return nil }
@@ -89,13 +95,13 @@ public enum DatabaseItemCodec {
         }
     }
 
-    /// 逐条冲突裁决(§6.2/§6.6):本地与对端同改一条目时,新者胜。
-    /// 相等时间保留本地(避免刷新 nonce 制造对端误判)。
+    /// 旧版的整条目时间戳裁决辅助函数；当前云端同步不使用它解决并发修改。
+    /// 相等时间保留本地，避免仅刷新密文 nonce 造成无意义改写。
     ///
     /// - Parameters:
     ///   - local: 本地条目；调用方须保证与 remote 为同一身份。
     ///   - remote: 远端条目。
-    /// - Returns: 按修改时间选出的完整条目，不逐字段合并。
+    /// - Returns: 按修改时间选出的完整条目，不逐字段合并；不得作为云同步裁决结果。
     public static func resolve(local: DatabaseItem, remote: DatabaseItem) -> DatabaseItem {
         local.modifiedMs >= remote.modifiedMs ? local : remote
     }

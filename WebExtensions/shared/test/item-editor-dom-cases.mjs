@@ -1,5 +1,5 @@
 // Browser-compatible DOM cases; Node registers them only when a real XML DOM is available.
-import { parseVaultXml, readItemDetail, sourceFromFragment, updateItemXml, VaultCryptoError } from "../dist/index.js";
+import { parseVaultXml, readItemDetail, reidentifyItemXml, sourceFromFragment, updateItemXml, VaultCryptoError } from "../dist/index.js";
 
 const uuid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 const fragment = `<card id="${uuid}" title="Old" created="10" modified="20" favorite="true" future="keep">
@@ -70,6 +70,38 @@ export const itemEditorDomCases = [
             equal(readItemDetail({ notes: "fallback\nnotes" }).notes, "fallback\nnotes");
             equal(readItemDetail({}).notes, "");
             rejects(() => readItemDetail({ id: "wrong", source }), "item_id_mismatch");
+        },
+    },
+    {
+        name: "re-identifies restored candidates without losing unknown XML data",
+        run() {
+            const replacementID = "11111111-2222-4333-8444-555555555555";
+            const before = parse(fragment).documentElement;
+            const after = parse(reidentifyItemXml(fragment, replacementID, 1_800_000_000_124)).documentElement;
+            equal(after.getAttribute("id"), replacementID.toUpperCase());
+            equal(after.getAttribute("modified"), "1800000000124");
+            equal(after.getAttribute("title"), before.getAttribute("title"));
+            equal(after.getAttribute("favorite"), before.getAttribute("favorite"));
+            for (const name of ["field", "note", "label", "image", "file", "icon", "future"]) {
+                const originals = direct(before, name);
+                const restored = direct(after, name);
+                equal(restored.length, originals.length);
+                originals.forEach((element, index) => equal(serialize(restored[index]), serialize(element)));
+            }
+            assert(serialize(after).includes("<!--keep comment-->"));
+            assert(serialize(after).includes("<?future keep?>"));
+            rejects(() => reidentifyItemXml(fragment, "bad", 1), "bad_item_identity");
+            rejects(() => reidentifyItemXml('<!DOCTYPE card><card id="x"/>', replacementID, 1), "bad_xml");
+        },
+    },
+    {
+        name: "re-identifies labels using their native timestamp attribute",
+        run() {
+            const id = "11111111-2222-4333-8444-555555555555";
+            const after = parse(reidentifyItemXml('<label id="aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" name="Work" time="1" future="keep"/>', id, 42)).documentElement;
+            equal(after.getAttribute("id"), id.toUpperCase());
+            equal(after.getAttribute("time"), "42");
+            equal(after.getAttribute("future"), "keep");
         },
     },
     {
