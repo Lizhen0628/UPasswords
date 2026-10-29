@@ -1234,8 +1234,6 @@
 "database_card_import_destination_changed" = "The destination database changed. Open the import again from the intended database.";
 "database_card_import_syncing" = "Wait for the current sync to finish, then retry the import.";
 "untitled_card_text" = "Untitled card";
-"attachment_download_all" = "Download all attachments";
-"attachment_download_all_queued" = "Missing attachments were queued. Downloads remain subject to network policy and available space; they are not yet all available offline.";
 "attachment_keep_offline" = "Keep offline";
 "attachment_release_offline" = "Allow cache cleanup";
 "attachment_available_locally" = "Available on this device";
@@ -1246,7 +1244,6 @@
 "attachment_cache_space_limited" = "Downloads are paused because there is not enough cache or disk space. Offline, pending, and conflict data are preserved.";
 "attachment_retry_limit" = "Five automatic retries have failed. Downloads are paused; retry manually or reconnect to begin another round.";
 "attachment_retry_scheduled" = "Download failed temporarily. An automatic retry is scheduled; completed attachments remain available.";
-"attachment_download_all_cancel" = "End download-all request";
 "backup_package_review" = "Verify backup";
 "backup_package_saved_complete" = "A complete self-contained backup was saved.";
 "backup_package_saved_incomplete_fmt" = "An incomplete backup was saved with %d known issues. Review its omissions before restoring.";

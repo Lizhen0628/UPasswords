@@ -57,8 +57,7 @@ public enum AttachmentCachePolicy {
                     cardID: card.id, attachmentID: attachment.id, contentVersion: attachment.contentVersion)
                 guard isSafe, attachment.hasPersistentID, attachment.hasPersistentContentVersion,
                       !ledger.offlineAttachments.contains(version.identity),
-                      !protectedVersions.contains(version), !ledger.downloadAllVersions.contains(version),
-                      !data.isEmpty else { continue }
+                      !protectedVersions.contains(version), !data.isEmpty else { continue }
                 candidates.append((version, data.count, ledger.records[version]?.lastAccess ?? .distantPast))
             }
         }

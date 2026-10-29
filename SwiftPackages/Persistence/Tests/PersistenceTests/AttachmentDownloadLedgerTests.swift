@@ -116,44 +116,14 @@ struct AttachmentDownloadLedgerTests {
         #expect(ledger.nextRetry(in: database, now: now) == nil)
     }
 
-    @Test("An incomplete whole-library request survives restart and releases protection only at completion")
-    func persistsWholeLibraryRequest() throws {
-        var card = Card()
-        card.files = [Attachment(name: "cached", data: Data([1])),
-                      Attachment(name: "missing", data: nil)]
-        var database = PasswordDatabase()
-        database.cards = [card]
-        let versions = AttachmentDownloadLedger.versions(in: database)
-        var ledger = AttachmentDownloadLedger()
-        ledger.recordEviction(of: versions[1])
-        ledger.requestAll(in: database)
-        ledger.setKeptOffline(true, for: versions[0].identity)
-        ledger = try JSONDecoder().decode(AttachmentDownloadLedger.self, from: JSONEncoder().encode(ledger))
-        #expect(ledger.downloadAllVersions == Set(versions))
-        #expect(ledger.isReady(versions[1], now: now))
-        ledger.reconcile(with: database)
-        #expect(ledger.downloadAllVersions == Set(versions))
-        #expect(RowSync.installDownloadedAttachmentContent(Data([2]), for: versions[1], into: &database))
-        ledger.reconcile(with: database)
-        #expect(ledger.downloadAllVersions.isEmpty)
-        #expect(ledger.offlineAttachments == [versions[0].identity])
-    }
-
-    @Test("Ending a whole-library request releases its protection and preserves retention and failures")
-    func endsWholeLibraryRequest() {
-        var card = Card()
-        card.files = [Attachment(name: "missing", data: nil)]
-        var database = PasswordDatabase()
-        database.cards = [card]
-        let version = AttachmentDownloadLedger.versions(in: database)[0]
-        var ledger = AttachmentDownloadLedger()
-        ledger.requestAll(in: database)
-        ledger.setKeptOffline(true, for: version.identity)
-        ledger.recordFailure(for: version, failure: .integrity, now: now)
-        ledger.cancelDownloadAll()
-        #expect(ledger.downloadAllVersions.isEmpty)
-        #expect(ledger.offlineAttachments == [version.identity])
-        #expect(!ledger.isReady(version, now: now))
+    @Test("Legacy whole-library request state is ignored when loading the attachment ledger")
+    func ignoresLegacyWholeLibraryRequestState() throws {
+        let data = try JSONEncoder().encode(AttachmentDownloadLedger())
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object["downloadAllVersions"] = []
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+        let ledger = try JSONDecoder().decode(AttachmentDownloadLedger.self, from: legacyData)
+        #expect(ledger == AttachmentDownloadLedger())
     }
 
     @Test("Malformed and unknown ledger formats are rejected")
