@@ -53,8 +53,6 @@ public struct AttachmentDownloadLedger: Codable, Equatable {
     public static let retryDelays: [TimeInterval] = [2, 5, 15, 30, 60]
     public private(set) var records: [Version: Record] = [:]
     public private(set) var offlineAttachments: Set<Identity> = []
-    /// Versions protected for the duration of an explicit whole-library download request.
-    public private(set) var downloadAllVersions: Set<Version> = []
     private var authorizationFingerprint: Data?
     private let formatVersion: Int
 
@@ -62,7 +60,7 @@ public struct AttachmentDownloadLedger: Codable, Equatable {
     public init() { formatVersion = 1 }
 
     private enum CodingKeys: CodingKey {
-        case formatVersion, records, offlineAttachments, authorizationFingerprint, downloadAllVersions
+        case formatVersion, records, offlineAttachments, authorizationFingerprint
     }
 
     /// Rejects damaged or unknown state instead of silently restarting failed downloads.
@@ -74,7 +72,6 @@ public struct AttachmentDownloadLedger: Codable, Equatable {
         authorizationFingerprint = try values.decodeIfPresent(Data.self, forKey: .authorizationFingerprint)
         records = try values.decode([Version: Record].self, forKey: .records)
         offlineAttachments = try values.decode(Set<Identity>.self, forKey: .offlineAttachments)
-        downloadAllVersions = try values.decodeIfPresent(Set<Version>.self, forKey: .downloadAllVersions) ?? []
         guard formatVersion == 1, records.values.allSatisfy({ record in
             (0...Self.retryDelays.count + 1).contains(record.failureCount)
                 && ((record.failure == nil) == (record.failureCount == 0))
@@ -172,27 +169,10 @@ public struct AttachmentDownloadLedger: Codable, Equatable {
         }
     }
 
-    /// Protects an explicit whole-library batch, including versions already cached locally.
-    public mutating func requestAll(in database: PasswordDatabase) {
-        downloadAllVersions = Set(Self.versions(in: database))
-        for version in Self.versions(in: database, missingOnly: true) {
-            request(version, resetFailures: true)
-        }
-        reconcile(with: database)
-    }
-
-    /// Releases batch-only protection without changing individual offline retention choices.
-    public mutating func cancelDownloadAll() {
-        downloadAllVersions.removeAll()
-    }
-
     /// Drops obsolete version history after a successful metadata refresh; offline choices remain.
     public mutating func reconcile(with database: PasswordDatabase) {
         let versions = Set(Self.versions(in: database))
         records = records.filter { versions.contains($0.key) }
-        downloadAllVersions.formIntersection(versions)
-        let missing = Set(Self.versions(in: database, missingOnly: true))
-        if downloadAllVersions.isDisjoint(with: missing) { downloadAllVersions.removeAll() }
     }
 
     /// Finds the earliest automatic retry among the current missing versions.

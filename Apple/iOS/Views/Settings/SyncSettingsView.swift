@@ -74,11 +74,6 @@ struct SyncSettingsView: View {
                     .onChange(of: vault.downloadAttachmentsOnUnknownNetwork) { _, _ in
                         vault.resumeAttachmentDownloads()
                     }
-                Button(L10n.t("attachment_download_all")) { vault.downloadAllAttachments() }
-                    .disabled(vault.locked || !vault.relayBound)
-                if vault.isDownloadingAllAttachments {
-                    Button(L10n.t("attachment_download_all_cancel")) { vault.cancelDownloadAllAttachments() }
-                }
             } footer: {
                 Text(L10n.t("attachment_download_network_footer"))
             }

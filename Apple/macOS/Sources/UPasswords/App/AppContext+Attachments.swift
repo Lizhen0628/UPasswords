@@ -79,35 +79,6 @@ extension AppContext {
         }
     }
 
-    /// Explicitly requests every referenced missing version under the background network policy.
-    func downloadAllAttachments() {
-        guard isAttachmentSessionUnlocked else { return }
-        do {
-            let versions = AttachmentDownloadLedger.versions(in: database, missingOnly: true)
-            try updateAttachmentLedger { $0.requestAll(in: database) }
-            scheduleMissingAttachmentDownloads()
-            AppToast.shared.show(L10n.t("attachment_download_all_queued"))
-            Log.info("sync", "all attachments requested versions=\(versions.count)")
-        } catch {
-            reportAttachmentLedgerError(error)
-        }
-    }
-
-    /// Whether an explicitly requested whole-library download is still incomplete.
-    var isDownloadingAllAttachments: Bool {
-        attachmentDownloadLedger?.downloadAllVersions.isEmpty == false
-    }
-
-    /// Cancels whole-library batch protection while retaining normal download and offline policies.
-    func cancelDownloadAllAttachments() {
-        do {
-            try updateAttachmentLedger { $0.cancelDownloadAll() }
-            Log.info("sync", "whole-library attachment download cancelled")
-        } catch {
-            reportAttachmentLedgerError(error)
-        }
-    }
-
     /// Whether a stable attachment is protected from automatic local cache eviction.
     func isAttachmentKeptOffline(cardID: UUID, attachmentID: UUID) -> Bool {
         attachmentDownloadLedger?.offlineAttachments.contains(

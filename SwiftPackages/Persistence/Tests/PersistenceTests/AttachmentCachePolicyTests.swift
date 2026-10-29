@@ -59,28 +59,6 @@ struct AttachmentCachePolicyTests {
         #expect(plan.database.cards[1].files[0].hasContent)
     }
 
-    @Test("Whole-library downloads protect cached successes and pause when the batch exceeds its budget")
-    func protectsWholeLibraryBatch() throws {
-        var (database, state, versions) = try fixture()
-        let missing = Attachment(name: "remote", data: nil)
-        database.cards[0].files.append(missing)
-        state.encryptedItemBaselines[database.cards[0].id] = try RowSyncCipher.encryptBaseline(
-            .card(database.cards[0]), key: key)
-        var ledger = AttachmentDownloadLedger()
-        ledger.requestAll(in: database)
-        let plan = try AttachmentCachePolicy.makePlan(database: database, state: state, key: key,
-            ledger: ledger, budgetBytes: 30, incomingBytes: 1)
-        #expect(!plan.hasCapacity)
-        #expect(plan.evictedVersions.isEmpty)
-        #expect(plan.database == database)
-        #expect(versions.allSatisfy { plan.ledger.isReady($0, now: now) })
-        ledger.cancelDownloadAll()
-        let released = try AttachmentCachePolicy.makePlan(database: database, state: state, key: key,
-            ledger: ledger, budgetBytes: 30, incomingBytes: 1)
-        #expect(released.hasCapacity)
-        #expect(released.evictedVersions.count == 1)
-    }
-
     @Test("Unsynced edits, conflict rows, and rows without trusted baselines remain intact")
     func protectsPendingAndUnknown() throws {
         let (database, initial, versions) = try fixture()

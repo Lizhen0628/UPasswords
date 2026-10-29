@@ -926,23 +926,10 @@ struct ConfigureCloudSheetContents: View {
                             }
                     }
                     GridRow {
-                        Text(L10n.t("attachment_download_all"))
-                        HStack {
-                            Button(L10n.t("attachment_download_all")) { ctx.downloadAllAttachments() }
-                                .disabled(ctx.phase != .unlocked || !ctx.relayBound)
-                            if ctx.isDownloadingAllAttachments {
-                                Button(L10n.t("attachment_download_all_cancel")) { ctx.cancelDownloadAllAttachments() }
-                            }
-                        }
-                    }
-                    GridRow {
                         Text(L10n.t("relay_account_label"))
                         relayAccountControl
                     }
                 }
-                Text(L10n.t("relay_account_footer"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 if ctx.syncCursorRecoveryRequired {
                     HStack(alignment: .top, spacing: 10) {
                         Label(L10n.t("sync_cursor_recovery_guidance"), systemImage: "exclamationmark.triangle")
@@ -968,9 +955,6 @@ struct ConfigureCloudSheetContents: View {
                         Text(L10n.t("sync_cursor_recovery_confirm_message"))
                     }
                 }
-                Text(L10n.t("attachment_download_network_footer"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 MacSyncConflictSection()
                 MacSyncQuarantineSection()
                 // 远端密文解不开(对端改过主密码/数据损坏)时的修复入口:
@@ -1016,7 +1000,7 @@ struct ConfigureCloudSheetContents: View {
                 Text(relayCodePrompt == .deregister
                      ? L10n.t("relay_deregister_message") : L10n.t("relay_sensitive_code_sent"))
             }
-            .frame(width: cloudPaneWidth, alignment: .leading)
+            .frame(maxWidth: cloudPaneWidth, alignment: .leading)
         }
     }
 
@@ -1033,50 +1017,82 @@ struct ConfigureCloudSheetContents: View {
         }
     }
 
+    private var accountStatusIndicator: some View {
+        Image(systemName: "checkmark.circle.fill")
+            .foregroundStyle(.green)
+    }
+
+    private var logoutButton: some View {
+        Button(L10n.t("relay_logout_button")) {
+            Log.info("ui", "relay logout from preferences")
+            Task { await ctx.relayLogout() }
+        }
+        .fixedSize()
+    }
+
+    private var relayAccountActions: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Button(L10n.t("relay_devices_button")) {
+                    Log.info("ui", "relay devices toggle from preferences")
+                    Task {
+                        relayDevices = await ctx.relaySessions()
+                        showRelayDevices.toggle()
+                    }
+                }
+                Button(L10n.t("relay_transfer_button")) {
+                    Log.info("ui", "relay transfer sheet from preferences")
+                    showRelayTransfer = true
+                }
+            }
+            HStack(spacing: 12) {
+                Button(L10n.t("relay_unbind_button")) {
+                    Log.info("ui", "relay unbind prompt from preferences")
+                    Task {
+                        await ctx.relayRequestSensitiveCode()
+                        relayCodeInput = ""
+                        relayCodePrompt = .unbind
+                    }
+                }
+                Button(L10n.t("relay_deregister_button"), role: .destructive) {
+                    Log.info("ui", "relay deregister prompt from preferences")
+                    Task {
+                        await ctx.relayRequestSensitiveCode()
+                        relayCodeInput = ""
+                        relayCodePrompt = .deregister
+                    }
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private var relayAccountControl: some View {
         if let email = ctx.relayAccountEmail, ctx.relayBound {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                    Text(email)
-                    Button(L10n.t("relay_logout_button")) {
-                        Log.info("ui", "relay logout from preferences")
-                        Task { await ctx.relayLogout() }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        accountStatusIndicator
+                        Text(email)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .layoutPriority(1)
+                        logoutButton
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            accountStatusIndicator
+                            Text(email)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        logoutButton
                     }
                 }
                 Text(L10n.t("relay_enabled_label"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                HStack(spacing: 12) {
-                    Button(L10n.t("relay_devices_button")) {
-                        Log.info("ui", "relay devices toggle from preferences")
-                        Task {
-                            relayDevices = await ctx.relaySessions()
-                            showRelayDevices.toggle()
-                        }
-                    }
-                    Button(L10n.t("relay_transfer_button")) {
-                        Log.info("ui", "relay transfer sheet from preferences")
-                        showRelayTransfer = true
-                    }
-                    Button(L10n.t("relay_unbind_button")) {
-                        Log.info("ui", "relay unbind prompt from preferences")
-                        Task {
-                            await ctx.relayRequestSensitiveCode()
-                            relayCodeInput = ""
-                            relayCodePrompt = .unbind
-                        }
-                    }
-                    Button(L10n.t("relay_deregister_button"), role: .destructive) {
-                        Log.info("ui", "relay deregister prompt from preferences")
-                        Task {
-                            await ctx.relayRequestSensitiveCode()
-                            relayCodeInput = ""
-                            relayCodePrompt = .deregister
-                        }
-                    }
-                }
+                relayAccountActions
                 if showRelayDevices {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(relayDevices) { device in
@@ -1145,7 +1161,7 @@ struct ConfigureCloudSheetContents: View {
                 HStack(spacing: 8) {
                     SecureField(L10n.t("relay_code_placeholder"), text: $relayCode)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 120)
+                        .frame(width: 180)
                     Button(L10n.t("relay_login_button")) {
                         relayBusy = true
                         Log.info("ui", "relay login from preferences")

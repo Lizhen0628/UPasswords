@@ -1234,8 +1234,6 @@
 "database_card_import_destination_changed" = "目标密码库已改变，请从需要导入的目标库重新打开此功能。";
 "database_card_import_syncing" = "请等待当前同步完成后重试导入。";
 "untitled_card_text" = "未命名条目";
-"attachment_download_all" = "下载全部附件";
-"attachment_download_all_queued" = "缺失附件已加入队列，仍受网络策略及可用空间限制，尚未全部可离线使用。";
 "attachment_keep_offline" = "保留离线";
 "attachment_release_offline" = "允许清理此离线缓存";
 "attachment_available_locally" = "本机可用";
@@ -1246,7 +1244,6 @@
 "attachment_cache_space_limited" = "缓存预算或磁盘空间不足，已暂停下载。保留离线、待上传及冲突数据均已保留。";
 "attachment_retry_limit" = "五次自动重试仍未成功，已暂停。可手动重试，或在网络恢复后开始新一轮。";
 "attachment_retry_scheduled" = "下载暂时失败，已安排退避重试。已完成的附件仍可使用。";
-"attachment_download_all_cancel" = "结束下载全部请求";
 "backup_package_review" = "校验备份";
 "backup_package_saved_complete" = "完整自包含备份已保存。";
 "backup_package_saved_incomplete_fmt" = "已保存不完整备份，存在 %d 项已知问题。恢复前请先查看缺失内容。";
