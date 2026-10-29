@@ -1125,7 +1125,7 @@ struct ConfigureCloudSheetContents: View {
                 HStack(spacing: 8) {
                     TextField(L10n.t("relay_email_placeholder"), text: $relayEmail)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 180)
+                        .frame(width: 250)
                     Button(resend.buttonTitle(L10n.t("relay_send_code_button"))) {
                         let email = relayEmail.trimmingCharacters(in: .whitespaces)
                         guard email.contains("@"), email.contains(".") else {
