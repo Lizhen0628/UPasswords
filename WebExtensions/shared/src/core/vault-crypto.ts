@@ -462,9 +462,18 @@ export function parseVaultXml(xml: string): ExtensionItem[] {
                 type: (FIELD_TYPES.has(type) ? type : "text") as ExtensionItem["fields"][number]["type"],
                 value: field.textContent ?? "",
                 autofill: (AUTOFILL_TOKENS.has(autofill) ? autofill : "off") as ExtensionItem["fields"][number]["autofill"],
+                ...(field.getAttribute("site-match") && ["domain", "wildcard", "exactURL"].includes(field.getAttribute("site-match") ?? "")
+                    ? { siteMatch: field.getAttribute("site-match") as ExtensionItem["fields"][number]["siteMatch"] } : {}),
+            ...(field.getAttribute("site-match") && ["domain", "wildcard", "exactURL"].includes(field.getAttribute("site-match") ?? "")
+                ? { siteMatch: field.getAttribute("site-match") as ExtensionItem["fields"][number]["siteMatch"] } : {}),
             };
         });
-        const website = fields.find((f) => f.type === "website")?.value ?? "";
+        const websiteFields = fields.filter((field) => field.type === "website");
+        const website = websiteFields[0]?.value ?? "";
+        const sites = websiteFields.map((field) => ({
+            url: field.value.trim(),
+            mode: field.siteMatch ?? "domain",
+        })).filter((site) => Boolean(site.url));
         // 条目 id 为 UUID 字符串;缺 id 用空串,变更检测按指纹失真可见
         items.push({
             id: card.getAttribute("id") ?? "",
@@ -473,6 +482,8 @@ export function parseVaultXml(xml: string): ExtensionItem[] {
             symbol: card.getAttribute("symbol"),
             fields,
             host: website.trim(),
+            ...(sites.length ? { sites } : {}),
+            ...(sites.length ? { sites } : {}),
             autofillEnabled: card.getAttribute("autofill") !== "off",
             ...(card.getAttribute("favorite") === "true" ? { favorite: true } : {}),
         });

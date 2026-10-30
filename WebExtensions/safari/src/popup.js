@@ -42,6 +42,7 @@ import {
     getVaultEnvelope,
     getVaultAttachment,
     hostMatches,
+    itemMatchesPage,
     hostnameOf,
     listVaultConflicts,
     listVaultAttachmentVersions,
@@ -220,6 +221,25 @@ const suggestionSection = document.getElementById("suggestionSection");
 const settingsBox = document.getElementById("settingsBox");
 const newLoginFields = ["newLoginTitle", "newLoginUsername", "newLoginPassword", "newLoginUrl", "newLoginNotes"]
     .map(id => document.getElementById(id));
+const newLoginSiteMatch = document.getElementById("newLoginSiteMatch");
+const newLoginAdditionalSites = document.getElementById("newLoginAdditionalSites");
+const addLoginWebsiteButton = document.getElementById("addLoginWebsiteButton");
+let newLoginSiteAssociations = [];
+function addNewLoginSite(url = "", mode = "domain") {
+    const group = document.createElement("div"); group.className = "field";
+    const input = document.createElement("input"); input.type = "url"; input.value = url;
+    input.placeholder = "https://*.example.com/*"; input.setAttribute("aria-label", t("网站关联地址", "Website association URL"));
+    const select = document.createElement("select");
+    for (const [value, zhLabel, enLabel] of [["domain", "基于域名", "Domain"], ["wildcard", "基于规则", "Wildcard rule"], ["exactURL", "完全匹配", "Exact URL"]]) {
+        const option = document.createElement("option"); option.value = value; option.textContent = t(zhLabel, enLabel); select.appendChild(option);
+    }
+    select.value = mode;
+    const remove = document.createElement("button"); remove.type = "button"; remove.className = "secondary"; remove.textContent = t("删除", "Remove");
+    const association = { group, input, select };
+    remove.addEventListener("click", () => { newLoginSiteAssociations = newLoginSiteAssociations.filter(site => site !== association); group.remove(); });
+    group.append(input, select, remove); newLoginAdditionalSites.appendChild(group); newLoginSiteAssociations.push(association);
+}
+addLoginWebsiteButton.addEventListener("click", () => addNewLoginSite());
 const generatedInput = document.getElementById("generatedPassword");
 const settingsHeading = document.getElementById("settingsHeading");
 const navigation = document.getElementById("navigation");
@@ -1300,7 +1320,7 @@ function renderCandidates(items) {
             && (filter !== "favorites" || item.favorite === true)
             && (filter !== "current" || (isPersonalInfoItem(item)
                 ? registrationForm && canFillPersonalInfo(item)
-                : Boolean(host && hostMatches(host, item.host))))
+                : Boolean(host && itemMatchesPage(pageUrl, item))))
             && (!query || item.title.toLocaleLowerCase().includes(query)
                 || username.toLocaleLowerCase().includes(query)
                 || item.host.toLocaleLowerCase().includes(query)))
@@ -1332,7 +1352,7 @@ function appendCandidate(candidate, list) {
     button.type = "button";
     const canFill = isPersonalInfoItem(candidate.item)
         ? registrationForm && canFillPersonalInfo(candidate.item)
-        : Boolean(host && hostMatches(host, candidate.item.host));
+        : Boolean(host && itemMatchesPage(pageUrl, candidate.item));
     const avatar = document.createElement("span");
     avatar.className = "item-avatar";
     avatar.setAttribute("aria-hidden", "true");
@@ -1434,14 +1454,14 @@ async function quickFillCurrentSite() {
         }
         const currentItems = state.items ?? [];
         const candidatesFor = items => items
-            .filter(item => hostMatches(host, item.host) && Boolean(credentialsOf(item).password))
+            .filter(item => itemMatchesPage(pageUrl, item) && Boolean(credentialsOf(item).password))
             .map(item => ({ item, ...credentialsOf(item) }))
             .sort((left, right) => left.item.title.localeCompare(right.item.title)
                 * (sortItems.value === "title-desc" ? -1 : 1));
         const candidates = candidatesFor(unlockedItems ?? currentItems);
         const candidate = candidates[0] ?? candidatesFor(currentItems)[0];
         if (!candidate) {
-            const hostMatchesCount = currentItems.filter(item => hostMatches(host, item.host)).length;
+            const hostMatchesCount = currentItems.filter(item => itemMatchesPage(pageUrl, item)).length;
             const passwordItemCount = currentItems.filter(item => Boolean(credentialsOf(item).password)).length;
             console.warn("[upw] site banner quick fill unavailable:", {
                 sessionItems: currentItems.length,
@@ -1464,7 +1484,7 @@ async function fill(candidate, li) {
     const profile = isPersonalInfoItem(candidate.item);
     if (!tab?.id || !/^https?:\/\//i.test(pageUrl)
         || (profile ? !registrationForm || !canFillPersonalInfo(candidate.item)
-            : !hostMatches(host, candidate.item.host))) {
+            : !itemMatchesPage(pageUrl, candidate.item))) {
         console.warn("[upw] fill skipped: page context not fillable");
         status(t("当前页面不可填充，请重新打开扩展后重试。", "This page cannot be filled. Reopen the extension and try again."), true);
         return;
@@ -1484,7 +1504,7 @@ async function fill(candidate, li) {
         const current = state.items?.find(item => item.id === candidate.item.id);
         if (!current || (profile
             ? !canFillPersonalInfo(current) || !registrationForm
-            : !hostMatches(host, current.host))) {
+            : !itemMatchesPage(pageUrl, current))) {
             console.warn("[upw] fill aborted: item missing or host mismatch in session");
             status(t("条目已变化或与当前网站不匹配，请刷新后重试。", "The item changed or no longer matches this site. Refresh and try again."), true);
             return;
@@ -1516,8 +1536,10 @@ async function fill(candidate, li) {
         unlockedExpiresAt = touched.expiresAt;
         const [activeTab] = await browser.tabs.query({ active: true, currentWindow: true });
         if (!isCurrent()) return;
-        if (activeTab?.id !== tab.id || !/^https?:\/\//i.test(activeTab.url ?? "")
-            || canonicalizeHost(hostnameOf(activeTab.url ?? "")) !== host) {
+        const activePageURL = activeTab?.url ?? "";
+        if (activeTab?.id !== tab.id || !/^https?:\/\//i.test(activePageURL)
+            || canonicalizeHost(hostnameOf(activePageURL)) !== host
+            || (!profile && !itemMatchesPage(activePageURL, current))) {
             console.warn("[upw] fill aborted: active tab changed");
             status(t("页面已切换，请重新打开插件后重试。", "The page changed. Reopen the extension and try again."), true);
             return;
@@ -1838,6 +1860,8 @@ function detailInput(labelText, value, editing, secret = false, multiline = fals
         copyButton.addEventListener("click", () => copyText(copySource));
         row.appendChild(copyButton);
     }
+    input.detailGroup = group;
+    input.detailGroup = group;
     group.append(label, row);
     detailContent.appendChild(group);
     return input;
@@ -2024,6 +2048,30 @@ function paintItemDetail(item, editing) {
             ["password", "pin", "secret", "one_time_password"].includes(field.type),
             !["password", "pin", "secret", "one_time_password"].includes(field.type) && /[\r\n]/.test(field.value),
             { id: item.id, index, revision: item.source?.revision });
+        input.fieldName = field.name || label; input.fieldType = field.type;
+        input.fieldAutofill = field.autofill || "off"; input.siteMatch = field.siteMatch ?? "domain";
+        input.fieldID = field.id;
+        if (editing && field.type === "website") {
+            const fieldName = document.createElement("input"); fieldName.value = input.fieldName;
+            fieldName.setAttribute("aria-label", t("字段名称", "Field name"));
+            fieldName.addEventListener("input", () => { input.fieldName = fieldName.value; });
+            const remove = document.createElement("button"); remove.type = "button"; remove.className = "secondary";
+            remove.textContent = t("删除字段", "Remove field");
+            remove.addEventListener("click", () => {
+                detailFieldInputs = detailFieldInputs.filter(fieldInput => fieldInput !== input);
+                input.detailGroup.remove();
+            });
+            input.detailGroup.children[1].append(fieldName, remove);
+            if (field.type === "website") {
+                const mode = document.createElement("select");
+                for (const [value, zhLabel, enLabel] of [["domain", "基于域名", "Domain"], ["wildcard", "基于规则", "Wildcard rule"], ["exactURL", "完全匹配", "Exact URL"]]) {
+                    const option = document.createElement("option"); option.value = value; option.textContent = t(zhLabel, enLabel); mode.appendChild(option);
+                }
+                mode.value = input.siteMatch; mode.setAttribute("aria-label", t("网站匹配方式", "Website match mode"));
+                mode.addEventListener("change", () => { input.siteMatch = mode.value; });
+                input.detailGroup.children[1].appendChild(mode);
+            }
+        }
         if (!editing && field.type === "website" && safeWebsiteUrl(field.value)) {
             const open = document.createElement("button");
             open.type = "button";
@@ -2035,6 +2083,33 @@ function paintItemDetail(item, editing) {
         }
         return input;
     });
+    if (editing) {
+        const addField = document.createElement("button");
+        addField.type = "button"; addField.className = "secondary"; addField.textContent = t("添加网站", "Add website");
+        addField.addEventListener("click", () => {
+            const field = { id: crypto.randomUUID(), name: t("网站", "Website"), type: "website", value: "", autofill: "url", siteMatch: "domain" };
+            const input = detailInput(field.name, "", true);
+            input.fieldName = field.name; input.fieldType = field.type; input.fieldAutofill = field.autofill;
+            input.siteMatch = field.siteMatch; input.fieldID = undefined;
+            const fieldName = document.createElement("input"); fieldName.value = field.name;
+            fieldName.addEventListener("input", () => { input.fieldName = fieldName.value; });
+            input.detailGroup.children[1].appendChild(fieldName);
+            const mode = document.createElement("select");
+            for (const [value, zhLabel, enLabel] of [["domain", "基于域名", "Domain"], ["wildcard", "基于规则", "Wildcard rule"], ["exactURL", "完全匹配", "Exact URL"]]) {
+                const option = document.createElement("option"); option.value = value; option.textContent = t(zhLabel, enLabel); mode.appendChild(option);
+            }
+            mode.value = field.siteMatch; mode.setAttribute("aria-label", t("网站匹配方式", "Website match mode"));
+            mode.addEventListener("change", () => { input.siteMatch = mode.value; });
+            input.detailGroup.children[1].appendChild(mode);
+            const remove = document.createElement("button"); remove.type = "button"; remove.className = "secondary"; remove.textContent = t("删除字段", "Remove field");
+            remove.addEventListener("click", () => { detailFieldInputs = detailFieldInputs.filter(fieldInput => fieldInput !== input); input.detailGroup.remove(); });
+            input.detailGroup.children[1].appendChild(remove);
+            detailFieldInputs.push(input);
+            const next = { ...item, fields: [...item.fields, { ...field, id: undefined }] };
+            paintItemDetail(next, true);
+        });
+        detailContent.appendChild(addField);
+    }
     detailNotesInput = detailInput(t("备注", "Notes"), notes, editing, false, true, { id: item.id, field: "notes" });
     appendInlineAttachments(item);
     detailEditButton.disabled = !editable;
@@ -2163,6 +2238,14 @@ async function saveItemDetail() {
         ? input.value : input.originalValue;
     const edit = {
         title: editedValue(detailTitleInput),
+        fields: detailFieldInputs.map((input, index) => ({
+            id: input.fieldID,
+            name: input.fieldName ?? detailItem.fields.find(field => field.id === input.fieldID)?.name ?? "",
+            type: input.fieldType ?? detailItem.fields.find(field => field.id === input.fieldID)?.type ?? "text",
+            value: editedValue(input),
+            autofill: input.fieldAutofill ?? detailItem.fields.find(field => field.id === input.fieldID)?.autofill ?? "off",
+            ...(input.siteMatch ? { siteMatch: input.siteMatch } : {}),
+        })),
         fieldValues: detailFieldInputs.map(editedValue),
         notes: editedValue(detailNotesInput),
     };
@@ -2216,7 +2299,9 @@ async function saveItemDetail() {
         password = "";
         if (!isCurrent()) return;
         const modifiedMs = Date.now();
-        const xml = updateItemXml(original.source.xml, edit, modifiedMs);
+        const nextFields = edit.fields.map(field => ({ ...field }));
+        for (const field of nextFields) if (!field.id) field.id = crypto.randomUUID();
+        const xml = updateItemXml(original.source.xml, { ...edit, fields: nextFields }, modifiedMs);
         const parsed = parseVaultXml(fragmentsToXml([xml]));
         if (parsed.length !== 1 || parsed[0].id.toLowerCase() !== original.id.toLowerCase()) {
             throw new Error("item_changed");
@@ -2310,6 +2395,7 @@ async function saveItemDetail() {
         edit.title = "";
         edit.notes = "";
         edit.fieldValues.fill("");
+        edit.fields.forEach(field => { field.value = ""; });
         if (operation === operationGeneration && selectedItemId === original.id) {
             detailSaving = false;
             if (detailEditing) {
@@ -2386,6 +2472,8 @@ async function openNewLogin(password = "") {
     newLoginFields[0].value = host;
     newLoginFields[2].value = password;
     newLoginFields[3].value = /^https?:\/\//i.test(pageUrl) ? new URL(pageUrl).origin : "";
+    newLoginSiteMatch.value = "domain";
+    newLoginAdditionalSites.replaceChildren(); newLoginSiteAssociations = [];
     newLoginDirty = Boolean(password);
     newLoginFields[0].focus();
     console.info("[upw] new login opened");
@@ -2395,13 +2483,15 @@ async function createNewLogin() {
     if (newLoginSaving || newLoginUncertain || attachmentPublicationInFlight
         || currentView !== "new-login" || unlockedItems === null) return;
     const [titleInput, usernameInput, passwordField, urlInput, notesInput] = newLoginFields;
+    const sites = newLoginSiteAssociations.map(site => ({ url: site.input.value.trim(), mode: site.select.value }));
     const draft = { id: newLoginId ?? crypto.randomUUID(), title: titleInput.value.trim(),
-        username: usernameInput.value, password: passwordField.value, url: urlInput.value.trim(), notes: notesInput.value };
+        username: usernameInput.value, password: passwordField.value, url: urlInput.value.trim(), siteMatch: newLoginSiteMatch.value, sites, notes: notesInput.value };
     newLoginId = draft.id;
     const masterPassword = document.getElementById("newLoginMasterPassword");
     let authorization = masterPassword.value;
     masterPassword.value = "";
-    if (!draft.title || (draft.url && !safeWebsiteUrl(draft.url))) {
+    const siteInputs = [{ url: draft.url, mode: draft.siteMatch }, ...draft.sites];
+    if (!draft.title || siteInputs.some(site => site.url && !safeWebsiteUrl(site.mode === "wildcard" ? site.url.replaceAll("*", "wildcard-token") : site.url))) {
         status(t("请输入标题及有效的 HTTP(S) 网站地址（可留空）。", "Enter a title and a valid HTTP(S) website URL, or leave the URL empty."), true);
         authorization = "";
         return;
@@ -2460,7 +2550,15 @@ async function createNewLogin() {
         authorization = "";
         await validate();
         const modifiedMs = Date.now();
-        const xml = createLoginItemXml(draft, modifiedMs);
+        const xml = createLoginItemXml({
+            ...draft,
+            fields: [
+                { name: "@string/login_field", type: "login", autofill: "username", value: draft.username },
+                { name: "@string/password_field", type: "password", autofill: "current-password", value: draft.password },
+                { name: "@string/url_field", type: "website", autofill: "url", value: draft.url, siteMatch: draft.siteMatch },
+                ...draft.sites.map((site, index) => ({ name: `Website ${index + 2}`, type: "website", autofill: "url", value: site.url, siteMatch: site.mode })),
+            ],
+        }, modifiedMs);
         const body = await encryptItemBody(xml, vek, draft.id);
         await validate();
         const freshEnvelope = await getVaultEnvelope(context.token, context.vaultId);

@@ -7,6 +7,7 @@ import {
     createLoginItemXml,
     generatePassword,
     hostMatches,
+    itemMatchesPage,
     parseVaultXml,
     projectVaultFragment,
     RelayApiError,
@@ -106,6 +107,17 @@ test("created item interoperates with native fixture and normalizes schemeless w
     assert.equal(bareProjection.host, "https://example.com/");
 });
 
+test("created login preserves multiple website associations and their match modes", async () => {
+    const xml = createLoginItemXml({ id: uuid, title: "Multi-site", username: "u", password: "p",
+        url: "example.com/login", siteMatch: "exactURL", sites: [{ url: "https://*.example.org/*", mode: "wildcard" }], notes: "" }, 123);
+    const projected = projectVaultFragment({ uuid, xml, kind: 1, revision: 1, modifiedMs: 123 });
+    assert.deepEqual(projected?.sites, [
+        { url: "https://example.com/login", mode: "exactURL" },
+        { url: "https://*.example.org/*", mode: "wildcard" },
+    ]);
+    assert.equal(itemMatchesPage("https://login.example.org/sign-in", projected), true);
+    assert.equal(itemMatchesPage("https://example.com/other", projected), false);
+});
 test("favorite metadata is projected only for favorited cards", () => {
     const favorite = parseVaultXml(`<passworddatabase><card id="${uuid}" favorite="true"/></passworddatabase>`)[0];
     const ordinary = parseVaultXml(`<passworddatabase><card id="${uuid}"/></passworddatabase>`)[0];

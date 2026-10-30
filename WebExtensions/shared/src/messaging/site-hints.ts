@@ -1,4 +1,4 @@
-import { hostMatches } from "../core/domain.js";
+import { itemMatchesPage } from "../core/site-matching.js";
 import type { ExtensionItem } from "../core/types.js";
 
 /** Background-only inspection never extends the unlock timeout or accepts page context. */
@@ -37,10 +37,8 @@ export function installSiteHints(api: any, session: HintSession): void {
         const snapshot = await session.inspect();
         if (!snapshot.unlocked) return lockedHint();
         const items = snapshot.items ?? [];
-        const count = items.filter((item) => {
-            return Boolean(item.host) && hostMatches(url.hostname, item.host)
-                && item.fields.some((field) => field.type === "password" && Boolean(field.value));
-        }).length;
+        const count = items.filter((item) => itemMatchesPage(url.href, item)
+            && item.fields.some((field) => field.type === "password" && Boolean(field.value))).length;
         const profileAvailable = includeProfile && items.some((item) => {
             return item.recordType === "userProfile" && item.autofillEnabled !== false
                 && item.fields.some((field) => personalInfoTokens.has(field.autofill) && Boolean(field.value));

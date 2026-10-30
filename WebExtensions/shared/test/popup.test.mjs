@@ -12,6 +12,7 @@ import {
     credentialsOf,
     generatePassword,
     hostMatches,
+    itemMatchesPage,
     VaultCryptoError,
     autofillConflictBlocks,
     AttachmentDownloadLedger,
@@ -59,6 +60,10 @@ function element(tag = 'div') {
         append(...children) {
             for (const child of children) child.parentElement = this
             this.children.push(...children)
+        },
+        prepend(...children) {
+            for (const child of children) child.parentElement = this
+            this.children.unshift(...children)
         },
         appendChild(child) {
             child.parentElement = this
@@ -109,8 +114,10 @@ function renderer(browser, { host = 'example.com', query = '', filter = 'all', r
     const labels = { emptyTitle: element(), emptyDescription: element(), itemsHeading: element(), emptyNewLoginButton: element() }
     const calls = []
     const render = runInNewContext(`${source.slice(start, end)}; renderCandidates`, {
-        itemsEl, suggestionsEl, suggestionSection, resultCount, emptyState, host, credentialsOf, hostMatches, registrationForm,
+        itemsEl, suggestionsEl, suggestionSection, resultCount, emptyState, host, credentialsOf, hostMatches,
+        itemMatchesPage: (url, candidate) => hostMatches(host, candidate.host),
         searchInput: { value: query }, siteFilter: { value: filter }, sortItems: { value: 'title' },
+        pageUrl: `https://${host}/login`,
         t: (zh, en) => en, copyText: (...args) => calls.push(['copy', ...args]),
         document: { createElement: element, getElementById: id => labels[id] },
         fill: (...args) => calls.push(['fill', ...args]),
@@ -137,8 +144,18 @@ async function popup(browserName, {
         control.hidden = /\bhidden\b/.test(match[2])
         control.type = match[2].match(/\btype="([^"]+)"/)?.[1] ?? 'text'
         control.scrollTop = 0
-        if (match[3] === 'siteFilter') control.value = 'all'
         if (match[3] === 'sortItems') control.value = 'title'
+        if (match[3] === 'siteFilter') control.value = 'all'
+        if (match[3] === 'detailContent') {
+            const appendChild = control.appendChild.bind(control)
+            control.appendChild = child => {
+                if (child.tagName === 'DIV' && child.className === 'field') {
+                    child.appendChild = element('div').appendChild.bind(child)
+                    child.children[1].append = (...children) => child.children[1].appendChild(...children)
+                }
+                return appendChild(child)
+            }
+        }
         return [match[3], control]
     }))
     const storage = {
@@ -393,10 +410,11 @@ async function popup(browserName, {
         setTimeout(callback, delay) { const timer = { callback, delay, cancelled: false }; timeouts.push(timer); return timer },
         clearTimeout(timer) { if (timer) timer.cancelled = true },
         canonicalizeHost: host => host, hostnameOf: url => new URL(url).hostname,
-        hostMatches, credentialsOf, generatePassword, safeWebsiteUrl,
+        hostMatches,
+        itemMatchesPage: (url, item) => hostMatches(new URL(url).hostname, item.host), credentialsOf, generatePassword, safeWebsiteUrl,
         createLoginItemXml: (input, nowMs) => {
             const created = { id: input.id, title: input.title, host: input.url ? new URL(safeWebsiteUrl(input.url)).hostname : '',
-                notes: input.notes, symbol: 'key', fields: [
+                notes: input.notes, symbol: 'key', fields: input.fields ?? [
                     { type: 'login', value: input.username, autofill: 'username' },
                     { type: 'password', value: input.password, autofill: 'current-password' },
                     { type: 'website', value: input.url, autofill: 'url' },
@@ -523,6 +541,26 @@ test('Popup: four browsers share markup, local assets and complete DOM bindings'
     const baseline = read('chrome', 'popup.html')
     for (const browser of browsers) {
         const html = read(browser, 'popup.html')
+        assert.equal(html.replaceAll('id="newLoginSiteMatch"', 'id="SITE_MODE"')
+            .replaceAll('id="newLoginAdditionalSites"', 'id="SITE_LIST"')
+            .replaceAll('id="addLoginWebsiteButton"', 'id="ADD_SITE"')
+            .replaceAll('id="newLoginUrl"', 'id="SITE_URL"')
+            .replaceAll('id="newLoginNotes"', 'id="SITE_NOTES"')
+            .replaceAll('id="newLoginTitle"', 'id="SITE_TITLE"')
+            .replaceAll('id="newLoginUsername"', 'id="SITE_USERNAME"')
+            .replaceAll('id="newLoginPassword"', 'id="SITE_PASSWORD"')
+            .replaceAll('id="newLoginMasterPassword"', 'id="SITE_MASTER"')
+            .replaceAll('id="createLoginSaveButton"', 'id="SITE_SAVE"'), baseline.replaceAll('id="newLoginSiteMatch"', 'id="SITE_MODE"')
+                .replaceAll('id="newLoginAdditionalSites"', 'id="SITE_LIST"')
+                .replaceAll('id="addLoginWebsiteButton"', 'id="ADD_SITE"')
+                .replaceAll('id="newLoginUrl"', 'id="SITE_URL"')
+                .replaceAll('id="newLoginNotes"', 'id="SITE_NOTES"')
+                .replaceAll('id="newLoginTitle"', 'id="SITE_TITLE"')
+                .replaceAll('id="newLoginUsername"', 'id="SITE_USERNAME"')
+                .replaceAll('id="newLoginPassword"', 'id="SITE_PASSWORD"')
+                .replaceAll('id="newLoginMasterPassword"', 'id="SITE_MASTER"')
+                .replaceAll('id="createLoginSaveButton"', 'id="SITE_SAVE"'), browser)
+        assert.equal(html, baseline, browser)
         assert.equal(html, baseline, browser)
         const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1])
         assert.equal(ids.length, new Set(ids).size, `${browser}: duplicate IDs`)
@@ -1213,7 +1251,10 @@ const editableItem = () => ({
     ],
     source: { xml: '<synthetic-original/>', revision: 3 },
 })
-const detailControl = (view, index) => view.elements.detailContent.children[index].children[1].children[0]
+const detailControls = view => view.elements.detailContent.children
+    .filter(group => group.className === 'field')
+    .map(group => group.children[1].children[0])
+const detailControl = (view, index) => detailControls(view)[index]
 const deferredOperation = () => {
     let release, started
     const promise = new Promise(resolve => { release = resolve })
@@ -1396,7 +1437,7 @@ for (const browser of browsers) {
         assert.equal(JSON.stringify(view.saves[0].item.attachmentRefs), JSON.stringify([{
             attachmentId: attachmentID, contentVersion,
         }]))
-        assert.equal(view.edits[0].fieldValues[1], entry.fields[1].value)
+        assert.equal(view.edits[0].fields?.[1]?.value ?? view.edits[0].fieldValues[1], entry.fields[1].value)
         assert.equal(view.edits[0].notes, entry.notes)
         assert.equal(detailControl(view, 0).value, 'Changed')
         assert.equal(detailControl(view, 0).readOnly, true)
@@ -1460,7 +1501,7 @@ for (const browser of browsers) {
                 : { save: async () => { await deferred.wait(); return { revision: 4 } }, confirm: () => false }
             const view = await popup(browser, { items: [entry], hooks })
             await view.api.openItemDetail(entry.id, true)
-            const controls = view.elements.detailContent.children.map((_, i) => detailControl(view, i))
+            const controls = detailControls(view)
             view.elements.detailMasterPassword.value = 'synthetic-password'
             const pending = view.api.saveItemDetail()
             await deferred.ready
@@ -1923,7 +1964,7 @@ for (const browser of browsers) {
         const snapshot = view.snapshot
         hooks.cacheCommit = async () => { throw new Error('quota_exceeded') }
         await view.api.openItemDetail(entry.id, true)
-        const controls = view.elements.detailContent.children.map((_, i) => detailControl(view, i))
+        const controls = detailControls(view)
         view.elements.detailMasterPassword.value = 'synthetic-password'
         await view.api.saveItemDetail()
         assert.equal(view.saves.length, 1)
@@ -2503,7 +2544,7 @@ for (const browser of browsers) {
     test(`Popup ${browser}: switching vault clears all old plaintext and draft controls`, async () => {
         const entry = editableItem(), view = await popup(browser, { items: [entry] })
         await view.api.openItemDetail(entry.id, true)
-        const controls = view.elements.detailContent.children.map((_, index) => detailControl(view, index))
+        const controls = detailControls(view)
         view.storage['relay.vault'] = { id: 'synthetic-other-vault', name: 'Other' }
         await view.api.render()
         assert.ok(controls.every(control => control.value === '' && control.originalValue === ''))
