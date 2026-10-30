@@ -895,131 +895,159 @@ struct ConfigureCloudSheetContents: View {
 
     var body: some View {
         PaneContainer {
-            VStack(alignment: .leading, spacing: 20) {
-                // 同步通道为账户中继(注册表信封 + 服务端库体副本):
-                // 自动同步开关/间隔与账户登录/设备管理都在本面板
-                Grid(alignment: .leading, horizontalSpacing: settingsRowSpacing, verticalSpacing: 14) {
-                    GridRow {
-                        Text(L10n.t("auto_sync_setting"))
-                        Toggle("", isOn: $settings.autoSyncEnabled)
-                            .labelsHidden()
-                    }
-                    GridRow {
+            VStack(alignment: .leading, spacing: 18) {
+                cloudSection(L10n.t("auto_sync_setting"), symbol: "arrow.triangle.2.circlepath") {
+                    Toggle(L10n.t("auto_sync_setting"), isOn: $settings.autoSyncEnabled)
+                    HStack {
                         Text(L10n.t("auto_sync_interval_setting"))
-                        PopupPicker(selection: $settings.autoSyncSeconds, items: autoSyncChoices)
+                        Spacer(minLength: 8)
+                        PopupPicker(
+                            width: min(popupPickerWidth, cloudPaneWidth - 160),
+                            selection: $settings.autoSyncSeconds,
+                            items: autoSyncChoices)
                             .disabled(!settings.autoSyncEnabled)
                     }
-                    GridRow {
-                        Text(L10n.t("attachment_download_cellular_setting"))
-                        Toggle("", isOn: $settings.downloadAttachmentsOnCellular)
-                            .labelsHidden()
-                            .onChange(of: settings.downloadAttachmentsOnCellular) { _, _ in
-                                ctx.resumeAttachmentDownloads()
-                            }
-                    }
-                    GridRow {
-                        Text(L10n.t("attachment_download_unknown_setting"))
-                        Toggle("", isOn: $settings.downloadAttachmentsOnUnknownNetwork)
-                            .labelsHidden()
-                            .onChange(of: settings.downloadAttachmentsOnUnknownNetwork) { _, _ in
-                                ctx.resumeAttachmentDownloads()
-                            }
-                    }
-                    GridRow {
-                        Text(L10n.t("attachment_download_all"))
-                        HStack {
-                            Button(L10n.t("attachment_download_all")) { ctx.downloadAllAttachments() }
-                                .disabled(ctx.phase != .unlocked || !ctx.relayBound)
-                            if ctx.isDownloadingAllAttachments {
-                                Button(L10n.t("attachment_download_all_cancel")) { ctx.cancelDownloadAllAttachments() }
-                            }
-                        }
-                    }
-                    GridRow {
-                        Text(L10n.t("relay_account_label"))
-                        relayAccountControl
-                    }
                 }
-                Text(L10n.t("relay_account_footer"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if ctx.syncCursorRecoveryRequired {
-                    HStack(alignment: .top, spacing: 10) {
-                        Label(L10n.t("sync_cursor_recovery_guidance"), systemImage: "exclamationmark.triangle")
-                            .font(.callout)
-                            .foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button(L10n.t("sync_cursor_recovery_button")) {
-                            Log.info("ui", "cursor recovery confirmation shown")
-                            showCursorRecoveryConfirm = true
+
+                cloudSection(L10n.t("attachment_download_all"), symbol: "paperclip") {
+                    Toggle(L10n.t("attachment_download_cellular_setting"), isOn: $settings.downloadAttachmentsOnCellular)
+                        .onChange(of: settings.downloadAttachmentsOnCellular) { _, _ in
+                            ctx.resumeAttachmentDownloads()
                         }
-                        .disabled(ctx.syncState == .syncing)
-                    }
-                    .confirmationDialog(
-                        L10n.t("sync_cursor_recovery_confirm_title"),
-                        isPresented: $showCursorRecoveryConfirm,
-                        titleVisibility: .visible
-                    ) {
-                        Button(L10n.t("sync_cursor_recovery_confirm_button")) {
-                            Task { await ctx.recoverExpiredSyncCursor() }
+                    Toggle(L10n.t("attachment_download_unknown_setting"), isOn: $settings.downloadAttachmentsOnUnknownNetwork)
+                        .onChange(of: settings.downloadAttachmentsOnUnknownNetwork) { _, _ in
+                            ctx.resumeAttachmentDownloads()
                         }
-                        Button(L10n.t("cancel_button"), role: .cancel) {}
-                    } message: {
-                        Text(L10n.t("sync_cursor_recovery_confirm_message"))
-                    }
-                }
-                Text(L10n.t("attachment_download_network_footer"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                MacSyncConflictSection()
-                MacSyncQuarantineSection()
-                // 远端密文解不开(对端改过主密码/数据损坏)时的修复入口:
-                // 统一收进一个对话框(接管/覆盖两条路都在里面),避免与弹窗重复
-                if ctx.syncRemoteUnreadable {
                     HStack(spacing: 10) {
-                        Label(L10n.t("sync_remote_unreadable_error"), systemImage: "exclamationmark.triangle")
-                            .font(.callout)
-                            .foregroundStyle(.red)
-                        Button(L10n.t("sync_repair_button")) {
-                            Log.info("ui", "sync repair dialog from preferences")
-                            ctx.promptAdoptRemotePassword()
+                        Button(L10n.t("attachment_download_all")) { ctx.downloadAllAttachments() }
+                            .disabled(ctx.phase != .unlocked || !ctx.relayBound)
+                        if ctx.isDownloadingAllAttachments {
+                            ProgressView().controlSize(.small)
+                            Button(L10n.t("attachment_download_all_cancel")) {
+                                ctx.cancelDownloadAllAttachments()
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(L10n.t("attachment_download_network_footer"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                cloudSection(L10n.t("relay_account_label"), symbol: "person.crop.circle") {
+                    relayAccountControl
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(L10n.t("relay_account_footer"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if ctx.syncCursorRecoveryRequired {
+                    cloudSection(L10n.t("sync_cursor_recovery_button"), symbol: "exclamationmark.triangle") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(L10n.t("sync_cursor_recovery_guidance"), systemImage: "exclamationmark.triangle")
+                                .font(.callout)
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button(L10n.t("sync_cursor_recovery_button")) {
+                                Log.info("ui", "cursor recovery confirmation shown")
+                                showCursorRecoveryConfirm = true
+                            }
+                            .disabled(ctx.syncState == .syncing)
+                        }
+                        .confirmationDialog(
+                            L10n.t("sync_cursor_recovery_confirm_title"),
+                            isPresented: $showCursorRecoveryConfirm,
+                            titleVisibility: .visible
+                        ) {
+                            Button(L10n.t("sync_cursor_recovery_confirm_button")) {
+                                Task { await ctx.recoverExpiredSyncCursor() }
+                            }
+                            Button(L10n.t("cancel_button"), role: .cancel) {}
+                        } message: {
+                            Text(L10n.t("sync_cursor_recovery_confirm_message"))
                         }
                     }
                 }
-            }
-            .sheet(isPresented: $showRelayTransfer) {
-                RelayTransferSheet()
-            }
-            .alert(L10n.t("relay_sensitive_code_title"), isPresented: Binding(
-                get: { relayCodePrompt != nil },
-                set: { if !$0 { relayCodePrompt = nil } }
-            )) {
-                TextField(L10n.t("relay_code_placeholder"), text: $relayCodeInput)
-                Button(L10n.t("ok_button")) {
-                    let code = relayCodeInput
-                    let prompt = relayCodePrompt
-                    relayCodeInput = ""
-                    relayCodePrompt = nil
-                    guard let prompt else { return }
-                    Task {
-                        if prompt == .unbind {
-                            await ctx.relayUnbindVault(code: code)
-                        } else {
-                            await ctx.relayDeregisterAccount(code: code)
+
+                if ctx.syncRemoteUnreadable {
+                    cloudSection(L10n.t("sync_repair_button"), symbol: "exclamationmark.triangle") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(L10n.t("sync_remote_unreadable_error"))
+                                .font(.callout)
+                                .foregroundStyle(.red)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button(L10n.t("sync_repair_button")) {
+                                Log.info("ui", "sync repair dialog from preferences")
+                                ctx.promptAdoptRemotePassword()
+                            }
                         }
                     }
                 }
-                Button(L10n.t("cancel_button"), role: .cancel) {
-                    relayCodePrompt = nil
+
+                cloudSection(L10n.t("sync_conflict_section"), symbol: "arrow.left.arrow.right") {
+                    MacSyncConflictSection()
                 }
-            } message: {
-                Text(relayCodePrompt == .deregister
-                     ? L10n.t("relay_deregister_message") : L10n.t("relay_sensitive_code_sent"))
+                cloudSection(L10n.t("sync_quarantine_title"), symbol: "tray.full") {
+                    MacSyncQuarantineSection()
+                }
             }
-            .frame(width: cloudPaneWidth, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: cloudPaneWidth)
+        }
+        .sheet(isPresented: $showRelayTransfer) {
+            RelayTransferSheet()
+        }
+        .alert(L10n.t("relay_sensitive_code_title"), isPresented: Binding(
+            get: { relayCodePrompt != nil },
+            set: { if !$0 { relayCodePrompt = nil } }
+        )) {
+            TextField(L10n.t("relay_code_placeholder"), text: $relayCodeInput)
+            Button(L10n.t("ok_button")) {
+                let code = relayCodeInput
+                let prompt = relayCodePrompt
+                relayCodeInput = ""
+                relayCodePrompt = nil
+                guard let prompt else { return }
+                Task {
+                    if prompt == .unbind {
+                        await ctx.relayUnbindVault(code: code)
+                    } else {
+                        await ctx.relayDeregisterAccount(code: code)
+                    }
+                }
+            }
+            Button(L10n.t("cancel_button"), role: .cancel) {
+                relayCodePrompt = nil
+            }
+        } message: {
+            Text(relayCodePrompt == .deregister
+                 ? L10n.t("relay_deregister_message") : L10n.t("relay_sensitive_code_sent"))
         }
     }
 
+
+    private func cloudSection<Content: View>(
+        _ title: String,
+        symbol: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(title, systemImage: symbol)
+                .font(.headline)
+            VStack(alignment: .leading, spacing: 10, content: content)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+    }
 
     /// UPasswords 云同步账户:未登录=邮箱+验证码登录(登录即为当前库启用);
     /// 已登录=账户邮箱 + 登出/设备管理/解绑/注销。登录需库处于解锁态(要上传本地信封)。
@@ -1040,6 +1068,9 @@ struct ConfigureCloudSheetContents: View {
                 HStack(spacing: 8) {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                     Text(email)
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                     Button(L10n.t("relay_logout_button")) {
                         Log.info("ui", "relay logout from preferences")
                         Task { await ctx.relayLogout() }
@@ -1048,7 +1079,7 @@ struct ConfigureCloudSheetContents: View {
                 Text(L10n.t("relay_enabled_label"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                HStack(spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), alignment: .leading)], alignment: .leading, spacing: 8) {
                     Button(L10n.t("relay_devices_button")) {
                         Log.info("ui", "relay devices toggle from preferences")
                         Task {
@@ -1125,7 +1156,7 @@ struct ConfigureCloudSheetContents: View {
                 HStack(spacing: 8) {
                     TextField(L10n.t("relay_email_placeholder"), text: $relayEmail)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 180)
+                        .frame(maxWidth: .infinity)
                     Button(resend.buttonTitle(L10n.t("relay_send_code_button"))) {
                         let email = relayEmail.trimmingCharacters(in: .whitespaces)
                         guard email.contains("@"), email.contains(".") else {
@@ -1145,7 +1176,7 @@ struct ConfigureCloudSheetContents: View {
                 HStack(spacing: 8) {
                     SecureField(L10n.t("relay_code_placeholder"), text: $relayCode)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 120)
+                        .frame(maxWidth: .infinity)
                     Button(L10n.t("relay_login_button")) {
                         relayBusy = true
                         Log.info("ui", "relay login from preferences")
