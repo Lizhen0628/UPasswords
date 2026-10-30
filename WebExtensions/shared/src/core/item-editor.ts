@@ -6,6 +6,7 @@ import { VaultCryptoError } from "./vault-crypto.js";
 export interface ItemEdit {
     title: string;
     fieldValues: string[];
+    fields?: Array<{ id?: string; name: string; type: string; value: string; autofill: string; siteMatch?: string }>;
     notes: string;
 }
 
@@ -66,7 +67,10 @@ export interface NewLoginItem {
     username: string;
     password: string;
     url: string;
+    siteMatch?: string;
+    sites?: Array<{ url: string; mode: string }>;
     notes: string;
+    fields?: Array<{ id?: string; name: string; type: string; value: string; autofill: string; siteMatch?: string }>;
 }
 
 /**
@@ -84,7 +88,8 @@ export function createLoginItemXml(item: NewLoginItem, nowMs = Date.now()): stri
         throw new VaultCryptoError("bad_xml_text");
     }
     if (!item.title.trim()) throw new VaultCryptoError("bad_item_title");
-    const websiteUrl = item.url === "" ? "" : safeWebsiteUrl(item.url);
+    const websiteUrl = item.url === "" ? "" : item.siteMatch === "wildcard"
+        ? safeWebsiteUrl(item.url.replaceAll("*", "wildcard-token")) : safeWebsiteUrl(item.url);
     if (item.url !== "" && !websiteUrl) throw new VaultCryptoError("bad_item_url");
     if (typeof DOMParser === "undefined" || typeof XMLSerializer === "undefined") {
         throw new VaultCryptoError("dom_unavailable");
@@ -98,19 +103,39 @@ export function createLoginItemXml(item: NewLoginItem, nowMs = Date.now()): stri
     card.setAttribute("autofill", "on");
     card.setAttribute("created", String(nowMs));
     card.setAttribute("modified", String(nowMs));
-    const fields = [
+    const associations = [
+        { url: item.url, mode: item.siteMatch ?? "domain" },
+        ...(item.sites ?? []),
+    ].filter(site => site.url.trim());
+    for (const association of associations) {
+        const safe = safeWebsiteUrl(association.mode === "wildcard" ? association.url.replaceAll("*", "wildcard-token") : association.url);
+        if (!safe || !["domain", "wildcard", "exactURL"].includes(association.mode)) throw new VaultCryptoError("bad_item_url");
+    }
+    const fields: NonNullable<NewLoginItem["fields"]> = item.fields?.length ? item.fields : [
         { name: "@string/login_field", type: "login", autofill: "username", value: item.username },
         { name: "@string/password_field", type: "password", autofill: "current-password", value: item.password },
-        { name: "@string/url_field", type: "website", autofill: "url", value: websiteUrl },
+        ...associations.map((site, index) => ({
+            name: index === 0 ? "@string/url_field" : "Website",
+            type: "website",
+            autofill: "url",
+            value: site.mode === "wildcard" ? site.url : safeWebsiteUrl(site.url) ?? site.url,
+            siteMatch: site.mode,
+        })),
     ];
-    for (const { name, type, autofill, value } of fields) {
-        const field = document.createElement("field");
-        field.setAttribute("id", crypto.randomUUID().toUpperCase());
-        field.setAttribute("name", name);
-        field.setAttribute("type", type);
-        field.setAttribute("autofill", autofill);
-        field.textContent = value;
-        card.appendChild(field);
+    if (!fields.some(field => field.type === "website")) fields.push({ name: "@string/url_field", type: "website", autofill: "url", value: "" });
+    for (const field of fields) {
+        if (field.type === "website" && field.value.trim()
+            && !safeWebsiteUrl(field.siteMatch === "wildcard" ? field.value.replaceAll("*", "wildcard-token") : field.value)) {
+            throw new VaultCryptoError("bad_item_url");
+        }
+        const node = document.createElement("field");
+        node.setAttribute("id", field.id ?? crypto.randomUUID().toUpperCase());
+        node.setAttribute("name", field.name);
+        node.setAttribute("type", field.type);
+        node.setAttribute("autofill", field.autofill || "off");
+        if (field.type === "website" && field.siteMatch) node.setAttribute("site-match", field.siteMatch);
+        node.textContent = field.value;
+        card.appendChild(node);
     }
     if (item.notes !== "") {
         const note = document.createElement("note");
@@ -433,6 +458,37 @@ function serializePreservingCarriageReturns(document: XMLDocument): string {
  */
 export function updateItemXml(sourceXml: string, edit: ItemEdit, nowMs = Date.now()): string {
     const { document, card, fields, note } = parseCard(sourceXml);
+    if (edit.fields) {
+        if (!edit.title.trim() || !Number.isSafeInteger(nowMs) || nowMs < 0) throw new VaultCryptoError("bad_item_edit");
+        const byID = new Map(fields.map(field => [field.getAttribute("id")?.toLowerCase(), field]));
+        const ordered: Element[] = [];
+        for (const field of edit.fields) {
+            if (!field.name || !field.type || typeof field.value !== "string") throw new VaultCryptoError("bad_item_field");
+            if (field.type === "website" && field.value.trim()
+                && !safeWebsiteUrl(field.siteMatch === "wildcard" ? field.value.replaceAll("*", "wildcard-token") : field.value)) {
+                throw new VaultCryptoError("bad_item_url");
+            }
+            const element = field.id ? byID.get(field.id.toLowerCase()) : undefined;
+            if (field.id && (!element || element.getAttribute("id") !== field.id)) throw new VaultCryptoError("field_identity_changed");
+            const next = element ?? document.createElement("field");
+            if (!element) next.setAttribute("id", field.id ?? crypto.randomUUID().toUpperCase());
+            replaceValue(next, field.value);
+            next.setAttribute("name", field.name);
+            next.setAttribute("type", field.type);
+            next.setAttribute("autofill", field.autofill || "off");
+            if (field.type === "website" && field.siteMatch) next.setAttribute("site-match", field.siteMatch);
+            else next.removeAttribute("site-match");
+            ordered.push(next);
+        }
+        for (const field of fields) card.removeChild(field);
+        const anchor = Array.from(card.children).find(child => child.tagName !== "note") ?? note ?? null;
+        for (const field of ordered) card.insertBefore(field, anchor);
+        card.setAttribute("title", edit.title);
+        card.setAttribute("modified", String(nowMs));
+        if (note) replaceValue(note, edit.notes);
+        else if (edit.notes) { const added = document.createElement("note"); added.textContent = edit.notes; card.appendChild(added); }
+        return serializePreservingCarriageReturns(document);
+    }
     if (fields.length !== edit.fieldValues.length) throw new VaultCryptoError("field_count_mismatch");
     if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new VaultCryptoError("bad_item_time");
     const values = [edit.title, ...edit.fieldValues, edit.notes];

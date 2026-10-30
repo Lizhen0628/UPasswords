@@ -405,7 +405,9 @@
             <label class="field"><span data-zh="标题" data-en="Title"></span><input id="newLoginTitle" autocomplete="off"></label>
             <label class="field"><span data-zh="用户名" data-en="Username"></span><input id="newLoginUsername" autocomplete="off"></label>
             <label class="field"><span data-zh="密码" data-en="Password"></span><input id="newLoginPassword" type="password" autocomplete="new-password"></label>
-            <label class="field"><span data-zh="网站地址" data-en="Website URL"></span><input id="newLoginUrl" type="url" autocomplete="url"></label>
+            <div class="field"><label for="newLoginUrl"><span data-zh="网站地址" data-en="Website URL"></span></label><div class="row"><input id="newLoginUrl" type="url" autocomplete="url"><select id="newLoginSiteMatch" aria-label="Website match mode"><option value="domain" data-zh="基于域名" data-en="Domain"></option><option value="wildcard" data-zh="基于规则" data-en="Wildcard rule"></option><option value="exactURL" data-zh="完全匹配" data-en="Exact URL"></option></select></div></div>
+            <div id="newLoginAdditionalSites"></div>
+            <button class="secondary" id="addLoginWebsiteButton" type="button" data-zh="添加网站关联" data-en="Add website association"></button>
             <label class="field"><span data-zh="备注" data-en="Notes"></span><textarea id="newLoginNotes" rows="3"></textarea></label>
             <label class="field"><span data-zh="主密码（确认保存）" data-en="Master password (confirm save)"></span><input id="newLoginMasterPassword" type="password" autocomplete="off"></label>
             <button class="primary" id="createLoginSaveButton" type="button" data-zh="加密并创建" data-en="Encrypt and create"></button>

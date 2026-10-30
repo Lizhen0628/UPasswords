@@ -42,6 +42,14 @@ export type ExtensionAutofill =
     | "cc-exp"
     | "cc-csc";
 
+export type SiteMatchMode = "domain" | "wildcard" | "exactURL";
+
+/** A website association stored on a website field in the encrypted card XML. */
+export interface SiteAssociation {
+    url: string;
+    mode: SiteMatchMode;
+}
+
 /** 扩展使用的字段投影，value 为明文，只在可信解锁会话和主动填充时消费。 */
 export interface ExtensionField {
     /** Persistent field identity; absent in legacy XML that cannot be matched safely. */
@@ -50,6 +58,8 @@ export interface ExtensionField {
     type: ExtensionFieldType;
     value: string;
     autofill: ExtensionAutofill;
+    /** Present only on website fields; absent legacy values use domain matching. */
+    siteMatch?: SiteMatchMode;
 }
 
 /** A vault entry handed to the extension for one origin. */
@@ -62,8 +72,10 @@ export interface ExtensionItem {
     fields: ExtensionField[];
     /** False disables filling this item even when the site and fields match. */
     autofillEnabled?: boolean;
-    /** Website hostname or HTTP(S) URL; empty never matches a page. */
+    /** Website hostname or HTTP(S) URL; empty never matches a page. Legacy projection. */
     host: string;
+    /** Explicit website field associations; legacy host falls back to domain matching. */
+    sites?: SiteAssociation[];
     /** Original decrypted fragment and CAS revision, kept only in the unlocked session; never send for filling. */
     source?: { xml: string; revision: number };
     /** Plain-text/Markdown notes for an in-memory detail view. */
